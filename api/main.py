@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
@@ -125,10 +125,10 @@ def list_jobs(
 
 
 @app.post("/api/pipeline/run")
-def trigger_pipeline() -> dict[str, str]:
+def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
     from pipeline.run import run_pipeline
 
-    run_pipeline()
-    return {"status": "completed"}
+    background_tasks.add_task(run_pipeline)
+    return {"status": "started"}
