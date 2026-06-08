@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import tempfile
+from pathlib import Path
 from typing import Iterator
 from urllib.parse import urljoin
 
@@ -8,7 +11,20 @@ import requests
 from bs4 import BeautifulSoup
 
 from scraper.config import BCBID_BASE_URL, BCBID_BROWSE_URL
-from scraper.utils import clean_text, is_browser_check, polite_get, polite_post
+from scraper.utils import clean_text, is_browser_check, load_netscape_cookies, polite_get, polite_post
+
+
+def _resolve_bcbid_cookie_file() -> Path:
+    cookie_file = Path("bcbid_cookies.txt")
+    if cookie_file.exists():
+        return cookie_file
+    content = os.environ.get("BCBID_COOKIES_CONTENT")
+    if not content:
+        return cookie_file
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="bcbid_cookies_")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    return Path(path)
 
 
 def extract_form_payload(soup: BeautifulSoup) -> dict[str, str]:
@@ -59,6 +75,7 @@ def parse_grid_row(row) -> dict[str, str] | None:
 
 
 def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -> Iterator[BeautifulSoup]:
+    load_netscape_cookies(session, _resolve_bcbid_cookie_file())
     print(f"{log_prefix} Fetching opportunities listing...")
     response = polite_get(session, BCBID_BROWSE_URL)
     response.raise_for_status()
