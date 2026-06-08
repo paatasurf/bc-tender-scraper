@@ -2,17 +2,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterator
-from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 
-from scraper.config import (
-    BCBID_BASE_URL,
-    BCBID_BROWSE_URL,
-    BCBID_DETAIL_URL_TEMPLATE,
-)
+from scraper.bcbid_common import extract_estimated_value, iter_browse_pages, parse_grid_row
 from scraper.models import Tender
 from scraper.utils import (
     clean_text,
@@ -21,92 +15,7 @@ from scraper.utils import (
     load_netscape_cookies,
     matches_target_category,
     polite_get,
-    polite_post,
 )
-
-
-def _parse_grid_row(row) -> dict[str, str] | None:
-    tender_id = row.get("data-id")
-    if not tender_id:
-        return None
-
-    cells = row.find_all("td", attrs={"data-iv-role": "cell"})
-    if len(cells) < 11:
-        return None
-
-    link = cells[1].find("a", href=True)
-    detail_path = link["href"] if link else f"/page.aspx/en/bpm/process_manage_extranet/{tender_id}"
-
-    return {
-        "tender_id": tender_id,
-        "status": clean_text(cells[0].get_text(" ", strip=True)),
-        "title": clean_text(cells[2].get_text(" ", strip=True)),
-        "commodities": clean_text(cells[3].get_text(" ", strip=True)),
-        "type": clean_text(cells[4].get_text(" ", strip=True)),
-        "posted_date": clean_text(cells[5].get_text(" ", strip=True)),
-        "closing_date": clean_text(cells[6].get_text(" ", strip=True)),
-        "organization": clean_text(cells[10].get_text(" ", strip=True)),
-        "url": urljoin(BCBID_BASE_URL, detail_path),
-    }
-
-
-def _extract_form_payload(soup: BeautifulSoup) -> dict[str, str]:
-    payload: dict[str, str] = {}
-    form = soup.find("form", id="mainForm")
-    if not form:
-        return payload
-
-    for element in form.find_all(["input", "select", "textarea"]):
-        name = element.get("name")
-        if not name or element.get("type") == "submit":
-            continue
-        if element.name == "select":
-            selected = element.find("option", selected=True) or element.find("option")
-            payload[name] = selected["value"] if selected and selected.has_attr("value") else ""
-        elif element.get("type") in {"checkbox", "radio"}:
-            if element.has_attr("checked"):
-                payload[name] = element.get("value", "on")
-        else:
-            payload[name] = element.get("value", "")
-
-    return payload
-
-
-def _iter_browse_pages(session: requests.Session) -> Iterator[BeautifulSoup]:
-    print("[BC Bid] Fetching opportunities listing...")
-    response = polite_get(session, BCBID_BROWSE_URL)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    if is_browser_check(soup):
-        raise RuntimeError(
-            "BC Bid returned a browser check page. Export cookies from your browser after "
-            "visiting bcbid.gov.bc.ca and save them to bcbid_cookies.txt (Netscape format), "
-            "then run the scraper again."
-        )
-
-    yield soup
-
-    page = 1
-    while True:
-        pager_next = soup.find("button", attrs={"aria-label": re.compile(r"Next page", re.I)})
-        if not pager_next or pager_next.get("aria-disabled") == "true":
-            break
-
-        button_name = pager_next.get("name")
-        if not button_name:
-            break
-
-        payload = _extract_form_payload(soup)
-        payload[button_name] = pager_next.get("value", "")
-        page += 1
-        print(f"[BC Bid] Fetching opportunities page {page}...")
-        response = polite_post(session, BCBID_BROWSE_URL, data=payload)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        if is_browser_check(soup):
-            break
-        yield soup
 
 
 def _parse_detail_page(session: requests.Session, summary: dict[str, str]) -> Tender | None:
@@ -132,14 +41,7 @@ def _parse_detail_page(session: requests.Session, summary: dict[str, str]) -> Te
     if not location:
         location = "British Columbia"
 
-    estimated_value = ""
-    for key, value in labels.items():
-        if "estimated" in key.lower() and "value" in key.lower():
-            estimated_value = value
-            break
-        if key.lower().startswith("estimated contract value"):
-            estimated_value = value
-            break
+    estimated_value = extract_estimated_value(labels)
 
     tender_id = labels.get("Opportunity ID", summary["tender_id"])
     if not tender_id:
@@ -172,12 +74,12 @@ def scrape_bcbid_tenders(
     load_netscape_cookies(session, cookie_file)
 
     summaries: list[dict[str, str]] = []
-    for soup in _iter_browse_pages(session):
+    for soup in iter_browse_pages(session):
         grid = soup.find("table", id="body_x_grid_grd")
         if not grid:
             continue
         for row in grid.find_all("tr", attrs={"data-id": True}):
-            summary = _parse_grid_row(row)
+            summary = parse_grid_row(row)
             if summary:
                 summaries.append(summary)
 
