@@ -24,6 +24,9 @@ class Tender(Base):
     tender_id: Mapped[str] = mapped_column(String(100), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
     source: Mapped[str] = mapped_column(String(100), default="")
+    ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ai_summary: Mapped[str] = mapped_column(Text, default="")
+    ai_budget_estimate: Mapped[str] = mapped_column(Text, default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

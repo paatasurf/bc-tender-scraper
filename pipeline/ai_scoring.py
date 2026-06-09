@@ -11,11 +11,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from config.env import get_anthropic_api_key, get_env
-from db.models import ArchTender, CommercialTender
+from db.models import ArchTender, CommercialTender, Tender
 
 CLAUDE_MODEL = "claude-sonnet-4-5"
 SCORING_DELAY_SECONDS = 0.5
 DEFAULT_AI_BATCH_LIMIT = 50
+
+ScoredTender = ArchTender | CommercialTender | Tender
 
 
 def _ai_batch_limit() -> int:
@@ -49,39 +51,85 @@ def _extract_json(text: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
-def _tender_description(tender: ArchTender | CommercialTender) -> str:
+def _is_federal(tender: ScoredTender) -> bool:
+    return tender.__tablename__ == "tenders"
+
+
+def _tender_company(tender: ScoredTender) -> str:
+    company = getattr(tender, "company", None) or getattr(tender, "organization", None)
+    return str(company or "").strip()
+
+
+def _tender_value(tender: ScoredTender) -> str:
+    value = getattr(tender, "value", None) or getattr(tender, "estimated_value", None)
+    return str(value or "").strip()
+
+
+def _tender_deadline(tender: ScoredTender) -> str:
+    deadline = getattr(tender, "deadline", None) or getattr(tender, "closing_date", None)
+    return str(deadline or "").strip()
+
+
+def _tender_description(tender: ScoredTender) -> str:
     description = getattr(tender, "description", None)
     if description and str(description).strip():
         return str(description).strip()
 
-    parts = [part for part in (tender.category, tender.status) if part and str(part).strip()]
+    parts = [
+        part
+        for part in (
+            tender.category,
+            getattr(tender, "status", None),
+            getattr(tender, "location", None),
+        )
+        if part and str(part).strip()
+    ]
     return " · ".join(parts) if parts else "Not provided"
 
 
-def _build_scoring_prompt(tender: ArchTender | CommercialTender) -> str:
+def _build_scoring_prompt(tender: ScoredTender) -> str:
     source = getattr(tender, "source", "") or "unknown"
-    needs_budget = _value_is_empty(tender.value)
+    value = _tender_value(tender)
+    needs_budget = _value_is_empty(value)
     budget_instruction = (
         'Include a realistic CAD budget_range string (e.g. "$500K–$2M") because value is missing.'
         if needs_budget
         else "Set budget_range to null because a value is already provided."
     )
 
-    return f"""Score this British Columbia procurement opportunity for architecture and engineering firms (architectural design, structural, civil, planning, building engineering).
+    if _is_federal(tender):
+        audience = (
+            "Score this Canadian federal procurement opportunity for British Columbia "
+            "construction and services contractors."
+        )
+    else:
+        audience = (
+            "Score this British Columbia procurement opportunity for architecture and engineering firms "
+            "(architectural design, structural, civil, planning, building engineering)."
+        )
+
+    status_line = ""
+    if not _is_federal(tender):
+        status_line = f"Status: {getattr(tender, 'status', None) or 'Unknown'}\n"
+
+    location_line = ""
+    if _is_federal(tender):
+        location_line = f"Location: {getattr(tender, 'location', None) or 'Not stated'}\n"
+
+    return f"""{audience}
 
 Title: {tender.title}
-Organization: {tender.company}
+Organization: {_tender_company(tender)}
 Description: {_tender_description(tender)}
 Category: {tender.category}
-Value: {tender.value or "Not stated"}
-Deadline: {tender.deadline or "Not stated"}
-Status: {tender.status or "Unknown"}
-Source: {source}
+Value: {value or "Not stated"}
+Deadline: {_tender_deadline(tender) or "Not stated"}
+{status_line}{location_line}Source: {source}
 
 Return JSON only with this shape:
 {{
   "score": <integer 1-10>,
-  "analysis": "<exactly two sentences explaining fit for BC architecture/engineering firms>",
+  "analysis": "<exactly two sentences explaining fit for BC contractors>",
   "budget_range": <string or null>
 }}
 
@@ -89,12 +137,12 @@ Return JSON only with this shape:
 Score 1 = poor fit; 10 = excellent fit."""
 
 
-def _build_budget_prompt(tender: ArchTender | CommercialTender) -> str:
+def _build_budget_prompt(tender: ScoredTender) -> str:
     source = getattr(tender, "source", "") or "unknown"
-    return f"""Estimate a realistic CAD budget range for this British Columbia procurement opportunity based on the title, company, and description.
+    return f"""Estimate a realistic CAD budget range for this British Columbia procurement opportunity based on the title, organization, and description.
 
 Title: {tender.title}
-Company: {tender.company}
+Organization: {_tender_company(tender)}
 Description: {_tender_description(tender)}
 Source: {source}
 
@@ -113,7 +161,7 @@ def _normalize_budget_range(value: Any) -> str:
 
 def _score_tender(
     client: anthropic.Anthropic,
-    tender: ArchTender | CommercialTender,
+    tender: ScoredTender,
 ) -> tuple[int, str, str]:
     response = client.messages.create(
         model=CLAUDE_MODEL,
@@ -132,13 +180,13 @@ def _score_tender(
         raise ValueError("Claude response missing analysis")
 
     budget_estimate = ""
-    if _value_is_empty(tender.value):
+    if _value_is_empty(_tender_value(tender)):
         budget_estimate = _normalize_budget_range(payload.get("budget_range"))
 
     return score, analysis, budget_estimate
 
 
-def _estimate_budget(client: anthropic.Anthropic, tender: ArchTender | CommercialTender) -> str:
+def _estimate_budget(client: anthropic.Anthropic, tender: ScoredTender) -> str:
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=150,
@@ -199,7 +247,7 @@ def _estimate_budgets_table(session: Session, client: anthropic.Anthropic, model
             if tender.id in processed_ids:
                 continue
             processed_ids.add(tender.id)
-            if not _value_is_empty(tender.value):
+            if not _value_is_empty(_tender_value(tender)):
                 continue
             if (tender.ai_budget_estimate or "").strip():
                 continue
@@ -236,25 +284,31 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         )
         print(f"[AI Scoring] Skipping: ANTHROPIC_API_KEY is not set.{hint}")
         return {
+            "tenders_scored": 0,
             "arch_tenders_scored": 0,
             "commercial_tenders_scored": 0,
+            "tenders_budgeted": 0,
             "arch_tenders_budgeted": 0,
             "commercial_tenders_budgeted": 0,
         }
 
     client = anthropic.Anthropic(api_key=api_key)
-    print("[AI Scoring] Scoring unscored architecture and commercial tenders...")
+    print("[AI Scoring] Scoring unscored federal, architecture, and commercial tenders...")
 
+    federal_scored = _score_table(session, client, Tender)
     arch_scored = _score_table(session, client, ArchTender)
     commercial_scored = _score_table(session, client, CommercialTender)
 
     print("[AI Budget] Estimating budgets for tenders with missing values...")
+    federal_budgeted = _estimate_budgets_table(session, client, Tender)
     arch_budgeted = _estimate_budgets_table(session, client, ArchTender)
     commercial_budgeted = _estimate_budgets_table(session, client, CommercialTender)
 
     return {
+        "tenders_scored": federal_scored,
         "arch_tenders_scored": arch_scored,
         "commercial_tenders_scored": commercial_scored,
+        "tenders_budgeted": federal_budgeted,
         "arch_tenders_budgeted": arch_budgeted,
         "commercial_tenders_budgeted": commercial_budgeted,
     }

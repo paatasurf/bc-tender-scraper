@@ -80,7 +80,7 @@ def import_tenders(session: Session, path: Path | None = None) -> int:
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(session, Tender, payload, "url")
+    count = _upsert_batch(session, Tender, payload, "url", AI_PRESERVE_COLUMNS)
     print(f"[Import] Tenders: {count} rows")
     return count
 
