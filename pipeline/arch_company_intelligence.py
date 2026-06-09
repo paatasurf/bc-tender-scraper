@@ -306,11 +306,15 @@ Return JSON only:
 
 
 def run_arch_company_intelligence(session: Session) -> dict[str, int]:
+    from pipeline.scrape_arch_companies_google import scrape_arch_companies_google
+
     populated = populate_arch_companies_from_permits(session)
+    scraped = scrape_arch_companies_google(session)
     google_enriched = enrich_arch_companies_google(session)
     ai_analyzed = analyze_arch_companies_ai(session)
     return {
         "arch_companies_populated": populated,
+        "arch_companies_google_scraped": scraped,
         "arch_companies_google_enriched": google_enriched,
         "arch_companies_ai_analyzed": ai_analyzed,
     }

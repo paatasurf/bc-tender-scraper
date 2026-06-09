@@ -15,9 +15,10 @@ def load_app_env() -> None:
     if _ENV_LOADED:
         return
 
-    load_dotenv(_PROJECT_ROOT / ".env", override=False)
+    # utf-8-sig tolerates the BOM that Windows editors often prepend to .env.
+    load_dotenv(_PROJECT_ROOT / ".env", override=False, encoding="utf-8-sig")
     # Fallback for processes whose working directory is not the project root.
-    load_dotenv(override=False)
+    load_dotenv(override=False, encoding="utf-8-sig")
     _ENV_LOADED = True
 
 

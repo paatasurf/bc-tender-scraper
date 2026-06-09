@@ -61,6 +61,12 @@ def _ensure_ai_columns(engine) -> None:
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_budget_estimate TEXT",
         "ALTER TABLE permits ADD COLUMN IF NOT EXISTS architect VARCHAR(300) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS google_place_id VARCHAR(200)",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS website VARCHAR(500) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS lat FLOAT",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS lng FLOAT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_arch_companies_google_place_id "
+        "ON arch_companies (google_place_id)",
     )
     with engine.begin() as conn:
         for statement in statements:
