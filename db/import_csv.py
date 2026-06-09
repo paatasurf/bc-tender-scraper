@@ -29,7 +29,7 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-AI_PRESERVE_COLUMNS = frozenset({"ai_score", "ai_summary"})
+AI_PRESERVE_COLUMNS = frozenset({"ai_score", "ai_summary", "ai_budget_estimate"})
 
 
 def _upsert_batch(

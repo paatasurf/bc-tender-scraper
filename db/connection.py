@@ -39,8 +39,10 @@ def _ensure_ai_columns(engine) -> None:
     statements = (
         "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS ai_score INTEGER",
         "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
+        "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS ai_budget_estimate VARCHAR(100)",
         "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS ai_score INTEGER",
         "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS ai_budget_estimate VARCHAR(100)",
     )
     with engine.begin() as conn:
         for statement in statements:
