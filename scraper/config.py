@@ -58,3 +58,7 @@ JOB_BANK_LOCATION = "British Columbia"
 JOB_BANK_JOBS_CSV = "job_bank_jobs.csv"
 ARCH_TENDERS_CSV = "arch_tenders.csv"
 ARCHITECTURE_CATEGORY_LABEL = "Architecture & Engineering Services"
+
+MERX_BASE_URL = "https://www.merx.com"
+MERX_ARCH_LIST_PATH = "/public/solicitations/architect-and-engineering-services-10048"
+MERX_ARCH_BC_LOCATION = "379"

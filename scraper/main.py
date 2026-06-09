@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scraper.bcbid_architecture import scrape_bcbid_architecture_tenders
+from scraper.merx_architecture import scrape_merx_architecture_tenders
 from scraper.building_permits import scrape_building_permits
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.contract_awards import scrape_contract_awards
@@ -50,10 +50,10 @@ def run() -> int:
         print(f"[Job Bank] Failed: {exc}")
 
     try:
-        scrape_bcbid_architecture_tenders(session)
+        scrape_merx_architecture_tenders(session)
     except Exception as exc:
-        errors.append(f"BC Bid architecture tenders: {exc}")
-        print(f"[BC Bid Architecture] Failed: {exc}")
+        errors.append(f"MERX architecture tenders: {exc}")
+        print(f"[MERX Architecture] Failed: {exc}")
 
     print("=" * 60)
     if errors:
