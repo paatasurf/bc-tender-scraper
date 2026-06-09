@@ -6,6 +6,7 @@ from config.env import env_flag
 from db.connection import get_session, init_db
 from db.import_csv import import_all_csvs
 from pipeline.ai_scoring import score_unscored_tenders
+from pipeline.company_intelligence import run_company_intelligence
 from scraper.main import run as run_scrapers
 
 
@@ -26,4 +27,14 @@ def run_pipeline() -> int:
         session.close()
 
     print("[Pipeline] Complete")
+
+    print("[Pipeline] Running company intelligence...")
+    session = get_session()
+    try:
+        run_company_intelligence(session)
+    except Exception as exc:
+        print(f"[Pipeline] Company intelligence failed: {exc}")
+    finally:
+        session.close()
+
     return scrape_status
