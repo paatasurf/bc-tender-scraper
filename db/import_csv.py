@@ -17,6 +17,7 @@ from scraper.config import (
 )
 
 BATCH_SIZE = 500
+COMMERCIAL_BATCH_SIZE = 50
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -37,6 +38,8 @@ def _upsert_batch(
     rows: list[dict],
     conflict_column: str,
     preserve_on_update: frozenset[str] = frozenset(),
+    *,
+    batch_size: int = BATCH_SIZE,
 ) -> int:
     if not rows:
         return 0
@@ -44,8 +47,8 @@ def _upsert_batch(
     table = model.__table__
     imported = 0
     skip_on_update = {"id", "scraped_at"} | preserve_on_update
-    for start in range(0, len(rows), BATCH_SIZE):
-        batch = rows[start : start + BATCH_SIZE]
+    for start in range(0, len(rows), batch_size):
+        batch = rows[start : start + batch_size]
         stmt = insert(table).values(batch)
         update_cols = {
             col.name: stmt.excluded[col.name]
@@ -54,8 +57,8 @@ def _upsert_batch(
         }
         stmt = stmt.on_conflict_do_update(index_elements=[conflict_column], set_=update_cols)
         session.execute(stmt)
+        session.commit()
         imported += len(batch)
-    session.commit()
     return imported
 
 
@@ -174,7 +177,14 @@ def import_commercial_tenders(session: Session, path: Path | None = None) -> int
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(session, CommercialTender, payload, "url", AI_PRESERVE_COLUMNS)
+    count = _upsert_batch(
+        session,
+        CommercialTender,
+        payload,
+        "url",
+        AI_PRESERVE_COLUMNS,
+        batch_size=COMMERCIAL_BATCH_SIZE,
+    )
     print(f"[Import] Commercial tenders: {count} rows")
     return count
 
