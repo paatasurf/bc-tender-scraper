@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Import existing CSV files into PostgreSQL."""
 
-from dotenv import load_dotenv
-
-load_dotenv()
+import config.env  # noqa: F401
 
 from db.connection import get_session, init_db
 from db.import_csv import import_all_csvs

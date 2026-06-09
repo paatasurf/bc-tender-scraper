@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import config.env  # noqa: F401  # ensure env is loaded for scheduler/background runs
+
 from db.connection import get_session, init_db
 from db.import_csv import import_all_csvs
 from pipeline.ai_scoring import score_unscored_tenders

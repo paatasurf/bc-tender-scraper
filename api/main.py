@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import config.env  # noqa: F401  # load env before pipeline imports
+
 import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Float, func, select
 
 from db.connection import get_session, init_db
 from db.models import ArchTender, CommercialTender, Job, Permit, RedditSignal, Tender
+from config.env import get_anthropic_api_key
 from pipeline.scheduler import start_scheduler, stop_scheduler
-
-load_dotenv()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -48,8 +48,11 @@ app.add_middleware(
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, str | bool]:
+    return {
+        "status": "ok",
+        "anthropic_api_key_configured": bool(get_anthropic_api_key()),
+    }
 
 
 @app.get("/api/stats")

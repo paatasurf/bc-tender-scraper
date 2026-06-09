@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Run all scrapers and import results into PostgreSQL."""
 
-from dotenv import load_dotenv
-
-load_dotenv()
+import config.env  # noqa: F401
 
 from pipeline.run import run_pipeline
 

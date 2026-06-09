@@ -10,6 +10,7 @@ import anthropic
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from config.env import get_anthropic_api_key
 from db.models import ArchTender, CommercialTender
 
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
@@ -195,9 +196,14 @@ def _estimate_budgets_table(session: Session, client: anthropic.Anthropic, model
 
 
 def score_unscored_tenders(session: Session) -> dict[str, int]:
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    api_key = get_anthropic_api_key()
     if not api_key:
-        print("[AI Scoring] Skipping: ANTHROPIC_API_KEY is not set")
+        hint = (
+            " Add ANTHROPIC_API_KEY to this Railway service's environment variables."
+            if os.getenv("RAILWAY_ENVIRONMENT_NAME")
+            else " Set ANTHROPIC_API_KEY in your environment or .env file."
+        )
+        print(f"[AI Scoring] Skipping: ANTHROPIC_API_KEY is not set.{hint}")
         return {
             "arch_tenders_scored": 0,
             "commercial_tenders_scored": 0,
