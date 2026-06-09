@@ -1,3 +1,3 @@
 [phases.playwright]
 dependsOn = ["install"]
-cmds = ["python -m playwright install chromium"]
+cmds = ["python -m playwright install --with-deps chromium"]
