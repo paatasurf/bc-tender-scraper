@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from scraper.bcbid_common import (
     extract_estimated_value,
     iter_browse_pages,
+    load_bcbid_cookies,
     parse_grid_row,
 )
 from scraper.config import ARCHITECTURE_CATEGORY_LABEL, ARCH_TENDERS_CSV
@@ -17,17 +18,25 @@ from scraper.utils import (
     clean_text,
     extract_label_value_map,
     is_browser_check,
-    load_netscape_cookies,
     polite_get,
     save_csv_rows,
 )
+
+
+def is_architecture_engineering_listing_hint(*parts: str) -> bool:
+    blob = " ".join(clean_text(part) for part in parts if part).lower()
+    if ARCHITECTURE_CATEGORY_LABEL.lower() in blob:
+        return True
+    if "architect" in blob:
+        return True
+    return "engineering" in blob or "engineer" in blob
 
 
 def is_architecture_engineering_category(*parts: str) -> bool:
     blob = " ".join(clean_text(part) for part in parts if part).lower()
     if ARCHITECTURE_CATEGORY_LABEL.lower() in blob:
         return True
-    return "architecture" in blob and "engineering" in blob
+    return "architect" in blob and ("engineering" in blob or "engineer" in blob)
 
 
 def parse_architecture_detail(session: requests.Session, summary: dict[str, str]) -> ArchTender | None:
@@ -76,8 +85,7 @@ def scrape_bcbid_architecture_tenders(
     session: requests.Session,
     cookie_path: Path | None = None,
 ) -> list[ArchTender]:
-    cookie_file = cookie_path or Path("bcbid_cookies.txt")
-    load_netscape_cookies(session, cookie_file)
+    load_bcbid_cookies(session, cookie_path)
 
     summaries: list[dict[str, str]] = []
     for soup in iter_browse_pages(session, log_prefix="[BC Bid Architecture]"):
@@ -86,7 +94,7 @@ def scrape_bcbid_architecture_tenders(
             continue
         for row in grid.find_all("tr", attrs={"data-id": True}):
             summary = parse_grid_row(row)
-            if summary and is_architecture_engineering_category(
+            if summary and is_architecture_engineering_listing_hint(
                 summary["commodities"], summary["title"], summary["type"]
             ):
                 summaries.append(summary)

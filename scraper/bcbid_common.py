@@ -14,17 +14,39 @@ from scraper.config import BCBID_BASE_URL, BCBID_BROWSE_URL
 from scraper.utils import clean_text, is_browser_check, load_netscape_cookies, polite_get, polite_post
 
 
+def _cookie_file_has_entries(cookie_file: Path) -> bool:
+    if not cookie_file.exists():
+        return False
+    for line in cookie_file.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if len(line.split("\t")) == 7:
+            return True
+    return False
+
+
+def _normalize_cookie_content(content: str) -> str:
+    if "\\n" in content and "\n" not in content.strip():
+        content = content.replace("\\n", "\n")
+    return content
+
+
 def _resolve_bcbid_cookie_file() -> Path:
     cookie_file = Path("bcbid_cookies.txt")
-    if cookie_file.exists():
+    if _cookie_file_has_entries(cookie_file):
         return cookie_file
     content = os.environ.get("BCBID_COOKIES_CONTENT")
     if not content:
         return cookie_file
     fd, path = tempfile.mkstemp(suffix=".txt", prefix="bcbid_cookies_")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(content)
+        handle.write(_normalize_cookie_content(content))
     return Path(path)
+
+
+def load_bcbid_cookies(session: requests.Session, cookie_path: Path | None = None) -> None:
+    cookie_file = cookie_path or _resolve_bcbid_cookie_file()
+    load_netscape_cookies(session, cookie_file)
 
 
 def extract_form_payload(soup: BeautifulSoup) -> dict[str, str]:
@@ -46,6 +68,22 @@ def extract_form_payload(soup: BeautifulSoup) -> dict[str, str]:
         else:
             payload[name] = element.get("value", "")
 
+    return payload
+
+
+def _grid_page_state(soup: BeautifulSoup) -> tuple[int | None, int | None]:
+    current_field = soup.find("input", attrs={"name": "hdnCurrentPageIndexbody_x_grid_grd"})
+    max_field = soup.find("input", attrs={"name": "maxpageindexbody_x_grid_grd"})
+    current = int(current_field["value"]) if current_field and current_field.get("value", "").isdigit() else None
+    max_page = int(max_field["value"]) if max_field and max_field.get("value", "").isdigit() else None
+    return current, max_page
+
+
+def _build_grid_page_payload(soup: BeautifulSoup, next_page_index: int) -> dict[str, str]:
+    payload = extract_form_payload(soup)
+    payload["hdnCurrentPageIndexbody_x_grid_grd"] = str(next_page_index)
+    payload["__EVENTTARGET"] = "body_x_grid_grd"
+    payload["__EVENTARGUMENT"] = f"Page|{next_page_index + 1}"
     return payload
 
 
@@ -75,7 +113,7 @@ def parse_grid_row(row) -> dict[str, str] | None:
 
 
 def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -> Iterator[BeautifulSoup]:
-    load_netscape_cookies(session, _resolve_bcbid_cookie_file())
+    load_bcbid_cookies(session)
     print(f"{log_prefix} Fetching opportunities listing...")
     response = polite_get(session, BCBID_BROWSE_URL)
     response.raise_for_status()
@@ -96,14 +134,14 @@ def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -
         if not pager_next or pager_next.get("aria-disabled") == "true":
             break
 
-        button_name = pager_next.get("name")
-        if not button_name:
+        current_index, max_page_index = _grid_page_state(soup)
+        if current_index is None or max_page_index is None or current_index >= max_page_index:
             break
 
-        payload = extract_form_payload(soup)
-        payload[button_name] = pager_next.get("value", "")
+        next_page_index = current_index + 1
         page += 1
         print(f"{log_prefix} Fetching opportunities page {page}...")
+        payload = _build_grid_page_payload(soup, next_page_index)
         response = polite_post(session, BCBID_BROWSE_URL, data=payload)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
