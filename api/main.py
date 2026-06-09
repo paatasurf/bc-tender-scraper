@@ -7,7 +7,7 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import Float, func, select
 
 from db.connection import get_session, init_db
 from db.models import ArchTender, Job, Permit, RedditSignal, Tender
@@ -121,6 +121,41 @@ def list_jobs(
         total = session.scalar(select(func.count()).select_from(Job)) or 0
         rows = session.scalars(select(Job).order_by(Job.id.desc()).offset(offset).limit(limit)).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+@app.get("/api/contract-awards")
+def list_contract_awards(
+    limit: int = Query(10, ge=1, le=100),
+) -> dict[str, Any]:
+    """Top applicants by aggregated Vancouver building permit project value."""
+    session = get_session()
+    try:
+        value_sum = func.sum(func.cast(func.nullif(Permit.project_value, ""), Float))
+        rows = session.execute(
+            select(
+                Permit.applicant.label("company"),
+                value_sum.label("total_value"),
+                func.count(Permit.id).label("permit_count"),
+            )
+            .where(Permit.applicant != "", Permit.applicant.isnot(None))
+            .group_by(Permit.applicant)
+            .having(value_sum > 0)
+            .order_by(value_sum.desc())
+            .limit(limit)
+        ).all()
+
+        data = [
+            {
+                "company": row.company,
+                "contract": f"{row.permit_count} permits",
+                "value": float(row.total_value or 0),
+                "date": "",
+            }
+            for row in rows
+        ]
+        return {"total": len(data), "limit": limit, "offset": 0, "data": data}
     finally:
         session.close()
 
