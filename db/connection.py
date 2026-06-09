@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -35,5 +35,19 @@ def get_session() -> Session:
     return get_session_factory()()
 
 
+def _ensure_ai_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS ai_score INTEGER",
+        "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS ai_score INTEGER",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def init_db() -> None:
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _ensure_ai_columns(engine)

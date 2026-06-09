@@ -78,6 +78,8 @@ class CommercialTender(Base):
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
     tender_id: Mapped[str] = mapped_column(String(100), default="")
     source: Mapped[str] = mapped_column(String(100), default="")
+    ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ai_summary: Mapped[str] = mapped_column(Text, default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -93,4 +95,6 @@ class ArchTender(Base):
     category: Mapped[str] = mapped_column(String(200), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
     tender_id: Mapped[str] = mapped_column(String(100), default="")
+    ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ai_summary: Mapped[str] = mapped_column(Text, default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

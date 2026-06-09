@@ -28,19 +28,29 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _upsert_batch(session: Session, model, rows: list[dict], conflict_column: str) -> int:
+AI_PRESERVE_COLUMNS = frozenset({"ai_score", "ai_summary"})
+
+
+def _upsert_batch(
+    session: Session,
+    model,
+    rows: list[dict],
+    conflict_column: str,
+    preserve_on_update: frozenset[str] = frozenset(),
+) -> int:
     if not rows:
         return 0
 
     table = model.__table__
     imported = 0
+    skip_on_update = {"id", "scraped_at"} | preserve_on_update
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start : start + BATCH_SIZE]
         stmt = insert(table).values(batch)
         update_cols = {
             col.name: stmt.excluded[col.name]
             for col in table.columns
-            if col.name not in {"id", "scraped_at"}
+            if col.name not in skip_on_update
         }
         stmt = stmt.on_conflict_do_update(index_elements=[conflict_column], set_=update_cols)
         session.execute(stmt)
@@ -164,7 +174,7 @@ def import_commercial_tenders(session: Session, path: Path | None = None) -> int
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(session, CommercialTender, payload, "url")
+    count = _upsert_batch(session, CommercialTender, payload, "url", AI_PRESERVE_COLUMNS)
     print(f"[Import] Commercial tenders: {count} rows")
     return count
 
@@ -185,7 +195,7 @@ def import_arch_tenders(session: Session, path: Path | None = None) -> int:
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(session, ArchTender, payload, "url")
+    count = _upsert_batch(session, ArchTender, payload, "url", AI_PRESERVE_COLUMNS)
     print(f"[Import] Architecture tenders: {count} rows")
     return count
 
