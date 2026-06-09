@@ -182,22 +182,45 @@ def _arch_company_profile_lines(company: ArchCompany) -> str:
         if company.google_rating is not None
         else "No Google rating found"
     )
-    return f"""Company: {company.name}
-Total permits: {company.total_projects}
-Total project value: ${company.total_value:,.0f} CAD
-Average project value: ${company.avg_project_value:,.0f} CAD
-Project types: {", ".join(company.project_types or []) or "Unknown"}
-Areas of activity: {", ".join((company.neighborhoods or [])[:8]) or "Unknown"}
-Active from {company.first_project_date or "?"} to {company.last_project_date or "?"}
-Google rating: {rating}"""
+    lines = [f"Company: {company.name}", f"Google rating: {rating}"]
+    if company.website:
+        lines.append(f"Website: {company.website}")
+    if company.total_projects:
+        lines.extend(
+            [
+                f"Permit history: {company.total_projects} permits, "
+                f"${company.total_value:,.0f} CAD total, "
+                f"${company.avg_project_value:,.0f} CAD average",
+                f"Project types: {', '.join(company.project_types or []) or 'Unknown'}",
+                f"Areas of activity: {', '.join((company.neighborhoods or [])[:8]) or 'Unknown'}",
+                f"Active from {company.first_project_date or '?'} to {company.last_project_date or '?'}",
+            ]
+        )
+    else:
+        lines.append(
+            "Permit history: none on record (normal for architecture firms — Vancouver "
+            "building permits usually credit the contractor, not the design firm)"
+        )
+    return "\n".join(lines)
 
 
 def _build_analysis_prompt(company: ArchCompany) -> str:
-    return f"""You are assessing an architecture firm credited on building permits in Vancouver, BC.
+    return f"""You are assessing an architecture / interior design firm in Vancouver, BC.
 
 {_arch_company_profile_lines(company)}
 
-Based on the project history (volume, value, span of activity) and the Google rating, return JSON only:
+IMPORTANT: Architecture firms rarely appear on Vancouver building permits, so missing or
+zero permit data (0 projects, $0 value) is NOT a negative signal and must NOT lower the score.
+
+Score the firm with this rubric:
+- Google rating quality: 50% of the score
+- Google review count (volume of client feedback): 30% of the score
+- Online presence and years active: 20% of the score
+- Permit history, if present, may only ADD up to a 10-point bonus — never subtract for
+  missing permit data
+- Any firm with a Google rating above 4.0 must score at least 50
+
+Return JSON only:
 {{
   "reliability_score": <integer 0-100, higher = more established and reliable>,
   "summary": "<2-3 sentence company profile for an architecture-industry audience>"
@@ -216,6 +239,8 @@ def _analyze_arch_company(client: anthropic.Anthropic, company: ArchCompany) -> 
 
     payload = _extract_json(text_blocks[0])
     score = max(0, min(100, int(payload.get("reliability_score", 0))))
+    if company.google_rating is not None and company.google_rating > 4.0:
+        score = max(score, 50)
     summary = str(payload.get("summary", "")).strip()
     if not summary:
         raise ValueError("Claude response missing summary")
