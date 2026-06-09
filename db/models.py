@@ -65,6 +65,22 @@ class Job(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CommercialTender(Base):
+    __tablename__ = "commercial_tenders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    company: Mapped[str] = mapped_column(String(300), default="")
+    value: Mapped[str] = mapped_column(String(100), default="")
+    deadline: Mapped[str] = mapped_column(String(50), default="")
+    status: Mapped[str] = mapped_column(String(50), default="")
+    category: Mapped[str] = mapped_column(String(200), default="")
+    url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    tender_id: Mapped[str] = mapped_column(String(100), default="")
+    source: Mapped[str] = mapped_column(String(100), default="")
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ArchTender(Base):
     __tablename__ = "arch_tenders"
 

@@ -3,9 +3,12 @@ from __future__ import annotations
 import csv
 import json
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlencode
 
 import requests
 from bs4 import BeautifulSoup
@@ -34,6 +37,27 @@ def create_session() -> requests.Session:
 def polite_get(session: requests.Session, url: str, **kwargs) -> requests.Response:
     time.sleep(REQUEST_DELAY_SECONDS)
     return session.get(url, timeout=60, **kwargs)
+
+
+def fetch_html(session: requests.Session, url: str, *, params: dict[str, str] | None = None) -> str:
+    response = polite_get(session, url, params=params)
+    if response.status_code == 200 and "just a moment" not in response.text[:2000].lower():
+        return response.text
+
+    if shutil.which("curl"):
+        target = f"{url}?{urlencode(params)}" if params else url
+        result = subprocess.run(
+            ["curl", "-sL", "-A", USER_AGENT, target],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout and "just a moment" not in result.stdout[:2000].lower():
+            return result.stdout
+
+    response.raise_for_status()
+    return response.text
 
 
 def polite_post(session: requests.Session, url: str, **kwargs) -> requests.Response:

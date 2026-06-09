@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from scraper.commercial import scrape_commercial_tenders
 from scraper.merx_architecture import scrape_merx_architecture_tenders
 from scraper.building_permits import scrape_building_permits
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.contract_awards import scrape_contract_awards
 from scraper.federal import scrape_federal_tenders
-from scraper.job_bank import scrape_job_bank_jobs
 from scraper.reddit_signals import scrape_reddit_signals
 from scraper.utils import create_session, save_tenders
 
@@ -44,16 +44,16 @@ def run() -> int:
         print(f"[Contract Awards] Failed: {exc}")
 
     try:
-        scrape_job_bank_jobs(session)
-    except Exception as exc:
-        errors.append(f"Job Bank jobs: {exc}")
-        print(f"[Job Bank] Failed: {exc}")
-
-    try:
         scrape_merx_architecture_tenders(session)
     except Exception as exc:
         errors.append(f"MERX architecture tenders: {exc}")
         print(f"[MERX Architecture] Failed: {exc}")
+
+    try:
+        scrape_commercial_tenders(session)
+    except Exception as exc:
+        errors.append(f"Commercial tenders: {exc}")
+        print(f"[Commercial] Failed: {exc}")
 
     print("=" * 60)
     if errors:

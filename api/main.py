@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Float, func, select
 
 from db.connection import get_session, init_db
-from db.models import ArchTender, Job, Permit, RedditSignal, Tender
+from db.models import ArchTender, CommercialTender, Job, Permit, RedditSignal, Tender
 from pipeline.scheduler import start_scheduler, stop_scheduler
 
 load_dotenv()
@@ -62,6 +62,7 @@ def stats() -> dict[str, int]:
             "reddit": session.scalar(select(func.count()).select_from(RedditSignal)) or 0,
             "jobs": session.scalar(select(func.count()).select_from(Job)) or 0,
             "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender)) or 0,
+            "commercial_tenders": session.scalar(select(func.count()).select_from(CommercialTender)) or 0,
         }
     finally:
         session.close()
@@ -170,6 +171,22 @@ def list_arch_tenders(
         total = session.scalar(select(func.count()).select_from(ArchTender)) or 0
         rows = session.scalars(
             select(ArchTender).order_by(ArchTender.id.desc()).offset(offset).limit(limit)
+        ).all()
+        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+@app.get("/api/commercial-tenders")
+def list_commercial_tenders(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    session = get_session()
+    try:
+        total = session.scalar(select(func.count()).select_from(CommercialTender)) or 0
+        rows = session.scalars(
+            select(CommercialTender).order_by(CommercialTender.id.desc()).offset(offset).limit(limit)
         ).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
     finally:

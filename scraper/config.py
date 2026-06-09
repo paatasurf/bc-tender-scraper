@@ -61,4 +61,19 @@ ARCHITECTURE_CATEGORY_LABEL = "Architecture & Engineering Services"
 
 MERX_BASE_URL = "https://www.merx.com"
 MERX_ARCH_LIST_PATH = "/public/solicitations/architect-and-engineering-services-10048"
+MERX_OPEN_LIST_PATH = "/public/solicitations/open"
 MERX_ARCH_BC_LOCATION = "379"
+
+COMMERCIAL_TENDERS_CSV = "commercial_tenders.csv"
+COMMERCIAL_CATEGORY_LABEL = "Commercial"
+
+BIDCENTRAL_SCIP_URL = "https://apps.bidcentral.ca/project-mapper/scip.php"
+BIDCENTRAL_BOBS_URL = "https://apps.bidcentral.ca/bobs.php"
+BIDCENTRAL_BASE_URL = "https://apps.bidcentral.ca"
+
+BC_HOUSING_PROJECTS_URL = "https://www.bchousing.org/projects-partners/projects"
+BC_HOUSING_BASE_URL = "https://www.bchousing.org"
+BC_HOUSING_ORG_NAME = "BC Housing"
+
+CIVICINFO_BIDS_URL = "https://www.civicinfo.bc.ca/bids"
+CIVICINFO_BASE_URL = "https://www.civicinfo.bc.ca"
