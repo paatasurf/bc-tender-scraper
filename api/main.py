@@ -13,7 +13,16 @@ from sqlalchemy import Float, func, select
 from datetime import datetime
 
 from db.connection import get_session, init_db
-from db.models import ArchTender, CommercialTender, Company, Job, Permit, RedditSignal, Tender
+from db.models import (
+    ArchCompany,
+    ArchTender,
+    CommercialTender,
+    Company,
+    Job,
+    Permit,
+    RedditSignal,
+    Tender,
+)
 from config.env import get_anthropic_api_key
 from pipeline.scheduler import start_scheduler, stop_scheduler
 
@@ -268,6 +277,81 @@ def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
 
         try:
             match = match_company_to_tender(company, tender)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+
+        return {
+            "company": company.name,
+            "tender_id": tender.id,
+            "tender_title": tender.title,
+            "tender_source": tender.__tablename__,
+            **match,
+        }
+    finally:
+        session.close()
+
+
+def _find_arch_company(session, name: str) -> ArchCompany | None:
+    return session.scalars(
+        select(ArchCompany).where(func.lower(ArchCompany.name) == name.strip().lower())
+    ).first()
+
+
+@app.get("/api/arch-companies")
+def list_arch_companies(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    search: str = Query("", max_length=300),
+) -> dict[str, Any]:
+    session = get_session()
+    try:
+        query = select(ArchCompany)
+        count_query = select(func.count()).select_from(ArchCompany)
+        if search.strip():
+            pattern = f"%{search.strip()}%"
+            query = query.where(ArchCompany.name.ilike(pattern))
+            count_query = count_query.where(ArchCompany.name.ilike(pattern))
+
+        total = session.scalar(count_query) or 0
+        rows = session.scalars(
+            query.order_by(ArchCompany.total_value.desc()).offset(offset).limit(limit)
+        ).all()
+        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/{name}")
+def get_arch_company(name: str) -> dict[str, Any]:
+    session = get_session()
+    try:
+        company = _find_arch_company(session, name)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Architecture firm '{name}' not found")
+        return _row_to_dict(company)
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/{name}/tender-match/{tender_id}")
+def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
+    from pipeline.arch_company_intelligence import match_arch_company_to_tender
+
+    if not get_anthropic_api_key():
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+
+    session = get_session()
+    try:
+        company = _find_arch_company(session, name)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Architecture firm '{name}' not found")
+
+        tender = session.get(ArchTender, tender_id)
+        if tender is None:
+            raise HTTPException(status_code=404, detail=f"Arch tender {tender_id} not found")
+
+        try:
+            match = match_arch_company_to_tender(company, tender)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
 

@@ -39,6 +39,7 @@ class Permit(Base):
     permit_type: Mapped[str] = mapped_column(String(100), default="")
     project_value: Mapped[str] = mapped_column(String(50), default="")
     applicant: Mapped[str] = mapped_column(String(300), default="")
+    architect: Mapped[str] = mapped_column(String(300), default="")
     issue_date: Mapped[str] = mapped_column(String(20), default="")
     description: Mapped[str] = mapped_column(Text, default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -90,6 +91,30 @@ class CommercialTender(Base):
 
 class Company(Base):
     __tablename__ = "companies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(300), unique=True, nullable=False)
+    total_projects: Mapped[int] = mapped_column(Integer, default=0)
+    total_value: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_project_value: Mapped[float] = mapped_column(Float, default=0.0)
+    project_types: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    neighborhoods: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    first_project_date: Mapped[str] = mapped_column(String(20), default="")
+    last_project_date: Mapped[str] = mapped_column(String(20), default="")
+    google_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    google_reviews_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    google_address: Mapped[str] = mapped_column(String(500), default="")
+    google_phone: Mapped[str] = mapped_column(String(50), default="")
+    ai_reliability_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ai_summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ArchCompany(Base):
+    __tablename__ = "arch_companies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(300), unique=True, nullable=False)

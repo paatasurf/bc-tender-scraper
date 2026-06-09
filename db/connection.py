@@ -60,6 +60,7 @@ def _ensure_ai_columns(engine) -> None:
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_score INTEGER",
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_budget_estimate TEXT",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS architect VARCHAR(300) DEFAULT ''",
     )
     with engine.begin() as conn:
         for statement in statements:
