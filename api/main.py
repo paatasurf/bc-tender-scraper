@@ -10,16 +10,19 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Float, func, select
 
+from datetime import datetime
+
 from db.connection import get_session, init_db
-from db.models import ArchTender, CommercialTender, Job, Permit, RedditSignal, Tender
+from db.models import ArchTender, CommercialTender, Company, Job, Permit, RedditSignal, Tender
 from config.env import get_anthropic_api_key
 from pipeline.scheduler import start_scheduler, stop_scheduler
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
     data = {column.name: getattr(row, column.name) for column in row.__table__.columns}
-    if data.get("scraped_at"):
-        data["scraped_at"] = data["scraped_at"].isoformat()
+    for key, value in data.items():
+        if isinstance(value, datetime):
+            data[key] = value.isoformat()
     return data
 
 
@@ -192,6 +195,89 @@ def list_commercial_tenders(
             select(CommercialTender).order_by(CommercialTender.id.desc()).offset(offset).limit(limit)
         ).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+def _find_company(session, name: str) -> Company | None:
+    return session.scalars(
+        select(Company).where(func.lower(Company.name) == name.strip().lower())
+    ).first()
+
+
+def _find_tender(session, tender_id: int):
+    for model in (ArchTender, CommercialTender, Tender):
+        tender = session.get(model, tender_id)
+        if tender is not None:
+            return tender
+    return None
+
+
+@app.get("/api/companies")
+def list_companies(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    search: str = Query("", max_length=300),
+) -> dict[str, Any]:
+    session = get_session()
+    try:
+        query = select(Company)
+        count_query = select(func.count()).select_from(Company)
+        if search.strip():
+            pattern = f"%{search.strip()}%"
+            query = query.where(Company.name.ilike(pattern))
+            count_query = count_query.where(Company.name.ilike(pattern))
+
+        total = session.scalar(count_query) or 0
+        rows = session.scalars(
+            query.order_by(Company.total_value.desc()).offset(offset).limit(limit)
+        ).all()
+        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+@app.get("/api/companies/{name}")
+def get_company(name: str) -> dict[str, Any]:
+    session = get_session()
+    try:
+        company = _find_company(session, name)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Company '{name}' not found")
+        return _row_to_dict(company)
+    finally:
+        session.close()
+
+
+@app.get("/api/companies/{name}/tender-match/{tender_id}")
+def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
+    from pipeline.company_intelligence import match_company_to_tender
+
+    if not get_anthropic_api_key():
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+
+    session = get_session()
+    try:
+        company = _find_company(session, name)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Company '{name}' not found")
+
+        tender = _find_tender(session, tender_id)
+        if tender is None:
+            raise HTTPException(status_code=404, detail=f"Tender {tender_id} not found")
+
+        try:
+            match = match_company_to_tender(company, tender)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+
+        return {
+            "company": company.name,
+            "tender_id": tender.id,
+            "tender_title": tender.title,
+            "tender_source": tender.__tablename__,
+            **match,
+        }
     finally:
         session.close()
 
