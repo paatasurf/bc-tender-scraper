@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender
 
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL = "claude-sonnet-4-5"
 SCORING_DELAY_SECONDS = 0.5
 DEFAULT_AI_BATCH_LIMIT = 50
 
