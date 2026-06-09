@@ -86,29 +86,38 @@ def import_tenders(session: Session, path: Path | None = None) -> int:
 
 
 def import_permits(session: Session, path: Path | None = None) -> int:
-    rows = _read_csv(path or Path(BUILDING_PERMITS_CSV))
-    payload = [
-        {
-            "address": row.get("address", ""),
-            "permit_type": row.get("permit_type", ""),
-            "project_value": row.get("project_value", ""),
-            "applicant": row.get("applicant", ""),
-            "issue_date": row.get("issue_date", ""),
-            "description": row.get("description", ""),
-        }
-        for row in rows
-        if row.get("address")
-    ]
-
-    if not payload:
+    csv_path = path or Path(BUILDING_PERMITS_CSV)
+    if not csv_path.exists():
+        print(f"[Import] Skipping missing file: {csv_path}")
         return 0
 
     session.execute(Permit.__table__.delete())
     session.commit()
 
     imported = 0
-    for start in range(0, len(payload), BATCH_SIZE):
-        batch = payload[start : start + BATCH_SIZE]
+    batch: list[dict[str, str]] = []
+
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if not row.get("address"):
+                continue
+            batch.append(
+                {
+                    "address": row.get("address", ""),
+                    "permit_type": row.get("permit_type", ""),
+                    "project_value": row.get("project_value", ""),
+                    "applicant": row.get("applicant", ""),
+                    "issue_date": row.get("issue_date", ""),
+                    "description": row.get("description", ""),
+                }
+            )
+            if len(batch) >= BATCH_SIZE:
+                session.execute(insert(Permit.__table__), batch)
+                session.commit()
+                imported += len(batch)
+                batch = []
+
+    if batch:
         session.execute(insert(Permit.__table__), batch)
         session.commit()
         imported += len(batch)

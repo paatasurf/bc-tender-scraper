@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config.env import env_flag
 from scraper.commercial import scrape_commercial_tenders
 from scraper.merx_architecture import scrape_merx_architecture_tenders
 from scraper.building_permits import scrape_building_permits
@@ -25,11 +26,28 @@ def run() -> int:
         errors.append(f"Federal tenders: {exc}")
         print(f"[Federal] Failed: {exc}")
 
+    # Architecture and commercial tenders run before heavy scrapers so partial
+    # progress is saved if the container is stopped mid-pipeline.
     try:
-        scrape_building_permits()
+        scrape_merx_architecture_tenders(session)
     except Exception as exc:
-        errors.append(f"Building permits: {exc}")
-        print(f"[Building Permits] Failed: {exc}")
+        errors.append(f"MERX architecture tenders: {exc}")
+        print(f"[MERX Architecture] Failed: {exc}")
+
+    try:
+        scrape_commercial_tenders(session)
+    except Exception as exc:
+        errors.append(f"Commercial tenders: {exc}")
+        print(f"[Commercial] Failed: {exc}")
+
+    if env_flag("PIPELINE_SKIP_BUILDING_PERMITS"):
+        print("[Building Permits] Skipped (PIPELINE_SKIP_BUILDING_PERMITS=true)")
+    else:
+        try:
+            scrape_building_permits()
+        except Exception as exc:
+            errors.append(f"Building permits: {exc}")
+            print(f"[Building Permits] Failed: {exc}")
 
     try:
         scrape_reddit_signals()
@@ -42,18 +60,6 @@ def run() -> int:
     except Exception as exc:
         errors.append(f"Contract awards: {exc}")
         print(f"[Contract Awards] Failed: {exc}")
-
-    try:
-        scrape_merx_architecture_tenders(session)
-    except Exception as exc:
-        errors.append(f"MERX architecture tenders: {exc}")
-        print(f"[MERX Architecture] Failed: {exc}")
-
-    try:
-        scrape_commercial_tenders(session)
-    except Exception as exc:
-        errors.append(f"Commercial tenders: {exc}")
-        print(f"[Commercial] Failed: {exc}")
 
     print("=" * 60)
     if errors:

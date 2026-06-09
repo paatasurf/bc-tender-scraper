@@ -7,14 +7,23 @@ import time
 from typing import Any
 
 import anthropic
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from config.env import get_anthropic_api_key
+from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender
 
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 SCORING_DELAY_SECONDS = 0.5
+DEFAULT_AI_BATCH_LIMIT = 50
+
+
+def _ai_batch_limit() -> int:
+    raw = get_env("AI_SCORING_MAX_PER_RUN", str(DEFAULT_AI_BATCH_LIMIT))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_AI_BATCH_LIMIT
 
 
 def _value_is_empty(value: str | None) -> bool:
@@ -147,7 +156,10 @@ def _estimate_budget(client: anthropic.Anthropic, tender: ArchTender | Commercia
 
 
 def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
-    rows = session.scalars(select(model).where(model.ai_score.is_(None))).all()
+    batch_limit = _ai_batch_limit()
+    rows = session.scalars(
+        select(model).where(model.ai_score.is_(None)).limit(batch_limit)
+    ).all()
     scored = 0
 
     for index, tender in enumerate(rows, start=1):
@@ -171,26 +183,45 @@ def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
 
 
 def _estimate_budgets_table(session: Session, client: anthropic.Anthropic, model) -> int:
-    rows = session.scalars(select(model)).all()
-    targets = [
-        tender
-        for tender in rows
-        if _value_is_empty(tender.value) and not (tender.ai_budget_estimate or "").strip()
-    ]
+    batch_limit = _ai_batch_limit()
     estimated = 0
+    processed_ids: set[int] = set()
 
-    for index, tender in enumerate(targets, start=1):
-        label = model.__tablename__
-        print(f"[AI Budget] {label} {index}/{len(targets)}: {tender.title[:70]}")
-        try:
-            tender.ai_budget_estimate = _estimate_budget(client, tender)
-            session.commit()
-            estimated += 1
-        except Exception as exc:
-            session.rollback()
-            print(f"[AI Budget] Failed ({label}): {exc}")
+    while estimated < batch_limit:
+        remaining = batch_limit - estimated
+        candidates = session.scalars(
+            select(model)
+            .where(or_(model.ai_budget_estimate.is_(None), model.ai_budget_estimate == ""))
+            .limit(remaining * 4)
+        ).all()
+        targets: list = []
+        for tender in candidates:
+            if tender.id in processed_ids:
+                continue
+            processed_ids.add(tender.id)
+            if not _value_is_empty(tender.value):
+                continue
+            if (tender.ai_budget_estimate or "").strip():
+                continue
+            targets.append(tender)
+            if len(targets) >= remaining:
+                break
 
-        time.sleep(SCORING_DELAY_SECONDS)
+        if not targets:
+            break
+
+        for tender in targets:
+            label = model.__tablename__
+            print(f"[AI Budget] {label} {estimated + 1}/{batch_limit}: {tender.title[:70]}")
+            try:
+                tender.ai_budget_estimate = _estimate_budget(client, tender)
+                session.commit()
+                estimated += 1
+            except Exception as exc:
+                session.rollback()
+                print(f"[AI Budget] Failed ({label}): {exc}")
+
+            time.sleep(SCORING_DELAY_SECONDS)
 
     return estimated
 

@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Float, func, select
 
@@ -196,11 +196,17 @@ def list_commercial_tenders(
         session.close()
 
 
+@app.get("/api/pipeline/status")
+def pipeline_status() -> dict[str, str | int | bool]:
+    from pipeline.executor import pipeline_status as get_status
+
+    return get_status()
+
+
 @app.post("/api/pipeline/run")
-def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
+def trigger_pipeline() -> dict[str, str | int]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
-    from pipeline.run import run_pipeline
+    from pipeline.executor import start_pipeline_subprocess
 
-    background_tasks.add_task(run_pipeline)
-    return {"status": "started"}
+    return start_pipeline_subprocess()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import config.env  # noqa: F401  # ensure env is loaded for scheduler/background runs
 
+from config.env import env_flag
 from db.connection import get_session, init_db
 from db.import_csv import import_all_csvs
 from pipeline.ai_scoring import score_unscored_tenders
@@ -17,7 +18,10 @@ def run_pipeline() -> int:
     session = get_session()
     try:
         import_all_csvs(session)
-        score_unscored_tenders(session)
+        if env_flag("PIPELINE_SKIP_AI_SCORING"):
+            print("[Pipeline] Skipping AI scoring (PIPELINE_SKIP_AI_SCORING=true)")
+        else:
+            score_unscored_tenders(session)
     finally:
         session.close()
 

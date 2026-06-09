@@ -6,10 +6,19 @@ import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from pipeline.run import run_pipeline
+from pipeline.executor import start_pipeline_subprocess
+from pipeline.lock import is_pipeline_running
 
 logger = logging.getLogger(__name__)
 _scheduler: BackgroundScheduler | None = None
+
+
+def _scheduled_pipeline_run() -> None:
+    if is_pipeline_running():
+        logger.info("Skipping scheduled pipeline run: already in progress")
+        return
+    result = start_pipeline_subprocess()
+    logger.info("Scheduled pipeline started: %s", result)
 
 
 def start_scheduler() -> BackgroundScheduler | None:
@@ -28,7 +37,7 @@ def start_scheduler() -> BackgroundScheduler | None:
 
     _scheduler = BackgroundScheduler(timezone=timezone)
     _scheduler.add_job(
-        run_pipeline,
+        _scheduled_pipeline_run,
         trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone),
         id="daily_scrape_import",
         replace_existing=True,

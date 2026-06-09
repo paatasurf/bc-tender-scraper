@@ -29,6 +29,14 @@ def get_env(name: str, default: str = "") -> str:
     return value.strip()
 
 
+def env_flag(name: str, *, default: bool = False) -> bool:
+    load_app_env()
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes"}
+
+
 def get_anthropic_api_key() -> str:
     load_app_env()
     for name in ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY"):

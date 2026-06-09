@@ -1,4 +1,6 @@
 .env
+.pipeline.lock
+pipeline.log
 __pycache__/
 *.py[cod]
 .venv/

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime
+from typing import Iterator
 
 from scraper.config import BUILDING_PERMITS_CSV, VANCOUVER_PERMITS_API
-from scraper.utils import clean_text, create_session, polite_api_get, save_csv_rows
+from scraper.utils import clean_text, create_session, polite_api_get
 
 PAGE_SIZE = 100
 FIELDNAMES = [
@@ -37,8 +39,7 @@ def _format_record(record: dict) -> dict[str, str]:
     }
 
 
-def _fetch_year(session, year: int) -> list[dict[str, str]]:
-    permits: list[dict[str, str]] = []
+def _iter_year_pages(session, year: int) -> Iterator[list[dict[str, str]]]:
     offset = 0
     total_count = None
 
@@ -59,14 +60,11 @@ def _fetch_year(session, year: int) -> list[dict[str, str]]:
         if not results:
             break
 
-        for record in results:
-            permits.append(_format_record(record))
+        yield [_format_record(record) for record in results]
 
         offset += len(results)
         if offset >= total_count:
             break
-
-    return permits
 
 
 def _discover_years(session) -> list[int]:
@@ -84,18 +82,24 @@ def _discover_years(session) -> list[int]:
     return years
 
 
-def scrape_building_permits() -> list[dict[str, str]]:
+def scrape_building_permits() -> int:
     session = create_session()
-    permits: list[dict[str, str]] = []
+    total = 0
 
     print("[Building Permits] Starting Vancouver issued building permits scrape")
     years = _discover_years(session)
     print(f"[Building Permits] Fetching years: {', '.join(str(year) for year in years)}")
 
-    for year in years:
-        permits.extend(_fetch_year(session, year))
-        print(f"[Building Permits] Running total: {len(permits)} permits")
+    with open(BUILDING_PERMITS_CSV, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
+        writer.writeheader()
 
-    save_csv_rows(permits, BUILDING_PERMITS_CSV, FIELDNAMES)
-    print(f"[Building Permits] Saved {len(permits)} permits to {BUILDING_PERMITS_CSV}")
-    return permits
+        for year in years:
+            for page in _iter_year_pages(session, year):
+                writer.writerows(page)
+                handle.flush()
+                total += len(page)
+            print(f"[Building Permits] Running total: {total} permits")
+
+    print(f"[Building Permits] Saved {total} permits to {BUILDING_PERMITS_CSV}")
+    return total
