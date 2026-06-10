@@ -457,6 +457,32 @@ def pipeline_status() -> dict[str, str | int | bool]:
     return get_status()
 
 
+def _run_arch_google_places() -> None:
+    from pipeline.arch_company_intelligence import enrich_arch_companies_google
+    from pipeline.scrape_arch_companies_google import scrape_arch_companies_google
+
+    session = get_session()
+    try:
+        try:
+            scraped = scrape_arch_companies_google(session)
+        except Exception as exc:
+            print(f"[ArchCompanies] Google Places scrape failed: {exc}")
+            scraped = 0
+
+        try:
+            enriched = enrich_arch_companies_google(session)
+        except Exception as exc:
+            print(f"[ArchCompanies] Google enrichment failed: {exc}")
+            enriched = 0
+
+        print(
+            f"[ArchCompanies] Google Places manual run complete: "
+            f"{scraped} scraped, {enriched} enriched"
+        )
+    finally:
+        session.close()
+
+
 @app.post("/api/pipeline/run")
 def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
@@ -464,4 +490,13 @@ def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
     from pipeline.run import run_pipeline
 
     background_tasks.add_task(run_pipeline)
+    return {"status": "started"}
+
+
+@app.post("/api/pipeline/run-google-places")
+def trigger_google_places(background_tasks: BackgroundTasks) -> dict[str, str]:
+    if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
+
+    background_tasks.add_task(_run_arch_google_places)
     return {"status": "started"}
