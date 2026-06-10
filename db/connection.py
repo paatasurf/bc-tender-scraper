@@ -72,6 +72,9 @@ def _ensure_ai_columns(engine) -> None:
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS houzz_rating FLOAT",
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS houzz_profile_url VARCHAR(500) DEFAULT ''",
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS aibc_status VARCHAR(50) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS website_projects_count INTEGER",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS website_specializations VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS website_service_areas VARCHAR[] DEFAULT '{}'",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_arch_companies_google_place_id "
         "ON arch_companies (google_place_id)",
     )

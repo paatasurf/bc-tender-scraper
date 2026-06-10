@@ -331,6 +331,7 @@ Return JSON only:
 
 
 def run_arch_company_intelligence(session: Session) -> dict[str, int]:
+    from pipeline.research_arch_websites import research_arch_websites
     from pipeline.scrape_arch_aibc import scrape_arch_aibc
     from pipeline.scrape_arch_companies_google import scrape_arch_companies_google
     from pipeline.scrape_arch_houzz import scrape_arch_houzz
@@ -348,6 +349,11 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
         print(f"[ArchCompanies] AIBC scrape failed: {exc}")
         aibc_verified = 0
     google_enriched = enrich_arch_companies_google(session)
+    try:
+        websites_researched = research_arch_websites(session)
+    except Exception as exc:
+        print(f"[ArchCompanies] Website research failed: {exc}")
+        websites_researched = 0
     ai_analyzed = analyze_arch_companies_ai(session)
     return {
         "arch_companies_populated": populated,
@@ -355,5 +361,6 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
         "arch_companies_houzz_scraped": houzz_scraped,
         "arch_companies_aibc_verified": aibc_verified,
         "arch_companies_google_enriched": google_enriched,
+        "arch_companies_websites_researched": websites_researched,
         "arch_companies_ai_analyzed": ai_analyzed,
     }
