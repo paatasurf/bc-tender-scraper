@@ -44,9 +44,46 @@ VANCOUVER_PERMITS_API = (
 )
 BUILDING_PERMITS_CSV = "building_permits.csv"
 
-REDDIT_SUBREDDITS = ("britishcolumbia", "vancouver", "construction")
-REDDIT_KEYWORDS = ("contractor", "construction", "building", "renovation", "permit")
+# Subreddit -> keyword filters (empty tuple = include all posts from that subreddit).
+REDDIT_SOURCES: dict[str, tuple[str, ...]] = {
+    "britishcolumbia": ("construction", "permit", "building", "contractor", "development"),
+    "vancouver": ("construction", "permit", "building", "development"),
+    "canadaconstruction": (),
+    "VancouverRealEstate": (),
+    "SurreyBC": ("construction", "building"),
+}
 REDDIT_SIGNALS_CSV = "reddit_signals.csv"
+
+NEWS_SOURCES: tuple[dict[str, str], ...] = (
+    {"publisher": "Business in Vancouver", "url": "https://www.biv.com/rss.xml"},
+    {"publisher": "Daily Hive Vancouver", "url": "https://dailyhive.com/vancouver/feed"},
+    {"publisher": "Vancouver Sun Business", "url": "https://vancouversun.com/category/business/feed/"},
+    {"publisher": "CBC British Columbia", "url": "https://www.cbc.ca/cmlink/rss-topstories-bcp"},
+)
+NEWS_KEYWORDS = (
+    "construction",
+    "building",
+    "developer",
+    "development",
+    "permit",
+    "contractor",
+    "architecture",
+    "renovation",
+    "infrastructure",
+    "housing",
+    "condo",
+    "tower",
+)
+NEWS_SIGNALS_CSV = "news_signals.csv"
+
+LINKEDIN_HASHTAGS = (
+    "BCConstruction",
+    "VancouverConstruction",
+    "BCBuilding",
+    "BCArchitecture",
+    "VancouverRealEstate",
+)
+LINKEDIN_SIGNALS_CSV = "linkedin_signals.csv"
 
 FEDERAL_STATUS_AWARDED = "1920"
 CONTRACT_AWARDS_CSV = "contract_awards.csv"

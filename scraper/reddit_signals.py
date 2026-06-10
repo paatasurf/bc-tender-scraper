@@ -5,19 +5,21 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
-from scraper.config import REDDIT_KEYWORDS, REDDIT_SIGNALS_CSV, REDDIT_SUBREDDITS
+from scraper.config import REDDIT_SIGNALS_CSV, REDDIT_SOURCES
 from scraper.utils import clean_text, create_session, polite_get, save_csv_rows
 
 PULLPUSH_URL = "https://api.pullpush.io/reddit/search/submission/"
-FIELDNAMES = ["title", "text", "upvotes", "date", "url"]
+FIELDNAMES = ["title", "text", "upvotes", "date", "url", "subreddit"]
 
 
-def _matches_keywords(title: str, text: str) -> bool:
+def _matches_keywords(title: str, text: str, keywords: tuple[str, ...]) -> bool:
+    if not keywords:
+        return True
     blob = f"{title} {text}".lower()
-    return any(keyword in blob for keyword in REDDIT_KEYWORDS)
+    return any(keyword in blob for keyword in keywords)
 
 
-def _format_post(item: dict) -> dict[str, str]:
+def _format_post(item: dict, subreddit: str) -> dict[str, str]:
     created = item.get("created_utc")
     if created:
         date = datetime.fromtimestamp(created, tz=timezone.utc).date().isoformat()
@@ -37,22 +39,35 @@ def _format_post(item: dict) -> dict[str, str]:
         "upvotes": str(item.get("score", 0)),
         "date": date,
         "url": url,
+        "subreddit": subreddit,
     }
 
 
-def _fetch_pullpush(session: requests.Session, subreddit: str, keyword: str) -> list[dict]:
-    print(f"[Reddit] Searching r/{subreddit} for '{keyword}'...")
-    response = polite_get(
-        session,
-        PULLPUSH_URL,
-        params={"subreddit": subreddit, "q": keyword, "size": 100},
-    )
+def _fetch_pullpush(
+    session: requests.Session,
+    subreddit: str,
+    keyword: str | None = None,
+) -> list[dict]:
+    params: dict[str, str | int] = {"subreddit": subreddit, "size": 100}
+    if keyword:
+        params["q"] = keyword
+        print(f"[Reddit] Searching r/{subreddit} for '{keyword}'...")
+    else:
+        print(f"[Reddit] Fetching recent posts from r/{subreddit}...")
+    response = polite_get(session, PULLPUSH_URL, params=params)
     response.raise_for_status()
     return response.json().get("data", [])
 
 
-def _fetch_rss_search(session: requests.Session, subreddit: str) -> list[dict]:
-    query = " OR ".join(REDDIT_KEYWORDS)
+def _fetch_rss_search(
+    session: requests.Session,
+    subreddit: str,
+    keywords: tuple[str, ...],
+) -> list[dict]:
+    if not keywords:
+        return []
+
+    query = " OR ".join(keywords)
     print(f"[Reddit] Fetching RSS search for r/{subreddit}...")
     response = polite_get(
         session,
@@ -96,29 +111,36 @@ def scrape_reddit_signals() -> list[dict[str, str]]:
 
     print("[Reddit] Starting BC construction signal scrape")
 
-    for subreddit in REDDIT_SUBREDDITS:
+    for subreddit, keywords in REDDIT_SOURCES.items():
         collected: list[dict] = []
-        for keyword in REDDIT_KEYWORDS:
+        if keywords:
+            for keyword in keywords:
+                try:
+                    collected.extend(_fetch_pullpush(session, subreddit, keyword))
+                except requests.RequestException as exc:
+                    print(f"[Reddit] Pullpush failed for r/{subreddit} ({keyword}): {exc}")
             try:
-                collected.extend(_fetch_pullpush(session, subreddit, keyword))
+                collected.extend(_fetch_rss_search(session, subreddit, keywords))
             except requests.RequestException as exc:
-                print(f"[Reddit] Pullpush failed for r/{subreddit} ({keyword}): {exc}")
+                print(f"[Reddit] RSS failed for r/{subreddit}: {exc}")
+        else:
+            try:
+                collected.extend(_fetch_pullpush(session, subreddit))
+            except requests.RequestException as exc:
+                print(f"[Reddit] Pullpush failed for r/{subreddit}: {exc}")
 
-        try:
-            collected.extend(_fetch_rss_search(session, subreddit))
-        except requests.RequestException as exc:
-            print(f"[Reddit] RSS failed for r/{subreddit}: {exc}")
-
+        subreddit_count = 0
         for item in collected:
-            post = _format_post(item)
+            post = _format_post(item, subreddit)
             if not post["url"] or post["url"] in seen_urls:
                 continue
-            if not _matches_keywords(post["title"], post["text"]):
+            if not _matches_keywords(post["title"], post["text"], keywords):
                 continue
             seen_urls.add(post["url"])
             signals.append(post)
+            subreddit_count += 1
 
-        print(f"[Reddit] r/{subreddit}: {len(signals)} total signals so far")
+        print(f"[Reddit] r/{subreddit}: {subreddit_count} signals ({len(signals)} total)")
 
     save_csv_rows(signals, REDDIT_SIGNALS_CSV, FIELDNAMES)
     print(f"[Reddit] Saved {len(signals)} signals to {REDDIT_SIGNALS_CSV}")

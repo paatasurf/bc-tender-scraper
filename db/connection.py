@@ -78,6 +78,7 @@ def _ensure_ai_columns(engine) -> None:
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS website_notable_projects VARCHAR[] DEFAULT '{}'",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_arch_companies_google_place_id "
         "ON arch_companies (google_place_id)",
+        "ALTER TABLE reddit ADD COLUMN IF NOT EXISTS subreddit VARCHAR(100) DEFAULT ''",
     )
     with engine.begin() as conn:
         for statement in statements:

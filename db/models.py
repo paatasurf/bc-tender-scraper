@@ -54,6 +54,32 @@ class RedditSignal(Base):
     upvotes: Mapped[int] = mapped_column(Integer, default=0)
     date: Mapped[str] = mapped_column(String(20), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    subreddit: Mapped[str] = mapped_column(String(100), default="")
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NewsSignal(Base):
+    __tablename__ = "news"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="")
+    publisher: Mapped[str] = mapped_column(String(200), default="")
+    date: Mapped[str] = mapped_column(String(20), default="")
+    url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LinkedInSignal(Base):
+    __tablename__ = "linkedin_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="")
+    author: Mapped[str] = mapped_column(String(300), default="")
+    date: Mapped[str] = mapped_column(String(20), default="")
+    url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

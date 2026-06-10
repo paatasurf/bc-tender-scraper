@@ -6,12 +6,14 @@ from pathlib import Path
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from db.models import ArchTender, CommercialTender, Job, Permit, RedditSignal, Tender
+from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, Permit, RedditSignal, Tender
 from scraper.config import (
     ARCH_TENDERS_CSV,
     BUILDING_PERMITS_CSV,
     COMMERCIAL_TENDERS_CSV,
     JOB_BANK_JOBS_CSV,
+    LINKEDIN_SIGNALS_CSV,
+    NEWS_SIGNALS_CSV,
     OUTPUT_CSV,
     REDDIT_SIGNALS_CSV,
 )
@@ -143,10 +145,54 @@ def import_reddit(session: Session, path: Path | None = None) -> int:
                 "upvotes": upvotes,
                 "date": row.get("date", ""),
                 "url": row.get("url", ""),
+                "subreddit": row.get("subreddit", ""),
             }
         )
     count = _upsert_batch(session, RedditSignal, payload, "url")
     print(f"[Import] Reddit: {count} rows")
+    return count
+
+
+def import_news(session: Session, path: Path | None = None) -> int:
+    rows = _read_csv(path or Path(NEWS_SIGNALS_CSV))
+    payload = [
+        {
+            "title": row.get("title", ""),
+            "text": row.get("text", ""),
+            "publisher": row.get("publisher", ""),
+            "date": row.get("date", ""),
+            "url": row.get("url", ""),
+        }
+        for row in rows
+        if row.get("url")
+    ]
+    count = _upsert_batch(session, NewsSignal, payload, "url")
+    print(f"[Import] News: {count} rows")
+    return count
+
+
+def import_linkedin(session: Session, path: Path | None = None) -> int:
+    rows = _read_csv(path or Path(LINKEDIN_SIGNALS_CSV))
+    payload = []
+    for row in rows:
+        if not row.get("url"):
+            continue
+        try:
+            likes = int(row.get("likes_count") or 0)
+        except ValueError:
+            likes = 0
+        payload.append(
+            {
+                "title": row.get("title", ""),
+                "content": row.get("content", ""),
+                "author": row.get("author", ""),
+                "date": row.get("date", ""),
+                "url": row.get("url", ""),
+                "likes_count": likes,
+            }
+        )
+    count = _upsert_batch(session, LinkedInSignal, payload, "url")
+    print(f"[Import] LinkedIn: {count} rows")
     return count
 
 
@@ -225,6 +271,8 @@ def import_all_csvs(session: Session) -> dict[str, int]:
         "tenders": import_tenders(session),
         "permits": import_permits(session),
         "reddit": import_reddit(session),
+        "news": import_news(session),
+        "linkedin": import_linkedin(session),
         "jobs": import_jobs(session),
         "arch_tenders": import_arch_tenders(session),
         "commercial_tenders": import_commercial_tenders(session),

@@ -19,6 +19,8 @@ from db.models import (
     CommercialTender,
     Company,
     Job,
+    LinkedInSignal,
+    NewsSignal,
     Permit,
     RedditSignal,
     Tender,
@@ -75,6 +77,8 @@ def stats() -> dict[str, int]:
             "tenders": session.scalar(select(func.count()).select_from(Tender)) or 0,
             "permits": session.scalar(select(func.count()).select_from(Permit)) or 0,
             "reddit": session.scalar(select(func.count()).select_from(RedditSignal)) or 0,
+            "news": session.scalar(select(func.count()).select_from(NewsSignal)) or 0,
+            "linkedin": session.scalar(select(func.count()).select_from(LinkedInSignal)) or 0,
             "jobs": session.scalar(select(func.count()).select_from(Job)) or 0,
             "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender)) or 0,
             "commercial_tenders": session.scalar(select(func.count()).select_from(CommercialTender)) or 0,
@@ -123,6 +127,72 @@ def list_reddit(
             select(RedditSignal).order_by(RedditSignal.upvotes.desc(), RedditSignal.id.desc()).offset(offset).limit(limit)
         ).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+def _reddit_to_signal(row: RedditSignal) -> dict[str, Any]:
+    return {
+        "source": "REDDIT",
+        "title": row.title,
+        "text": row.text,
+        "url": row.url,
+        "date": row.date,
+        "upvotes": row.upvotes,
+        "subreddit": row.subreddit or "",
+        "publisher": "",
+        "author": "",
+    }
+
+
+def _news_to_signal(row: NewsSignal) -> dict[str, Any]:
+    return {
+        "source": "NEWS",
+        "title": row.title,
+        "text": row.text,
+        "url": row.url,
+        "date": row.date,
+        "upvotes": 0,
+        "subreddit": "",
+        "publisher": row.publisher,
+        "author": "",
+    }
+
+
+def _linkedin_to_signal(row: LinkedInSignal) -> dict[str, Any]:
+    return {
+        "source": "LINKEDIN",
+        "title": row.title,
+        "text": row.content,
+        "url": row.url,
+        "date": row.date,
+        "upvotes": row.likes_count,
+        "subreddit": "",
+        "publisher": "",
+        "author": row.author,
+    }
+
+
+@app.get("/api/signals")
+def list_signals(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    session = get_session()
+    try:
+        reddit_rows = session.scalars(select(RedditSignal)).all()
+        news_rows = session.scalars(select(NewsSignal)).all()
+        linkedin_rows = session.scalars(select(LinkedInSignal)).all()
+
+        merged: list[dict[str, Any]] = []
+        merged.extend(_reddit_to_signal(row) for row in reddit_rows)
+        merged.extend(_news_to_signal(row) for row in news_rows)
+        merged.extend(_linkedin_to_signal(row) for row in linkedin_rows)
+
+        merged.sort(key=lambda item: (-item["upvotes"], item["date"]), reverse=False)
+        total = len(merged)
+        page = merged[offset : offset + limit]
+        return {"total": total, "limit": limit, "offset": offset, "data": page}
     finally:
         session.close()
 

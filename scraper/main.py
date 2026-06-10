@@ -7,6 +7,8 @@ from scraper.building_permits import scrape_building_permits
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.contract_awards import scrape_contract_awards
 from scraper.federal import scrape_federal_tenders
+from scraper.linkedin_signals import scrape_linkedin_signals
+from scraper.news_signals import scrape_news_signals
 from scraper.reddit_signals import scrape_reddit_signals
 from scraper.utils import create_session, save_tenders
 
@@ -54,6 +56,18 @@ def run() -> int:
     except Exception as exc:
         errors.append(f"Reddit signals: {exc}")
         print(f"[Reddit] Failed: {exc}")
+
+    try:
+        scrape_news_signals()
+    except Exception as exc:
+        errors.append(f"News signals: {exc}")
+        print(f"[News] Failed: {exc}")
+
+    try:
+        scrape_linkedin_signals()
+    except Exception as exc:
+        errors.append(f"LinkedIn signals: {exc}")
+        print(f"[LinkedIn] Failed: {exc}")
 
     try:
         scrape_contract_awards(session)
