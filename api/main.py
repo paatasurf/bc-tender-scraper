@@ -457,6 +457,22 @@ def pipeline_status() -> dict[str, str | int | bool]:
     return get_status()
 
 
+def _run_ai_scoring() -> None:
+    from pipeline.ai_scoring import score_unscored_tenders
+
+    session = get_session()
+    try:
+        try:
+            results = score_unscored_tenders(session)
+        except Exception as exc:
+            print(f"[AI Scoring] Manual run failed: {exc}")
+            return
+
+        print(f"[AI Scoring] Manual run complete: {results}")
+    finally:
+        session.close()
+
+
 def _run_arch_google_places() -> None:
     from pipeline.arch_company_intelligence import enrich_arch_companies_google
     from pipeline.scrape_arch_companies_google import scrape_arch_companies_google
@@ -499,4 +515,13 @@ def trigger_google_places(background_tasks: BackgroundTasks) -> dict[str, str]:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
 
     background_tasks.add_task(_run_arch_google_places)
+    return {"status": "started"}
+
+
+@app.post("/api/pipeline/run-ai-scoring")
+def trigger_ai_scoring(background_tasks: BackgroundTasks) -> dict[str, str]:
+    if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
+
+    background_tasks.add_task(_run_ai_scoring)
     return {"status": "started"}
