@@ -25,6 +25,7 @@ from db.models import (
     RedditSignal,
     Tender,
 )
+from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.scheduler import start_scheduler, stop_scheduler
 
@@ -59,6 +60,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(internal_router)
 
 
 @app.get("/api/health")
