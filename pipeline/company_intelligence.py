@@ -351,14 +351,13 @@ Source table: {tender.__tablename__}"""
 
 
 def match_company_to_tender(company: Company, tender: MatchableTender) -> dict[str, Any]:
-    """Score how well a company's permit track record fits a tender. Returns
-    {"match_score": int 0-100, "analysis": str}."""
+    """Score how well a company fits a tender and suggest a win strategy."""
     api_key = get_anthropic_api_key()
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
     client = anthropic.Anthropic(api_key=api_key)
-    prompt = f"""Assess how well this Vancouver construction company matches the tender below.
+    prompt = f"""You are a bid strategist helping a Vancouver BC construction company win a public tender.
 
 COMPANY:
 {_company_profile_lines(company)}
@@ -366,16 +365,23 @@ COMPANY:
 TENDER:
 {_tender_lines(tender)}
 
-Consider project type fit, typical project value vs tender value, track record depth, and reputation.
+Assess fit and provide a win strategy based on permit history, project types, value range, and reputation.
+
 Return JSON only:
 {{
-  "match_score": <integer 0-100>,
+  "match_score": <integer 0-100, overall fit>,
+  "win_probability": <integer 0-100, realistic chance of winning this specific tender>,
+  "recommendations": [
+    "<short actionable tip 1>",
+    "<short actionable tip 2>",
+    "<short actionable tip 3>"
+  ],
   "analysis": "<2-3 sentences explaining the match quality>"
 }}"""
 
     response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=400,
+        max_tokens=600,
         messages=[{"role": "user", "content": prompt}],
     )
     text_blocks = [block.text for block in response.content if block.type == "text"]
@@ -383,9 +389,21 @@ Return JSON only:
         raise ValueError("Claude returned no text content")
 
     payload = _extract_json(text_blocks[0])
-    score = max(0, min(100, int(payload.get("match_score", 0))))
+    match_score = max(0, min(100, int(payload.get("match_score", 0))))
+    win_probability = max(0, min(100, int(payload.get("win_probability", match_score))))
+    recommendations = payload.get("recommendations") or []
+    if not isinstance(recommendations, list):
+        recommendations = []
+    recommendations = [str(r).strip() for r in recommendations if str(r).strip()][:3]
+    while len(recommendations) < 3:
+        recommendations.append("Emphasize relevant BC project experience in your bid response.")
     analysis = str(payload.get("analysis", "")).strip()
-    return {"match_score": score, "analysis": analysis}
+    return {
+        "match_score": match_score,
+        "win_probability": win_probability,
+        "recommendations": recommendations,
+        "analysis": analysis,
+    }
 
 
 # ---------------------------------------------------------------------------

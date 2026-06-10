@@ -258,6 +258,22 @@ def get_company(name: str) -> dict[str, Any]:
         session.close()
 
 
+def _tender_response_fields(tender: Any) -> dict[str, Any]:
+    """Common tender fields for API responses."""
+    deadline = getattr(tender, "closing_date", None) or getattr(tender, "deadline", "") or ""
+    value_raw = getattr(tender, "estimated_value", None) or getattr(tender, "value", "") or ""
+    budget = getattr(tender, "ai_budget_estimate", "") or ""
+    return {
+        "tender_title": tender.title,
+        "tender_url": getattr(tender, "url", "") or "",
+        "tender_deadline": deadline,
+        "tender_value": str(value_raw),
+        "tender_budget_estimate": budget,
+        "tender_category": getattr(tender, "category", "") or "",
+        "tender_source": tender.__tablename__,
+    }
+
+
 @app.get("/api/companies/{name}/tender-match/{tender_id}")
 def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
     from pipeline.company_intelligence import match_company_to_tender
@@ -283,8 +299,7 @@ def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
         return {
             "company": company.name,
             "tender_id": tender.id,
-            "tender_title": tender.title,
-            "tender_source": tender.__tablename__,
+            **_tender_response_fields(tender),
             **match,
         }
     finally:
@@ -346,9 +361,9 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
         if company is None:
             raise HTTPException(status_code=404, detail=f"Architecture firm '{name}' not found")
 
-        tender = session.get(ArchTender, tender_id)
+        tender = _find_tender(session, tender_id)
         if tender is None:
-            raise HTTPException(status_code=404, detail=f"Arch tender {tender_id} not found")
+            raise HTTPException(status_code=404, detail=f"Tender {tender_id} not found")
 
         try:
             match = match_arch_company_to_tender(company, tender)
@@ -358,8 +373,7 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
         return {
             "company": company.name,
             "tender_id": tender.id,
-            "tender_title": tender.title,
-            "tender_source": tender.__tablename__,
+            **_tender_response_fields(tender),
             **match,
         }
     finally:
