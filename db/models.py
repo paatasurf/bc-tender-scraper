@@ -143,6 +143,7 @@ class ArchCompany(Base):
     website_projects_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     website_specializations: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     website_service_areas: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    website_notable_projects: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     ai_reliability_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

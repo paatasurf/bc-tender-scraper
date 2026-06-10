@@ -95,7 +95,7 @@ def _clean_list(values: Any) -> list[str]:
 
 def research_arch_websites(session: Session) -> int:
     """Research each arch company's own website with Claude + web search and
-    store BC-focused projects count, specializations, and service areas."""
+    store BC-focused projects count, specializations, service areas, and notable projects."""
     api_key = get_anthropic_api_key()
     if not api_key:
         print("[ArchCompanies] Skipping website research: ANTHROPIC_API_KEY is not set.")
@@ -130,6 +130,7 @@ def research_arch_websites(session: Session) -> int:
             company.website_projects_count = int(count) if isinstance(count, (int, float)) else 0
             company.website_specializations = _clean_list(payload.get("specializations"))
             company.website_service_areas = _clean_list(payload.get("service_areas"))
+            company.website_notable_projects = _clean_list(payload.get("notable"))
             session.commit()
             researched += 1
         except Exception as exc:
