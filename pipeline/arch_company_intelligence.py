@@ -352,22 +352,31 @@ def _fetch_claude_summary_with_retry(client: anthropic.Anthropic, company: ArchC
     raise RuntimeError("Claude summary failed without error")
 
 
-def _save_arch_company_score(
-    session: Session,
-    client: anthropic.Anthropic,
-    company: ArchCompany,
-) -> None:
-    """Always persist the deterministic score; use Claude for summary when available."""
-    score = _compute_arch_reliability_score(company)
-    try:
-        summary = _fetch_claude_summary_with_retry(client, company)
-    except Exception as exc:
-        print(f"[ArchCompanies] Claude summary unavailable for {company.name[:50]}: {exc}")
-        summary = _fallback_summary(company, score)
+def backfill_arch_reliability_scores(session: Session) -> int:
+    """Set ai_reliability_score for all firms missing it — no Claude API calls."""
+    companies = session.scalars(
+        select(ArchCompany).where(ArchCompany.ai_reliability_score.is_(None))
+    ).all()
+    if not companies:
+        return 0
 
-    company.ai_reliability_score = score
-    company.ai_summary = summary
+    print(f"[ArchCompanies] Backfilling {len(companies)} reliability scores (local, no API)...")
+    for company in companies:
+        score = _compute_arch_reliability_score(company)
+        company.ai_reliability_score = score
+        if not (company.ai_summary or "").strip():
+            company.ai_summary = _fallback_summary(company, score)
+
     session.commit()
+    print(f"[ArchCompanies] Backfilled {len(companies)} reliability scores")
+    return len(companies)
+
+
+def _needs_claude_summary(company: ArchCompany) -> bool:
+    summary = (company.ai_summary or "").strip()
+    if not summary:
+        return True
+    return summary.startswith(f"{company.name} scores")
 
 
 def _refresh_arch_reliability_scores(session: Session) -> int:
@@ -387,43 +396,46 @@ def _refresh_arch_reliability_scores(session: Session) -> int:
 
 
 def analyze_arch_companies_ai(session: Session) -> int:
-    """Generate ai_reliability_score and ai_summary for arch companies missing them.
+    """Backfill reliability scores locally, then optionally upgrade summaries via Claude."""
+    scored = backfill_arch_reliability_scores(session)
 
-    The reliability score is computed locally; Claude only writes the summary.
-    Each firm is saved even when Claude returns rate-limit errors."""
     api_key = get_anthropic_api_key()
     if not api_key:
-        print("[ArchCompanies] Skipping AI analysis: ANTHROPIC_API_KEY is not set.")
-        return 0
+        print("[ArchCompanies] Skipping Claude summaries: ANTHROPIC_API_KEY is not set.")
+        return scored
 
     client = anthropic.Anthropic(api_key=api_key)
     limit = _batch_limit("ARCH_COMPANY_AI_MAX_PER_RUN", DEFAULT_AI_BATCH_LIMIT)
     companies = session.scalars(
         select(ArchCompany)
-        .where(ArchCompany.ai_reliability_score.is_(None))
+        .where(ArchCompany.ai_reliability_score.isnot(None))
         .order_by(ArchCompany.total_value.desc())
         .limit(limit)
     ).all()
 
-    print(f"[ArchCompanies] AI scoring: {len(companies)} firms queued (max {limit})")
-    if not companies:
-        return 0
+    candidates = [c for c in companies if _needs_claude_summary(c)]
+    print(
+        f"[ArchCompanies] Claude summaries: {len(candidates)} firms need enrichment "
+        f"(max {limit}, {scored} scores backfilled)"
+    )
 
-    analyzed = 0
-    for index, company in enumerate(companies, start=1):
+    enriched = 0
+    for index, company in enumerate(candidates, start=1):
         if index > 1:
             time.sleep(ARCH_AI_REQUEST_DELAY_SECONDS)
 
-        print(f"[ArchCompanies] AI {index}/{len(companies)}: {company.name[:70]}")
+        print(f"[ArchCompanies] AI summary {index}/{len(candidates)}: {company.name[:70]}")
         try:
-            _save_arch_company_score(session, client, company)
-            analyzed += 1
+            summary = _fetch_claude_summary_with_retry(client, company)
+            company.ai_summary = summary
+            session.commit()
+            enriched += 1
         except Exception as exc:
             session.rollback()
-            print(f"[ArchCompanies] AI scoring failed for {company.name[:50]}: {exc}")
+            print(f"[ArchCompanies] Claude summary failed for {company.name[:50]}: {exc}")
 
-    print(f"[ArchCompanies] AI analysis complete: {analyzed} architecture firms scored")
-    return analyzed
+    print(f"[ArchCompanies] AI analysis complete: {scored} scored, {enriched} summaries enriched")
+    return scored + enriched
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +520,25 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
         scraped = 0
 
     try:
+        google_enriched = enrich_arch_companies_google(session)
+    except Exception as exc:
+        print(f"[ArchCompanies] Google enrichment failed: {exc}")
+        google_enriched = 0
+
+    # Score all firms immediately — must run before slow Houzz / website / Claude steps.
+    try:
+        scores_backfilled = backfill_arch_reliability_scores(session)
+    except Exception as exc:
+        print(f"[ArchCompanies] Score backfill failed: {exc}")
+        scores_backfilled = 0
+
+    try:
+        ai_analyzed = analyze_arch_companies_ai(session)
+    except Exception as exc:
+        print(f"[ArchCompanies] AI analysis failed: {exc}")
+        ai_analyzed = scores_backfilled
+
+    try:
         houzz_scraped = scrape_arch_houzz(session)
     except Exception as exc:
         print(f"[ArchCompanies] Houzz scrape failed: {exc}")
@@ -520,17 +551,12 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
         aibc_verified = 0
 
     try:
-        google_enriched = enrich_arch_companies_google(session)
+        scores_refreshed = _refresh_arch_reliability_scores(session)
+        if scores_refreshed:
+            print(f"[ArchCompanies] Refreshed {scores_refreshed} scores after Houzz enrichment")
     except Exception as exc:
-        print(f"[ArchCompanies] Google enrichment failed: {exc}")
-        google_enriched = 0
-
-    # Score firms before website research — that step is slow and shares the Claude rate limit.
-    try:
-        ai_analyzed = analyze_arch_companies_ai(session)
-    except Exception as exc:
-        print(f"[ArchCompanies] AI analysis failed: {exc}")
-        ai_analyzed = 0
+        print(f"[ArchCompanies] Score refresh failed: {exc}")
+        scores_refreshed = 0
 
     try:
         websites_researched = research_arch_websites(session)
@@ -539,17 +565,14 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
         websites_researched = 0
 
     try:
-        scores_refreshed = _refresh_arch_reliability_scores(session)
-        if scores_refreshed:
-            print(f"[ArchCompanies] Refreshed {scores_refreshed} scores after website research")
+        scores_refreshed += _refresh_arch_reliability_scores(session)
     except Exception as exc:
-        print(f"[ArchCompanies] Score refresh failed: {exc}")
-        scores_refreshed = 0
+        print(f"[ArchCompanies] Post-website score refresh failed: {exc}")
 
     try:
-        ai_analyzed += analyze_arch_companies_ai(session)
+        backfill_arch_reliability_scores(session)
     except Exception as exc:
-        print(f"[ArchCompanies] Post-website AI analysis failed: {exc}")
+        print(f"[ArchCompanies] Final score backfill failed: {exc}")
 
     return {
         "arch_companies_populated": populated,
@@ -558,6 +581,7 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
         "arch_companies_aibc_verified": aibc_verified,
         "arch_companies_google_enriched": google_enriched,
         "arch_companies_websites_researched": websites_researched,
+        "arch_companies_scores_backfilled": scores_backfilled,
         "arch_companies_ai_analyzed": ai_analyzed,
         "arch_companies_scores_refreshed": scores_refreshed,
     }
