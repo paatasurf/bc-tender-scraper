@@ -55,10 +55,10 @@ REDDIT_SOURCES: dict[str, tuple[str, ...]] = {
 REDDIT_SIGNALS_CSV = "reddit_signals.csv"
 
 NEWS_SOURCES: tuple[dict[str, str], ...] = (
-    {"publisher": "Business in Vancouver", "url": "https://www.biv.com/rss.xml"},
-    {"publisher": "Daily Hive Vancouver", "url": "https://dailyhive.com/vancouver/feed"},
-    {"publisher": "Vancouver Sun Business", "url": "https://vancouversun.com/category/business/feed/"},
-    {"publisher": "CBC British Columbia", "url": "https://www.cbc.ca/cmlink/rss-topstories-bcp"},
+    {"publisher": "Business in Vancouver", "url": "https://www.biv.com/rss"},
+    {"publisher": "Daily Hive Vancouver", "url": "https://dailyhive.com/feed"},
+    {"publisher": "Vancouver Sun Business", "url": "https://www.vancouversun.com/category/business/feed/"},
+    {"publisher": "CBC British Columbia", "url": "https://rss.cbc.ca/lineup/canada-britishcolumbia.xml"},
 )
 NEWS_KEYWORDS = (
     "construction",

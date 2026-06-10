@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 import requests
 from bs4 import BeautifulSoup
@@ -38,18 +39,9 @@ def _parse_rss_entry(entry, publisher: str) -> dict[str, str] | None:
         date_tag = entry.find(tag_name)
         if date_tag and date_tag.get_text(strip=True):
             raw = date_tag.get_text(strip=True)
-            for fmt in (
-                "%a, %d %b %Y %H:%M:%S %Z",
-                "%a, %d %b %Y %H:%M:%S %z",
-                "%Y-%m-%dT%H:%M:%S%z",
-                "%Y-%m-%d",
-            ):
-                try:
-                    date = datetime.strptime(raw[:25], fmt).date().isoformat()
-                    break
-                except ValueError:
-                    continue
-            if not date:
+            try:
+                date = parsedate_to_datetime(raw).date().isoformat()
+            except (TypeError, ValueError, IndexError):
                 date = raw[:10]
             break
 
