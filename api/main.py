@@ -6,13 +6,15 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import Float, func, select
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from datetime import datetime
 
-from db.connection import get_session, init_db
+from db.connection import check_db_connection, get_session, init_db, is_transient_db_error
 from db.models import (
     ArchCompany,
     ArchTender,
@@ -39,7 +41,8 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_db()
+    # Start the API even if Postgres is temporarily in recovery after disk pressure.
+    init_db(raise_on_failure=False)
     yield
 
 
@@ -61,10 +64,26 @@ app.add_middleware(
 app.include_router(internal_router)
 
 
+@app.exception_handler(OperationalError)
+@app.exception_handler(DBAPIError)
+def database_unavailable_handler(_request: Request, exc: Exception) -> JSONResponse:
+    if is_transient_db_error(exc):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Database is temporarily unavailable (recovery or connection issue). Retry shortly.",
+            },
+            headers={"Retry-After": "30"},
+        )
+    return JSONResponse(status_code=500, content={"detail": "Database error"})
+
+
 @app.get("/api/health")
 def health() -> dict[str, str | bool]:
+    db_ok = check_db_connection()
     return {
-        "status": "ok",
+        "status": "ok" if db_ok else "degraded",
+        "database_connected": db_ok,
         "anthropic_api_key_configured": bool(get_anthropic_api_key()),
     }
 
