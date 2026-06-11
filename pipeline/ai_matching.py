@@ -165,6 +165,37 @@ Scoring guide:
     return {"score": score, "reasoning": reasoning}
 
 
+def _arch_tender_dict(tender: ArchTender) -> dict[str, Any]:
+    return {
+        "id": tender.id,
+        "title": tender.title,
+        "company": tender.company,
+        "value": tender.value,
+        "deadline": tender.deadline,
+        "status": tender.status,
+        "category": tender.category,
+        "url": tender.url,
+        "tender_id": tender.tender_id,
+        "ai_budget_estimate": tender.ai_budget_estimate or "",
+    }
+
+
+def _match_result_dict(
+    tender: ArchTender,
+    *,
+    score: int,
+    reasoning: str,
+    match_reason: str,
+) -> dict[str, Any]:
+    return {
+        "tender_id": tender.id,
+        "score": score,
+        "reasoning": reasoning,
+        "match_reason": match_reason,
+        "tender": _arch_tender_dict(tender),
+    }
+
+
 def _upsert_tender_match(
     session: Session,
     *,
@@ -189,6 +220,131 @@ def _upsert_tender_match(
         },
     )
     session.execute(stmt)
+
+
+def _score_company_tender_matches(
+    client: anthropic.Anthropic,
+    session: Session,
+    company: ArchCompany,
+    tenders: list[ArchTender],
+    tender_by_id: dict[int, ArchTender],
+    *,
+    persist: bool,
+    min_score: int,
+    delay: float,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Run matcher + scorer for one firm. Returns (results, candidates_found, scored_count)."""
+    try:
+        candidates = run_tender_matcher(client, company, tenders)
+    except Exception as exc:
+        print(f"[AI Matching] Matcher failed for {company.name[:50]}: {exc}")
+        return [], 0, 0
+
+    results: list[dict[str, Any]] = []
+    scored_count = 0
+
+    for candidate in candidates:
+        tender = tender_by_id.get(candidate["tender_id"])
+        if tender is None:
+            continue
+
+        if delay > 0:
+            time.sleep(delay)
+
+        try:
+            scored = run_company_scorer(
+                client,
+                company,
+                tender,
+                candidate["match_reason"],
+            )
+        except Exception as exc:
+            print(
+                f"[AI Matching] Scorer failed for company={company.id} "
+                f"tender={tender.id}: {exc}"
+            )
+            continue
+
+        scored_count += 1
+        if scored["score"] < min_score:
+            continue
+
+        if persist:
+            _upsert_tender_match(
+                session,
+                company_id=company.id,
+                tender_id=tender.id,
+                score=scored["score"],
+                reasoning=scored["reasoning"],
+            )
+            session.commit()
+
+        results.append(
+            _match_result_dict(
+                tender,
+                score=scored["score"],
+                reasoning=scored["reasoning"],
+                match_reason=candidate["match_reason"],
+            )
+        )
+
+    return results, len(candidates), scored_count
+
+
+def run_ai_matching_sync(
+    session: Session,
+    *,
+    company_id: int,
+    max_tenders: int | None = None,
+    min_score: int = 65,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Run matcher + scorer for one architecture firm and return ranked matches."""
+    api_key = get_anthropic_api_key()
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    tender_limit = max_tenders or _batch_limit("AI_MATCHING_MAX_TENDERS", DEFAULT_MAX_TENDERS)
+    delay = _request_delay()
+
+    tenders = list(
+        session.scalars(
+            select(ArchTender).order_by(ArchTender.id.desc()).limit(tender_limit)
+        ).all()
+    )
+    if not tenders:
+        return []
+
+    tender_by_id = {tender.id: tender for tender in tenders}
+    company = session.scalars(
+        select(ArchCompany).where(ArchCompany.id == company_id)
+    ).first()
+    if company is None:
+        raise ValueError(f"Architecture company {company_id} not found")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    print(
+        f"[AI Matching] Sync run for {company.name[:70]} against {len(tenders)} tenders "
+        f"(model={MATCHING_MODEL})"
+    )
+
+    results, candidates_found, scored_count = _score_company_tender_matches(
+        client,
+        session,
+        company,
+        tenders,
+        tender_by_id,
+        persist=True,
+        min_score=min_score,
+        delay=delay,
+    )
+
+    results.sort(key=lambda item: item["score"], reverse=True)
+    print(
+        f"[AI Matching] Sync complete: {candidates_found} candidates, "
+        f"{scored_count} scored, {len(results)} above min_score={min_score}"
+    )
+    return results[:limit]
 
 
 def run_ai_matching(
@@ -236,47 +392,18 @@ def run_ai_matching(
 
     for index, company in enumerate(companies, start=1):
         print(f"[AI Matching] Company {index}/{len(companies)}: {company.name[:70]}")
-        try:
-            candidates = run_tender_matcher(client, company, tenders)
-        except Exception as exc:
-            print(f"[AI Matching] Matcher failed for {company.name[:50]}: {exc}")
-            continue
-
-        matches_found += len(candidates)
-        if not candidates:
-            continue
-
-        for candidate in candidates:
-            tender = tender_by_id.get(candidate["tender_id"])
-            if tender is None:
-                continue
-
-            if delay > 0:
-                time.sleep(delay)
-
-            try:
-                scored = run_company_scorer(
-                    client,
-                    company,
-                    tender,
-                    candidate["match_reason"],
-                )
-            except Exception as exc:
-                print(
-                    f"[AI Matching] Scorer failed for company={company.id} "
-                    f"tender={tender.id}: {exc}"
-                )
-                continue
-
-            _upsert_tender_match(
-                session,
-                company_id=company.id,
-                tender_id=tender.id,
-                score=scored["score"],
-                reasoning=scored["reasoning"],
-            )
-            session.commit()
-            matches_scored += 1
+        results, candidates_found, company_scored = _score_company_tender_matches(
+            client,
+            session,
+            company,
+            tenders,
+            tender_by_id,
+            persist=True,
+            min_score=0,
+            delay=delay,
+        )
+        matches_found += candidates_found
+        matches_scored += company_scored
 
         if delay > 0 and index < len(companies):
             time.sleep(delay)

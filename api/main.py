@@ -550,10 +550,16 @@ def trigger_ai_scoring(background_tasks: BackgroundTasks) -> dict[str, str]:
 class AIMatchingRequest(BaseModel):
     company_id: int | None = Field(
         default=None,
-        description="Optional arch_companies.id. Omit to match multiple firms.",
+        description="Optional arch_companies.id. Required when sync=true.",
     )
     max_companies: int = Field(default=10, ge=1, le=100)
     max_tenders: int = Field(default=50, ge=1, le=500)
+    sync: bool = Field(
+        default=False,
+        description="When true with company_id, run matcher+scorer inline and return ranked matches.",
+    )
+    min_score: int = Field(default=65, ge=0, le=100)
+    limit: int = Field(default=5, ge=1, le=50)
 
 
 def _run_ai_matching_task(
@@ -582,11 +588,48 @@ def _run_ai_matching_task(
 def trigger_ai_matching(
     background_tasks: BackgroundTasks,
     body: AIMatchingRequest | None = None,
-) -> dict[str, str | int | None]:
+) -> dict[str, Any]:
     if not get_anthropic_api_key():
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
 
     request = body or AIMatchingRequest()
+
+    if request.sync:
+        if request.company_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="company_id is required when sync=true",
+            )
+
+        from pipeline.ai_matching import run_ai_matching_sync
+
+        session = get_session()
+        try:
+            try:
+                matches = run_ai_matching_sync(
+                    session,
+                    company_id=request.company_id,
+                    max_tenders=request.max_tenders,
+                    min_score=request.min_score,
+                    limit=request.limit,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"AI matching failed: {exc}") from exc
+
+            return {
+                "status": "complete",
+                "company_id": request.company_id,
+                "min_score": request.min_score,
+                "limit": request.limit,
+                "matches": matches,
+            }
+        finally:
+            session.close()
+
     background_tasks.add_task(
         _run_ai_matching_task,
         request.company_id,
