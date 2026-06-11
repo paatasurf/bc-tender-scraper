@@ -74,6 +74,63 @@ def _call_claude(client: anthropic.Anthropic, prompt: str, *, max_tokens: int = 
     return _extract_json(text_blocks[0])
 
 
+_BREAKDOWN_KEYS = (
+    "keywords",
+    "category",
+    "specialization",
+    "location",
+    "value",
+    "reliability",
+    "freshness",
+)
+
+_SCORER_JSON_SCHEMA = """
+Return JSON only:
+{
+  "score": <integer 0-100 — MUST equal the sum of all breakdown.points>,
+  "reasoning": "<2-3 sentences explaining the overall fit>",
+  "breakdown": {
+    "keywords": { "points": <0-35>, "detail": "<keyword / trade / specialty overlap>" },
+    "category": { "points": <0-20>, "detail": "<project type or category alignment>" },
+    "specialization": { "points": <0-15>, "detail": "<domain expertise fit>" },
+    "location": { "points": <0-15>, "detail": "<geography or service area fit>" },
+    "value": { "points": <0-15>, "detail": "<project scale / budget fit>" },
+    "reliability": { "points": <0-5>, "detail": "<track record / reputation signal>" },
+    "freshness": { "points": <0-10>, "detail": "<deadline urgency / timing>" }
+  }
+}
+
+Rules:
+- Assign 0 points with a brief detail when a factor does not apply.
+- The score field MUST equal the sum of all breakdown.points (max 100).
+"""
+
+
+def _normalize_scorer_payload(payload: dict[str, Any], match_reason: str) -> dict[str, Any]:
+    breakdown_raw = payload.get("breakdown")
+    breakdown: dict[str, dict[str, Any]] = {}
+    for key in _BREAKDOWN_KEYS:
+        item = breakdown_raw.get(key) if isinstance(breakdown_raw, dict) else None
+        if not isinstance(item, dict):
+            item = {}
+        try:
+            points = int(item.get("points", 0))
+        except (TypeError, ValueError):
+            points = 0
+        points = max(0, points)
+        detail = str(item.get("detail", "")).strip() or "No significant signal"
+        breakdown[key] = {"points": points, "detail": detail}
+
+    computed = sum(item["points"] for item in breakdown.values())
+    try:
+        declared = int(payload.get("score", computed))
+    except (TypeError, ValueError):
+        declared = computed
+    score = max(0, min(100, computed if computed > 0 else declared))
+    reasoning = str(payload.get("reasoning", "")).strip() or match_reason
+    return {"score": score, "reasoning": reasoning, "breakdown": breakdown}
+
+
 def run_tender_matcher(
     client: anthropic.Anthropic,
     company: ArchCompany,
@@ -157,11 +214,7 @@ TENDER:
 TENDER MATCHER SIGNAL:
 {match_reason}
 
-Return JSON only:
-{{
-  "score": <integer 0-100>,
-  "reasoning": "<2-3 sentences explaining the score based on specialization, past projects, and location fit>"
-}}
+{_SCORER_JSON_SCHEMA}
 
 Scoring guide:
 - 80-100: Strong fit — specialization, portfolio, and geography align well
@@ -169,12 +222,8 @@ Scoring guide:
 - 20-49: Weak fit — limited alignment
 - 0-19: Poor fit — should not pursue"""
 
-    payload = _call_claude(client, prompt, max_tokens=500)
-    score = max(0, min(100, int(payload.get("score", 0))))
-    reasoning = str(payload.get("reasoning", "")).strip()
-    if not reasoning:
-        reasoning = match_reason
-    return {"score": score, "reasoning": reasoning}
+    payload = _call_claude(client, prompt, max_tokens=900)
+    return _normalize_scorer_payload(payload, match_reason)
 
 
 def _arch_tender_dict(tender: ArchTender) -> dict[str, Any]:
@@ -200,8 +249,9 @@ def _match_result_dict(
     score: int,
     reasoning: str,
     match_reason: str,
+    breakdown: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "tender_id": tender_id,
         "tender_source": tender_source,
         "score": score,
@@ -209,6 +259,9 @@ def _match_result_dict(
         "match_reason": match_reason,
         "tender": tender_payload,
     }
+    if breakdown is not None:
+        result["breakdown"] = breakdown
+    return result
 
 
 def _upsert_tender_match(
@@ -310,6 +363,7 @@ def _score_company_tender_matches(
                 score=scored["score"],
                 reasoning=scored["reasoning"],
                 match_reason=candidate["match_reason"],
+                breakdown=scored.get("breakdown"),
             )
         )
 
@@ -487,11 +541,7 @@ TENDER:
 TENDER MATCHER SIGNAL:
 {match_reason}
 
-Return JSON only:
-{{
-  "score": <integer 0-100>,
-  "reasoning": "<2-3 sentences explaining the score based on permit history, project types, value range, and location fit>"
-}}
+{_SCORER_JSON_SCHEMA}
 
 Scoring guide:
 - 80-100: Strong fit — trade, scale, and geography align well
@@ -499,12 +549,8 @@ Scoring guide:
 - 20-49: Weak fit — limited alignment
 - 0-19: Poor fit — should not pursue"""
 
-    payload = _call_claude(client, prompt, max_tokens=500)
-    score = max(0, min(100, int(payload.get("score", 0))))
-    reasoning = str(payload.get("reasoning", "")).strip()
-    if not reasoning:
-        reasoning = match_reason
-    return {"score": score, "reasoning": reasoning}
+    payload = _call_claude(client, prompt, max_tokens=900)
+    return _normalize_scorer_payload(payload, match_reason)
 
 
 def _score_construction_tender_matches(
@@ -577,6 +623,7 @@ def _score_construction_tender_matches(
                 score=scored["score"],
                 reasoning=scored["reasoning"],
                 match_reason=candidate["match_reason"],
+                breakdown=scored.get("breakdown"),
             )
         )
 
@@ -691,6 +738,36 @@ def run_ai_matching_sync(
         f"{scored_count} scored, {len(results)} above min_score={min_score}"
     )
     return results[:limit]
+
+
+def run_unified_ai_matching_sync(
+    session: Session,
+    *,
+    company_id: int,
+    kind: str,
+    max_tenders: int | None = None,
+    min_score: int = 65,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Single entry point for sync AI matching — construction and architecture."""
+    normalized = (kind or "architecture").strip().lower()
+    if normalized == "construction":
+        return run_construction_ai_matching_sync(
+            session,
+            company_id=company_id,
+            max_tenders=max_tenders,
+            min_score=min_score,
+            limit=limit,
+        )
+    if normalized == "architecture":
+        return run_ai_matching_sync(
+            session,
+            company_id=company_id,
+            max_tenders=max_tenders,
+            min_score=min_score,
+            limit=limit,
+        )
+    raise ValueError("kind must be 'architecture' or 'construction'")
 
 
 def run_ai_matching(

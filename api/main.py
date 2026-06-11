@@ -605,10 +605,7 @@ def trigger_ai_matching(
                 detail="company_id is required when sync=true",
             )
 
-        from pipeline.ai_matching import (
-            run_ai_matching_sync,
-            run_construction_ai_matching_sync,
-        )
+        from pipeline.ai_matching import run_unified_ai_matching_sync
 
         kind = (request.kind or "architecture").strip().lower()
         if kind not in {"architecture", "construction"}:
@@ -620,22 +617,14 @@ def trigger_ai_matching(
         session = get_session()
         try:
             try:
-                if kind == "construction":
-                    matches = run_construction_ai_matching_sync(
-                        session,
-                        company_id=request.company_id,
-                        max_tenders=request.max_tenders,
-                        min_score=request.min_score,
-                        limit=request.limit,
-                    )
-                else:
-                    matches = run_ai_matching_sync(
-                        session,
-                        company_id=request.company_id,
-                        max_tenders=request.max_tenders,
-                        min_score=request.min_score,
-                        limit=request.limit,
-                    )
+                matches = run_unified_ai_matching_sync(
+                    session,
+                    company_id=request.company_id,
+                    kind=kind,
+                    max_tenders=request.max_tenders,
+                    min_score=request.min_score,
+                    limit=request.limit,
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except RuntimeError as exc:
