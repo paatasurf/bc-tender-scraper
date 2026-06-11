@@ -96,8 +96,33 @@ def _widen_commercial_text_columns(engine) -> None:
             )
 
 
+def _ensure_pipeline_runs_table(engine) -> None:
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS pipeline_runs (
+            id SERIAL PRIMARY KEY,
+            run_id VARCHAR(36) NOT NULL,
+            step VARCHAR(100) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'running',
+            started_at TIMESTAMPTZ DEFAULT NOW(),
+            finished_at TIMESTAMPTZ,
+            error TEXT DEFAULT '',
+            counts_json TEXT DEFAULT '{}'
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_pipeline_runs_run_id ON pipeline_runs (run_id)",
+        "CREATE INDEX IF NOT EXISTS ix_pipeline_runs_step ON pipeline_runs (step)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def init_db() -> None:
+    import db.models  # noqa: F401  # register all ORM models before create_all
+
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
+    _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
     _widen_commercial_text_columns(engine)
