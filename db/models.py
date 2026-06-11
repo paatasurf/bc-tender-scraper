@@ -182,7 +182,9 @@ class TenderMatch(Base):
     __tablename__ = "tender_matches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="architecture", index=True)
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    tender_source: Mapped[str] = mapped_column(String(20), nullable=False, default="arch", index=True)
     tender_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reasoning: Mapped[str] = mapped_column(Text, default="")

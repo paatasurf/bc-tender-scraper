@@ -550,7 +550,11 @@ def trigger_ai_scoring(background_tasks: BackgroundTasks) -> dict[str, str]:
 class AIMatchingRequest(BaseModel):
     company_id: int | None = Field(
         default=None,
-        description="Optional arch_companies.id. Required when sync=true.",
+        description="companies.id or arch_companies.id. Required when sync=true.",
+    )
+    kind: str = Field(
+        default="architecture",
+        description="Company type: architecture or construction.",
     )
     max_companies: int = Field(default=10, ge=1, le=100)
     max_tenders: int = Field(default=50, ge=1, le=500)
@@ -601,18 +605,37 @@ def trigger_ai_matching(
                 detail="company_id is required when sync=true",
             )
 
-        from pipeline.ai_matching import run_ai_matching_sync
+        from pipeline.ai_matching import (
+            run_ai_matching_sync,
+            run_construction_ai_matching_sync,
+        )
+
+        kind = (request.kind or "architecture").strip().lower()
+        if kind not in {"architecture", "construction"}:
+            raise HTTPException(
+                status_code=400,
+                detail="kind must be 'architecture' or 'construction'",
+            )
 
         session = get_session()
         try:
             try:
-                matches = run_ai_matching_sync(
-                    session,
-                    company_id=request.company_id,
-                    max_tenders=request.max_tenders,
-                    min_score=request.min_score,
-                    limit=request.limit,
-                )
+                if kind == "construction":
+                    matches = run_construction_ai_matching_sync(
+                        session,
+                        company_id=request.company_id,
+                        max_tenders=request.max_tenders,
+                        min_score=request.min_score,
+                        limit=request.limit,
+                    )
+                else:
+                    matches = run_ai_matching_sync(
+                        session,
+                        company_id=request.company_id,
+                        max_tenders=request.max_tenders,
+                        min_score=request.min_score,
+                        limit=request.limit,
+                    )
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except RuntimeError as exc:
@@ -622,6 +645,7 @@ def trigger_ai_matching(
 
             return {
                 "status": "complete",
+                "kind": kind,
                 "company_id": request.company_id,
                 "min_score": request.min_score,
                 "limit": request.limit,

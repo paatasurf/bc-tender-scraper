@@ -349,6 +349,25 @@ def _ensure_tender_matches_table(engine) -> None:
             conn.execute(text(statement))
 
 
+def _migrate_tender_matches_company_kind(engine) -> None:
+    statements = (
+        "ALTER TABLE tender_matches "
+        "ADD COLUMN IF NOT EXISTS company_kind VARCHAR(20) NOT NULL DEFAULT 'architecture'",
+        "ALTER TABLE tender_matches "
+        "ADD COLUMN IF NOT EXISTS tender_source VARCHAR(20) NOT NULL DEFAULT 'arch'",
+        "CREATE INDEX IF NOT EXISTS ix_tender_matches_company_kind "
+        "ON tender_matches (company_kind)",
+        "CREATE INDEX IF NOT EXISTS ix_tender_matches_tender_source "
+        "ON tender_matches (tender_source)",
+        "DROP INDEX IF EXISTS ix_tender_matches_company_tender",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_kind_tender "
+        "ON tender_matches (company_kind, company_id, tender_source, tender_id)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_pipeline_runs_table(engine) -> None:
     statements = (
         """
@@ -374,6 +393,7 @@ def _ensure_pipeline_runs_table(engine) -> None:
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
+    _migrate_tender_matches_company_kind(engine)
     _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
     _widen_commercial_text_columns(engine)

@@ -10,9 +10,19 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from config.env import get_anthropic_api_key, get_env
-from db.models import ArchCompany, ArchTender, TenderMatch
+from db.models import (
+    ArchCompany,
+    ArchTender,
+    CommercialTender,
+    Company,
+    Tender,
+    TenderMatch,
+)
 from pipeline.arch_company_intelligence import _arch_company_profile_lines
-from pipeline.company_intelligence import _extract_json, _tender_lines
+from pipeline.company_intelligence import _company_profile_lines, _extract_json, _tender_lines
+
+ConstructionTender = Tender | CommercialTender
+CatalogEntry = tuple[str, ArchTender | ConstructionTender]
 
 MATCHING_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_COMPANIES = 10
@@ -121,7 +131,9 @@ Rules:
         reason = str(item.get("match_reason", "")).strip()
         if not reason:
             reason = "Relevant based on firm specializations and project history."
-        normalized.append({"tender_id": tender_id, "match_reason": reason})
+        normalized.append(
+            {"tender_id": tender_id, "tender_source": "arch", "match_reason": reason}
+        )
     return normalized
 
 
@@ -181,38 +193,45 @@ def _arch_tender_dict(tender: ArchTender) -> dict[str, Any]:
 
 
 def _match_result_dict(
-    tender: ArchTender,
     *,
+    tender_id: int,
+    tender_source: str,
+    tender_payload: dict[str, Any],
     score: int,
     reasoning: str,
     match_reason: str,
 ) -> dict[str, Any]:
     return {
-        "tender_id": tender.id,
+        "tender_id": tender_id,
+        "tender_source": tender_source,
         "score": score,
         "reasoning": reasoning,
         "match_reason": match_reason,
-        "tender": _arch_tender_dict(tender),
+        "tender": tender_payload,
     }
 
 
 def _upsert_tender_match(
     session: Session,
     *,
+    company_kind: str,
     company_id: int,
+    tender_source: str,
     tender_id: int,
     score: int,
     reasoning: str,
 ) -> None:
     table = TenderMatch.__table__
     stmt = insert(table).values(
+        company_kind=company_kind,
         company_id=company_id,
+        tender_source=tender_source,
         tender_id=tender_id,
         score=score,
         reasoning=reasoning[:4000],
     )
     stmt = stmt.on_conflict_do_update(
-        index_elements=["company_id", "tender_id"],
+        index_elements=["company_kind", "company_id", "tender_source", "tender_id"],
         set_={
             "score": stmt.excluded.score,
             "reasoning": stmt.excluded.reasoning,
@@ -272,16 +291,22 @@ def _score_company_tender_matches(
         if persist:
             _upsert_tender_match(
                 session,
+                company_kind="architecture",
                 company_id=company.id,
+                tender_source="arch",
                 tender_id=tender.id,
                 score=scored["score"],
                 reasoning=scored["reasoning"],
             )
             session.commit()
 
+        payload = _arch_tender_dict(tender)
+        payload["tender_source"] = "arch"
         results.append(
             _match_result_dict(
-                tender,
+                tender_id=tender.id,
+                tender_source="arch",
+                tender_payload=payload,
                 score=scored["score"],
                 reasoning=scored["reasoning"],
                 match_reason=candidate["match_reason"],
@@ -289,6 +314,327 @@ def _score_company_tender_matches(
         )
 
     return results, len(candidates), scored_count
+
+
+def _construction_tender_catalog_json(entries: list[CatalogEntry]) -> str:
+    payload = []
+    for source, tender in entries:
+        if source == "federal":
+            payload.append(
+                {
+                    "id": tender.id,
+                    "source": source,
+                    "title": tender.title,
+                    "category": tender.category,
+                    "deadline": getattr(tender, "closing_date", "") or "",
+                    "organization": getattr(tender, "organization", "") or "",
+                    "value": getattr(tender, "estimated_value", "") or "",
+                    "location": getattr(tender, "location", "") or "",
+                }
+            )
+        else:
+            payload.append(
+                {
+                    "id": tender.id,
+                    "source": source,
+                    "title": tender.title,
+                    "category": tender.category,
+                    "deadline": getattr(tender, "deadline", "") or "",
+                    "organization": getattr(tender, "company", "") or "",
+                    "value": getattr(tender, "value", "") or "",
+                }
+            )
+    return json.dumps(payload, indent=2)
+
+
+def _construction_tender_dict(source: str, tender: ConstructionTender) -> dict[str, Any]:
+    if source == "federal":
+        return {
+            "id": tender.id,
+            "title": tender.title,
+            "company": getattr(tender, "organization", "") or "",
+            "value": getattr(tender, "estimated_value", "") or "",
+            "deadline": getattr(tender, "closing_date", "") or "",
+            "category": tender.category or "",
+            "location": getattr(tender, "location", "") or "",
+            "url": getattr(tender, "url", "") or "",
+            "tender_id": getattr(tender, "tender_id", "") or "",
+            "ai_budget_estimate": getattr(tender, "ai_budget_estimate", "") or "",
+            "tender_source": "federal",
+        }
+    return {
+        "id": tender.id,
+        "title": tender.title,
+        "company": getattr(tender, "company", "") or "",
+        "value": getattr(tender, "value", "") or "",
+        "deadline": getattr(tender, "deadline", "") or "",
+        "status": getattr(tender, "status", "") or "",
+        "category": tender.category or "Commercial",
+        "url": getattr(tender, "url", "") or "",
+        "tender_id": getattr(tender, "tender_id", "") or "",
+        "ai_budget_estimate": getattr(tender, "ai_budget_estimate", "") or "",
+        "tender_source": "commercial",
+    }
+
+
+def _load_construction_tender_catalog(
+    session: Session,
+    max_tenders: int,
+) -> list[CatalogEntry]:
+    per_source = max(1, max_tenders // 2)
+    federal = list(
+        session.scalars(
+            select(Tender).order_by(Tender.id.desc()).limit(per_source)
+        ).all()
+    )
+    commercial = list(
+        session.scalars(
+            select(CommercialTender).order_by(CommercialTender.id.desc()).limit(per_source)
+        ).all()
+    )
+    return [("federal", row) for row in federal] + [("commercial", row) for row in commercial]
+
+
+def run_construction_tender_matcher(
+    client: anthropic.Anthropic,
+    company: Company,
+    catalog: list[CatalogEntry],
+) -> list[dict[str, Any]]:
+    """Agent 1: identify relevant tenders for a construction company."""
+    if not catalog:
+        return []
+
+    prompt = f"""You are the Tender Matcher agent for TenderScope BC construction intelligence.
+
+Identify which tenders from the catalog are relevant for this company based on:
+- Vancouver building permit history (project types, volume, value range)
+- Trade and construction specialties implied by permit types
+- Geographic areas of activity vs tender location/organization
+- Project scale fit (typical job size vs tender value)
+
+CONSTRUCTION COMPANY:
+{_company_profile_lines(company)}
+
+TENDER CATALOG (JSON):
+{_construction_tender_catalog_json(catalog)}
+
+Return JSON only:
+{{
+  "matches": [
+    {{
+      "tender_id": <integer id from catalog>,
+      "tender_source": "<federal or commercial — must match catalog source>",
+      "match_reason": "<one sentence why this tender is relevant>"
+    }}
+  ]
+}}
+
+Rules:
+- Only include tenders with genuine fit (do not match everything).
+- tender_id and tender_source must match an entry in the catalog.
+- Return {{"matches": []}} if nothing is relevant."""
+
+    payload = _call_claude(client, prompt, max_tokens=1200)
+    matches = payload.get("matches") or []
+    if not isinstance(matches, list):
+        return []
+
+    valid_keys = {(source, tender.id) for source, tender in catalog}
+    normalized: list[dict[str, Any]] = []
+    for item in matches:
+        if not isinstance(item, dict):
+            continue
+        try:
+            tender_id = int(item.get("tender_id"))
+        except (TypeError, ValueError):
+            continue
+        tender_source = str(item.get("tender_source", "")).strip().lower()
+        if tender_source not in {"federal", "commercial"}:
+            continue
+        if (tender_source, tender_id) not in valid_keys:
+            continue
+        reason = str(item.get("match_reason", "")).strip()
+        if not reason:
+            reason = "Relevant based on permit history and project types."
+        normalized.append(
+            {
+                "tender_id": tender_id,
+                "tender_source": tender_source,
+                "match_reason": reason,
+            }
+        )
+    return normalized
+
+
+def run_construction_company_scorer(
+    client: anthropic.Anthropic,
+    company: Company,
+    tender: ConstructionTender,
+    tender_source: str,
+    match_reason: str,
+) -> dict[str, Any]:
+    """Agent 2: score a construction company-tender pair 0-100 with reasoning."""
+    prompt = f"""You are the Company Scorer agent for TenderScope BC construction intelligence.
+
+Score how well this construction company fits this tender on a 0-100 scale.
+
+CONSTRUCTION COMPANY:
+{_company_profile_lines(company)}
+
+TENDER:
+{_tender_lines(tender)}
+
+TENDER MATCHER SIGNAL:
+{match_reason}
+
+Return JSON only:
+{{
+  "score": <integer 0-100>,
+  "reasoning": "<2-3 sentences explaining the score based on permit history, project types, value range, and location fit>"
+}}
+
+Scoring guide:
+- 80-100: Strong fit — trade, scale, and geography align well
+- 50-79: Moderate fit — some relevant experience but gaps exist
+- 20-49: Weak fit — limited alignment
+- 0-19: Poor fit — should not pursue"""
+
+    payload = _call_claude(client, prompt, max_tokens=500)
+    score = max(0, min(100, int(payload.get("score", 0))))
+    reasoning = str(payload.get("reasoning", "")).strip()
+    if not reasoning:
+        reasoning = match_reason
+    return {"score": score, "reasoning": reasoning}
+
+
+def _score_construction_tender_matches(
+    client: anthropic.Anthropic,
+    session: Session,
+    company: Company,
+    catalog: list[CatalogEntry],
+    catalog_by_key: dict[tuple[str, int], ConstructionTender],
+    *,
+    persist: bool,
+    min_score: int,
+    delay: float,
+) -> tuple[list[dict[str, Any]], int, int]:
+    try:
+        candidates = run_construction_tender_matcher(client, company, catalog)
+    except Exception as exc:
+        print(f"[AI Matching] Construction matcher failed for {company.name[:50]}: {exc}")
+        return [], 0, 0
+
+    results: list[dict[str, Any]] = []
+    scored_count = 0
+
+    for candidate in candidates:
+        key = (candidate["tender_source"], candidate["tender_id"])
+        tender = catalog_by_key.get(key)
+        if tender is None:
+            continue
+
+        if delay > 0:
+            time.sleep(delay)
+
+        try:
+            scored = run_construction_company_scorer(
+                client,
+                company,
+                tender,
+                candidate["tender_source"],
+                candidate["match_reason"],
+            )
+        except Exception as exc:
+            print(
+                f"[AI Matching] Construction scorer failed for company={company.id} "
+                f"tender={candidate['tender_source']}:{candidate['tender_id']}: {exc}"
+            )
+            continue
+
+        scored_count += 1
+        if scored["score"] < min_score:
+            continue
+
+        tender_source = candidate["tender_source"]
+        if persist:
+            _upsert_tender_match(
+                session,
+                company_kind="construction",
+                company_id=company.id,
+                tender_source=tender_source,
+                tender_id=tender.id,
+                score=scored["score"],
+                reasoning=scored["reasoning"],
+            )
+            session.commit()
+
+        payload = _construction_tender_dict(tender_source, tender)
+        results.append(
+            _match_result_dict(
+                tender_id=tender.id,
+                tender_source=tender_source,
+                tender_payload=payload,
+                score=scored["score"],
+                reasoning=scored["reasoning"],
+                match_reason=candidate["match_reason"],
+            )
+        )
+
+    return results, len(candidates), scored_count
+
+
+def run_construction_ai_matching_sync(
+    session: Session,
+    *,
+    company_id: int,
+    max_tenders: int | None = None,
+    min_score: int = 65,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Run matcher + scorer for one construction company and return ranked matches."""
+    api_key = get_anthropic_api_key()
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    tender_limit = max_tenders or _batch_limit("AI_MATCHING_MAX_TENDERS", DEFAULT_MAX_TENDERS)
+    delay = _request_delay()
+
+    catalog = _load_construction_tender_catalog(session, tender_limit)
+    if not catalog:
+        return []
+
+    catalog_by_key: dict[tuple[str, int], ConstructionTender] = {
+        (source, tender.id): tender for source, tender in catalog
+    }
+    company = session.scalars(
+        select(Company).where(Company.id == company_id)
+    ).first()
+    if company is None:
+        raise ValueError(f"Construction company {company_id} not found")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    print(
+        f"[AI Matching] Construction sync run for {company.name[:70]} against "
+        f"{len(catalog)} tenders (model={MATCHING_MODEL})"
+    )
+
+    results, candidates_found, scored_count = _score_construction_tender_matches(
+        client,
+        session,
+        company,
+        catalog,
+        catalog_by_key,
+        persist=True,
+        min_score=min_score,
+        delay=delay,
+    )
+
+    results.sort(key=lambda item: item["score"], reverse=True)
+    print(
+        f"[AI Matching] Construction sync complete: {candidates_found} candidates, "
+        f"{scored_count} scored, {len(results)} above min_score={min_score}"
+    )
+    return results[:limit]
 
 
 def run_ai_matching_sync(
