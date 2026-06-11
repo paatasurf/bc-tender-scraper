@@ -139,11 +139,12 @@ def _parse_positive_int(name: str, default: int) -> int:
 
 
 def db_init_retry_settings() -> tuple[int, float, float]:
-    """Startup/init retries — higher defaults for Postgres recovery after disk pressure."""
+    """Startup/init retries — keep total wait under ~30s so the FastAPI lifespan
+    yields quickly and the healthcheck endpoint becomes reachable."""
     return (
-        _parse_positive_int("DB_INIT_RETRIES", 30),
+        _parse_positive_int("DB_INIT_RETRIES", 5),
         _parse_positive_float("DB_INIT_RETRY_DELAY", 2.0),
-        _parse_positive_float("DB_INIT_RETRY_MAX_DELAY", 30.0),
+        _parse_positive_float("DB_INIT_RETRY_MAX_DELAY", 5.0),
     )
 
 
