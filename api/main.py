@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import Float, func, select
 from sqlalchemy.exc import DBAPIError, OperationalError
 
@@ -544,3 +545,57 @@ def trigger_ai_scoring(background_tasks: BackgroundTasks) -> dict[str, str]:
 
     background_tasks.add_task(_run_ai_scoring)
     return {"status": "started"}
+
+
+class AIMatchingRequest(BaseModel):
+    company_id: int | None = Field(
+        default=None,
+        description="Optional arch_companies.id. Omit to match multiple firms.",
+    )
+    max_companies: int = Field(default=10, ge=1, le=100)
+    max_tenders: int = Field(default=50, ge=1, le=500)
+
+
+def _run_ai_matching_task(
+    company_id: int | None,
+    max_companies: int,
+    max_tenders: int,
+) -> None:
+    from pipeline.ai_matching import run_ai_matching
+
+    session = get_session()
+    try:
+        results = run_ai_matching(
+            session,
+            company_id=company_id,
+            max_companies=max_companies,
+            max_tenders=max_tenders,
+        )
+        print(f"[AI Matching] Background run complete: {results}")
+    except Exception as exc:
+        print(f"[AI Matching] Background run failed: {exc}")
+    finally:
+        session.close()
+
+
+@app.post("/api/ai-matching")
+def trigger_ai_matching(
+    background_tasks: BackgroundTasks,
+    body: AIMatchingRequest | None = None,
+) -> dict[str, str | int | None]:
+    if not get_anthropic_api_key():
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+
+    request = body or AIMatchingRequest()
+    background_tasks.add_task(
+        _run_ai_matching_task,
+        request.company_id,
+        request.max_companies,
+        request.max_tenders,
+    )
+    return {
+        "status": "started",
+        "company_id": request.company_id,
+        "max_companies": request.max_companies,
+        "max_tenders": request.max_tenders,
+    }

@@ -178,6 +178,17 @@ class ArchCompany(Base):
     )
 
 
+class TenderMatch(Base):
+    __tablename__ = "tender_matches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    tender_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reasoning: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
 

@@ -326,6 +326,28 @@ def _widen_commercial_text_columns(engine) -> None:
             )
 
 
+def _ensure_tender_matches_table(engine) -> None:
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS tender_matches (
+            id SERIAL PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            tender_id INTEGER NOT NULL,
+            score INTEGER NOT NULL DEFAULT 0,
+            reasoning TEXT DEFAULT '',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_tender_matches_company_id ON tender_matches (company_id)",
+        "CREATE INDEX IF NOT EXISTS ix_tender_matches_tender_id ON tender_matches (tender_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_tender "
+        "ON tender_matches (company_id, tender_id)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_pipeline_runs_table(engine) -> None:
     statements = (
         """
@@ -350,6 +372,7 @@ def _ensure_pipeline_runs_table(engine) -> None:
 
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_tender_matches_table(engine)
     _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
     _widen_commercial_text_columns(engine)
