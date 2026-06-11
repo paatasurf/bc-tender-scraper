@@ -133,6 +133,12 @@ class Company(Base):
     google_phone: Mapped[str] = mapped_column(String(50), default="")
     ai_reliability_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
+    company_type: Mapped[str] = mapped_column(String(50), default="", index=True)
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    company_lifecycle: Mapped[str] = mapped_column(String(20), default="", index=True)
+    company_tier: Mapped[str] = mapped_column(String(20), default="")
+    enrichment_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

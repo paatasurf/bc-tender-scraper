@@ -368,6 +368,23 @@ def _migrate_tender_matches_company_kind(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_company_intelligence_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_type VARCHAR(50) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS confidence_score FLOAT",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_lifecycle VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_tier VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS enrichment_status VARCHAR(20) DEFAULT 'pending'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_enriched_at TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS ix_companies_company_type ON companies (company_type)",
+        "CREATE INDEX IF NOT EXISTS ix_companies_company_lifecycle ON companies (company_lifecycle)",
+        "CREATE INDEX IF NOT EXISTS ix_companies_enrichment_status ON companies (enrichment_status)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_pipeline_runs_table(engine) -> None:
     statements = (
         """
@@ -396,6 +413,7 @@ def _run_migrations(engine: Engine) -> None:
     _migrate_tender_matches_company_kind(engine)
     _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
+    _ensure_company_intelligence_columns(engine)
     _widen_commercial_text_columns(engine)
 
 

@@ -5,6 +5,7 @@ import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import anthropic
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender, Company, Permit, Tender
+from pipeline.company_classification import classify_companies, compute_enrichment_status
 
 CLAUDE_MODEL = "claude-sonnet-4-5"
 REQUEST_DELAY_SECONDS = 0.5
@@ -233,6 +235,8 @@ def enrich_companies_google(session: Session) -> int:
             else:
                 # Mark as attempted so the next run moves on to other companies.
                 company.google_reviews_count = 0
+            company.last_enriched_at = datetime.now(timezone.utc)
+            company.enrichment_status = compute_enrichment_status(company)
             session.commit()
             enriched += 1
         except Exception as exc:
@@ -319,6 +323,8 @@ def analyze_companies_ai(session: Session) -> int:
             score, summary = _analyze_company(client, company)
             company.ai_reliability_score = score
             company.ai_summary = summary
+            company.last_enriched_at = datetime.now(timezone.utc)
+            company.enrichment_status = compute_enrichment_status(company)
             session.commit()
             analyzed += 1
         except Exception as exc:
@@ -415,8 +421,10 @@ def run_company_intelligence(session: Session) -> dict[str, int]:
     populated = populate_companies_from_permits(session)
     google_enriched = enrich_companies_google(session)
     ai_analyzed = analyze_companies_ai(session)
+    classified = classify_companies(session)
     return {
         "companies_populated": populated,
         "companies_google_enriched": google_enriched,
         "companies_ai_analyzed": ai_analyzed,
+        "companies_classified": classified,
     }
