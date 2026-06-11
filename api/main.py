@@ -27,7 +27,6 @@ from db.models import (
 )
 from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
-from pipeline.scheduler import start_scheduler, stop_scheduler
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -41,9 +40,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    start_scheduler()
     yield
-    stop_scheduler()
 
 
 app = FastAPI(
