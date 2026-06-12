@@ -3,84 +3,74 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from config.env import env_flag
 from db.import_contract_awards import import_contract_awards
-from scraper.bcbid import scrape_bcbid_tenders
-from scraper.bcbid_auth import BcbidSessionExpiredError, handle_bcbid_auth_failure
 from scraper.building_permits import scrape_building_permits
 from scraper.commercial import scrape_commercial_tenders
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.federal import scrape_federal_tenders
 from scraper.linkedin_signals import scrape_linkedin_signals
 from scraper.merx_architecture import scrape_merx_architecture_tenders
+from scraper.merx_open import scrape_merx_open_tenders
 from scraper.news_signals import scrape_news_signals
 from scraper.reddit_signals import scrape_reddit_signals
 from scraper.tender_merge import load_tenders_from_csv, merge_tenders_by_url, split_tenders_by_source
 from scraper.utils import create_session, save_tenders
 
 
-def _bcbid_enabled() -> bool:
-    return not env_flag("PIPELINE_SKIP_BCBID")
+def _merx_open_enabled() -> bool:
+    return not env_flag("PIPELINE_SKIP_MERX")
 
 
-def _scrape_bcbid_or_empty(session) -> tuple[list, str | None]:
-    if not _bcbid_enabled():
-        return [], "PIPELINE_SKIP_BCBID=true"
+def _scrape_merx_open_or_empty(session) -> tuple[list, str | None]:
+    if not _merx_open_enabled():
+        return [], "PIPELINE_SKIP_MERX=true"
     try:
-        return scrape_bcbid_tenders(session), None
-    except BcbidSessionExpiredError as exc:
-        print(f"[BC Bid] Failed: {exc}")
-        return [], f"session_expired: {exc.reason}"
-    except requests.TooManyRedirects as exc:
-        print(f"[BC Bid] COOKIES REJECTED — redirect loop after {exc.args[0] if exc.args else '30+ redirects'}")
-        handle_bcbid_auth_failure(html="redirect loop (cookies rejected by BC Bid)")
-        return [], "session_expired: redirect loop (cookies invalid or expired)"
+        return scrape_merx_open_tenders(session), None
     except Exception as exc:
-        print(f"[BC Bid] Failed: {exc}")
+        print(f"[MERX Open] Failed: {exc}")
         return [], str(exc)
 
 
 def run_federal_scraper() -> dict[str, Any]:
-    """Scrape CanadaBuys federal tenders and merge BC Bid provincial tenders into tenders.csv."""
+    """Scrape CanadaBuys federal tenders and merge MERX BC open tenders into tenders.csv."""
     session = create_session()
     federal_tenders = scrape_federal_tenders(session)
-    bcbid_tenders, bcbid_error = _scrape_bcbid_or_empty(session)
-    merged = merge_tenders_by_url(federal_tenders, bcbid_tenders)
+    merx_tenders, merx_error = _scrape_merx_open_or_empty(session)
+    merged = merge_tenders_by_url(federal_tenders, merx_tenders)
     save_tenders(merged, OUTPUT_CSV, OUTPUT_JSON)
 
     result: dict[str, Any] = {
         "tenders_saved": len(merged),
         "federal_saved": len(federal_tenders),
-        "bcbid_saved": len(bcbid_tenders),
+        "merx_saved": len(merx_tenders),
     }
-    if bcbid_error:
-        result["bcbid_error"] = bcbid_error
+    if merx_error:
+        result["merx_error"] = merx_error
     return result
 
 
-def run_bcbid_scraper() -> dict[str, Any]:
-    """Dedicated BC Bid scrape: refresh provincial rows and merge with existing federal tenders.csv."""
-    if not _bcbid_enabled():
-        return {"skipped": True, "reason": "PIPELINE_SKIP_BCBID=true"}
+def run_merx_scraper() -> dict[str, Any]:
+    """Dedicated MERX open scrape: refresh provincial rows and merge with existing federal tenders.csv."""
+    if not _merx_open_enabled():
+        return {"skipped": True, "reason": "PIPELINE_SKIP_MERX=true"}
 
     session = create_session()
     csv_path = Path(OUTPUT_CSV)
     existing = load_tenders_from_csv(csv_path)
-    federal_tenders, _old_bcbid = split_tenders_by_source(existing)
+    federal_tenders, _old_provincial = split_tenders_by_source(existing)
 
-    bcbid_tenders, bcbid_error = _scrape_bcbid_or_empty(session)
-    merged = merge_tenders_by_url(federal_tenders, bcbid_tenders)
+    merx_tenders, merx_error = _scrape_merx_open_or_empty(session)
+    merged = merge_tenders_by_url(federal_tenders, merx_tenders)
     save_tenders(merged, OUTPUT_CSV, OUTPUT_JSON)
 
     result: dict[str, Any] = {
         "tenders_saved": len(merged),
         "federal_preserved": len(federal_tenders),
-        "bcbid_saved": len(bcbid_tenders),
+        "merx_saved": len(merx_tenders),
     }
-    if bcbid_error:
-        result["bcbid_error"] = bcbid_error
+    if merx_error:
+        result["merx_error"] = merx_error
         result["federal_only_fallback"] = len(federal_tenders) > 0
     return result
 

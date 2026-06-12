@@ -18,7 +18,7 @@ def run() -> int:
     print("=" * 60)
 
     steps = (
-        ("Federal + BC Bid tenders", run_federal_scraper),
+        ("Federal + MERX BC tenders", run_federal_scraper),
         ("MERX architecture tenders", run_merx_arch_scraper),
         ("Commercial tenders", run_commercial_scraper),
         ("Building permits", run_building_permits_scraper),

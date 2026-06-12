@@ -3,7 +3,13 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from scraper.config import MERX_OPEN_SOURCE
 from scraper.models import Tender
+
+PROVINCIAL_SOURCES = {
+    MERX_OPEN_SOURCE,
+    "bcbid.gov.bc.ca",
+}
 
 
 def merge_tenders_by_url(*groups: list[Tender]) -> list[Tender]:
@@ -47,11 +53,11 @@ def load_tenders_from_csv(csv_path: Path) -> list[Tender]:
 
 def split_tenders_by_source(tenders: list[Tender]) -> tuple[list[Tender], list[Tender]]:
     federal: list[Tender] = []
-    bcbid: list[Tender] = []
+    provincial: list[Tender] = []
     for tender in tenders:
         source = (tender.source or "").lower()
-        if source == "bcbid.gov.bc.ca":
-            bcbid.append(tender)
+        if source in PROVINCIAL_SOURCES:
+            provincial.append(tender)
         else:
             federal.append(tender)
-    return federal, bcbid
+    return federal, provincial

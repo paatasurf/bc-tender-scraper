@@ -1,30 +1,21 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests
 
-from scraper.bcbid_common import (
-    extract_estimated_value,
-    iter_browse_pages,
-    load_bcbid_cookies,
-    parse_grid_row,
-)
-from scraper.models import Tender
 from scraper.bcbid_auth import handle_bcbid_auth_failure, is_bcbid_auth_failure
-from scraper.utils import (
-    clean_text,
-    extract_label_value_map,
-    matches_target_category,
-    polite_get,
-)
+from scraper.bcbid_browser import bootstrap_bcbid_session
+from scraper.bcbid_common import extract_estimated_value, iter_browse_pages, parse_grid_row
+from scraper.bcbid_http import bcbid_get, create_bcbid_session
+from scraper.models import Tender
+from scraper.utils import clean_text, extract_label_value_map, matches_target_category
 
 
 def _parse_detail_page(session: requests.Session, summary: dict[str, str]) -> Tender | None:
     print(f"[BC Bid] Parsing detail: {summary['title'][:70]}")
-    response = polite_get(session, summary["url"])
+    response = bcbid_get(session, summary["url"])
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -71,11 +62,11 @@ def _parse_detail_page(session: requests.Session, summary: dict[str, str]) -> Te
     return tender
 
 
-def scrape_bcbid_tenders(
-    session: requests.Session,
-    cookie_path: Path | None = None,
-) -> list[Tender]:
-    load_bcbid_cookies(session, cookie_path)
+def scrape_bcbid_tenders(session: requests.Session | None = None) -> list[Tender]:
+    own_session = session is None
+    if own_session:
+        session = create_bcbid_session()
+        bootstrap_bcbid_session(session)
 
     summaries: list[dict[str, str]] = []
     for soup in iter_browse_pages(session):

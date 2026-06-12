@@ -47,14 +47,13 @@ def bcbid_auth_failure_reason(soup: BeautifulSoup | None = None, *, html: str = 
     for marker in _AUTH_MARKERS:
         if marker in html.lower():
             return f"page contains '{marker}'"
-    return "BC Bid listing grid missing (likely expired session or blocked request)"
+    return "BC Bid listing grid missing (likely blocked request)"
 
 
 def log_bcbid_session_expired(reason: str) -> None:
     print(
-        "[BC Bid] SESSION EXPIRED — cookies are invalid or expired. "
-        f"Reason: {reason}. Re-export Netscape cookies from bcbid.gov.bc.ca and update "
-        "BCBID_COOKIES_CONTENT on Railway."
+        "[BC Bid] ACCESS BLOCKED — could not load opportunities listing. "
+        f"Reason: {reason}."
     )
 
 
@@ -66,10 +65,9 @@ def notify_bcbid_session_expired(reason: str) -> None:
         return
 
     message = (
-        "BC Bid scraper: session expired or access denied.\n"
+        "BC Bid scraper: could not access opportunities listing.\n"
         f"Reason: {reason}\n"
-        "Action: re-export Netscape cookies from a logged-in bcbid.gov.bc.ca session "
-        "and update BCBID_COOKIES_CONTENT on Railway."
+        "Check Railway logs and curl_cffi impersonation settings."
     )
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode()
@@ -89,7 +87,7 @@ def handle_bcbid_auth_failure(soup: BeautifulSoup | None = None, *, html: str = 
 
 
 class BcbidSessionExpiredError(RuntimeError):
-    """Raised when BC Bid cookies no longer grant access to the opportunities listing."""
+    """Raised when BC Bid blocks access to the opportunities listing."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)

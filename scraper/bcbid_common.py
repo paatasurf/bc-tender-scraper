@@ -1,70 +1,20 @@
 from __future__ import annotations
 
-import os
 import re
-import tempfile
-from pathlib import Path
 from typing import Iterator
 from urllib.parse import urljoin
 
-import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests
 
 from scraper.bcbid_auth import (
     BcbidSessionExpiredError,
     handle_bcbid_auth_failure,
     is_bcbid_auth_failure,
 )
+from scraper.bcbid_http import bcbid_get, bcbid_post
 from scraper.config import BCBID_BASE_URL, BCBID_BROWSE_URL
-from scraper.utils import clean_text, load_netscape_cookies, polite_get, polite_post
-
-
-def _cookie_file_has_entries(cookie_file: Path) -> bool:
-    if not cookie_file.exists():
-        return False
-    for line in cookie_file.read_text(encoding="utf-8").splitlines():
-        if not line or line.startswith("#"):
-            continue
-        if len(line.split("\t")) == 7:
-            return True
-    return False
-
-
-def _normalize_cookie_content(content: str) -> str:
-    content = content.strip().lstrip("\ufeff")
-    if "\\n" in content and content.count("\n") <= 1:
-        content = content.replace("\\n", "\n")
-    return content.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def _resolve_bcbid_cookie_file() -> Path:
-    cookie_file = Path("bcbid_cookies.txt")
-    if _cookie_file_has_entries(cookie_file):
-        return cookie_file
-    content = os.environ.get("BCBID_COOKIES_CONTENT")
-    if not content:
-        print("[BC Bid] No bcbid_cookies.txt or BCBID_COOKIES_CONTENT configured")
-        return cookie_file
-    normalized = _normalize_cookie_content(content)
-    line_count = sum(
-        1
-        for line in normalized.splitlines()
-        if line and not line.startswith("#") and len(line.split("\t")) == 7
-    )
-    print(f"[BC Bid] Using BCBID_COOKIES_CONTENT ({line_count} Netscape cookie lines)")
-    fd, path = tempfile.mkstemp(suffix=".txt", prefix="bcbid_cookies_")
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(normalized)
-    return Path(path)
-
-
-def load_bcbid_cookies(session: requests.Session, cookie_path: Path | None = None) -> int:
-    cookie_file = cookie_path or _resolve_bcbid_cookie_file()
-    before = len(session.cookies)
-    load_netscape_cookies(session, cookie_file)
-    loaded = len(session.cookies) - before
-    print(f"[BC Bid] Loaded {loaded} cookies from {cookie_file.name}")
-    return loaded
+from scraper.utils import clean_text
 
 
 def extract_form_payload(soup: BeautifulSoup) -> dict[str, str]:
@@ -162,7 +112,7 @@ def _build_reset_filters_payload(soup: BeautifulSoup) -> dict[str, str]:
 def _fetch_unfiltered_browse_listing(session: requests.Session, log_prefix: str) -> BeautifulSoup:
     """Load the public browse page and click Reset so no status filter hides open rows."""
     print(f"{log_prefix} Fetching opportunities listing...")
-    response = polite_get(session, BCBID_BROWSE_URL)
+    response = bcbid_get(session, BCBID_BROWSE_URL)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
     _log_listing_response(response, soup, label="Initial listing GET")
@@ -177,7 +127,7 @@ def _fetch_unfiltered_browse_listing(session: requests.Session, log_prefix: str)
         print(f"{log_prefix} Posting Reset to ensure no restrictive status filter is applied...")
 
     reset_payload = _build_reset_filters_payload(soup)
-    reset_response = polite_post(session, BCBID_BROWSE_URL, data=reset_payload)
+    reset_response = bcbid_post(session, BCBID_BROWSE_URL, data=reset_payload)
     reset_response.raise_for_status()
     reset_soup = BeautifulSoup(reset_response.text, "html.parser")
     _log_listing_response(reset_response, reset_soup, label="After Reset POST")
@@ -200,7 +150,6 @@ def _fetch_unfiltered_browse_listing(session: requests.Session, log_prefix: str)
 
 
 def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -> Iterator[BeautifulSoup]:
-    load_bcbid_cookies(session)
     soup = _fetch_unfiltered_browse_listing(session, log_prefix)
 
     yield soup
@@ -219,7 +168,7 @@ def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -
         page += 1
         print(f"{log_prefix} Fetching opportunities page {page}...")
         payload = _build_grid_page_payload(soup, next_page_index)
-        response = polite_post(session, BCBID_BROWSE_URL, data=payload)
+        response = bcbid_post(session, BCBID_BROWSE_URL, data=payload)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         if is_bcbid_auth_failure(soup, html=response.text):

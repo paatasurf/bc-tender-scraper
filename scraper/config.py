@@ -100,6 +100,8 @@ MERX_BASE_URL = "https://www.merx.com"
 MERX_ARCH_LIST_PATH = "/public/solicitations/architect-and-engineering-services-10048"
 MERX_OPEN_LIST_PATH = "/public/solicitations/open"
 MERX_ARCH_BC_LOCATION = "379"
+MERX_OPEN_SOURCE = "merx.com"
+MERX_CONSTRUCTION_CATEGORY = "Construction"
 
 COMMERCIAL_TENDERS_CSV = "commercial_tenders.csv"
 COMMERCIAL_CATEGORY_LABEL = "Commercial"

@@ -12,9 +12,9 @@ from scraper.config import (
     BC_HOUSING_ORG_NAME,
     BC_HOUSING_PROJECTS_URL,
     MERX_ARCH_BC_LOCATION,
-    MERX_BASE_URL,
     MERX_OPEN_LIST_PATH,
 )
+from scraper.merx_common import iter_merx_listing_pages
 from scraper.models import CommercialTender
 from scraper.utils import clean_text, polite_get
 
@@ -47,72 +47,32 @@ def _parse_projects_page(soup: BeautifulSoup) -> list[CommercialTender]:
     return tenders
 
 
-def _parse_merx_listing_link(link, base_url: str) -> CommercialTender | None:
-    buyer_el = link.select_one(".buyer-name")
-    buyer = clean_text(buyer_el.get_text(" ", strip=True) if buyer_el else "")
-    if not BC_HOUSING_BUYER_PATTERN.search(buyer):
-        return None
+def _bc_housing_listing_filter(listing: dict[str, str]) -> bool:
+    return bool(BC_HOUSING_BUYER_PATTERN.search(listing.get("organization", "")))
 
-    title_el = link.select_one(".rowTitle")
-    title = clean_text(title_el.get_text(" ", strip=True) if title_el else "")
-    if not title:
-        return None
 
-    closing_el = link.select_one(".closingDate .dateValue")
-    remaining_el = link.select_one(".timeRemaining")
-    tender_id_el = link.select_one(".accessibility-hidden")
-    href = link.get("href")
-    if not href:
-        return None
-
-    status = "Open"
-    if remaining_el:
-        remaining = clean_text(remaining_el.get_text(" ", strip=True))
-        if remaining:
-            status = remaining
-
+def _listing_to_commercial_tender(listing: dict[str, str]) -> CommercialTender:
     return make_commercial_tender(
-        title=title,
-        company=buyer,
-        url=urljoin(base_url, href),
+        title=listing["title"],
+        company=listing["organization"],
+        url=listing["url"],
         source="bc_housing",
-        deadline=clean_text(closing_el.get_text(" ", strip=True) if closing_el else ""),
-        status=status,
-        tender_id=clean_text(tender_id_el.get_text(" ", strip=True) if tender_id_el else ""),
+        deadline=listing["closing_date"],
+        status=listing["status"],
+        tender_id=listing["tender_id"],
     )
 
 
 def _scrape_merx_bc_housing(session: requests.Session) -> list[CommercialTender]:
-    tenders: list[CommercialTender] = []
-    seen_urls: set[str] = set()
-    page = 1
-
-    while page <= 5:
-        params: dict[str, str] = {"location": MERX_ARCH_BC_LOCATION}
-        if page > 1:
-            params["pageNumber"] = str(page)
-
-        list_url = urljoin(MERX_BASE_URL, MERX_OPEN_LIST_PATH)
-        print(f"[BC Housing] Scanning MERX BC listings page {page}...")
-        response = polite_get(session, list_url, params=params)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        links = soup.select("a.solicitation-link")
-        if not links:
-            break
-
-        for link in links:
-            tender = _parse_merx_listing_link(link, MERX_BASE_URL)
-            if tender and tender.url not in seen_urls:
-                seen_urls.add(tender.url)
-                tenders.append(tender)
-
-        next_link = soup.find("link", rel="next")
-        if not next_link:
-            break
-        page += 1
-
-    return tenders
+    params = {"location": MERX_ARCH_BC_LOCATION}
+    listings = iter_merx_listing_pages(
+        session,
+        MERX_OPEN_LIST_PATH,
+        params,
+        log_prefix="[BC Housing]",
+        row_filter=_bc_housing_listing_filter,
+    )
+    return [_listing_to_commercial_tender(listing) for listing in listings]
 
 
 def scrape_bc_housing_commercial(session: requests.Session) -> list[CommercialTender]:
