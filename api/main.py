@@ -4,7 +4,7 @@ import config.env  # noqa: F401  # load env before pipeline imports
 
 import os
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -442,6 +442,31 @@ def get_company(name: str) -> dict[str, Any]:
         session.close()
 
 
+@app.get("/api/companies/{company_id}/opportunities")
+def company_opportunities(
+    company_id: int,
+    kind: Literal["construction", "architecture"] = Query("construction"),
+    min_score: int = Query(65, ge=0, le=100),
+    limit: int = Query(15, ge=1, le=50),
+) -> dict[str, Any]:
+    from pipeline.opportunity_discovery import discover_opportunities
+
+    session = get_session()
+    try:
+        try:
+            return discover_opportunities(
+                session,
+                company_id=company_id,
+                kind=kind,
+                min_score=min_score,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
 def _tender_response_fields(tender: Any) -> dict[str, Any]:
     """Common tender fields for API responses."""
     deadline = getattr(tender, "closing_date", None) or getattr(tender, "deadline", "") or ""
@@ -528,6 +553,30 @@ def get_arch_company(name: str) -> dict[str, Any]:
         if company is None:
             raise HTTPException(status_code=404, detail=f"Architecture firm '{name}' not found")
         return _row_to_dict(company)
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/{company_id}/opportunities")
+def arch_company_opportunities(
+    company_id: int,
+    min_score: int = Query(65, ge=0, le=100),
+    limit: int = Query(15, ge=1, le=50),
+) -> dict[str, Any]:
+    from pipeline.opportunity_discovery import discover_opportunities
+
+    session = get_session()
+    try:
+        try:
+            return discover_opportunities(
+                session,
+                company_id=company_id,
+                kind="architecture",
+                min_score=min_score,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     finally:
         session.close()
 
