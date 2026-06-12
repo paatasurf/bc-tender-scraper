@@ -458,6 +458,29 @@ def score_tender_pairs(
     return {"pairs": pairs, **stats}
 
 
+def load_fresh_company_tender_matches(
+    session: Session,
+    *,
+    company_kind: CompanyKind,
+    company_id: int,
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+) -> list[TenderMatch]:
+    """All tender_matches rows for a company that are still within the cache TTL."""
+    rows = session.scalars(
+        select(TenderMatch)
+        .where(
+            TenderMatch.company_kind == company_kind,
+            TenderMatch.company_id == company_id,
+        )
+        .order_by(TenderMatch.score.desc(), TenderMatch.id.desc())
+    ).all()
+    return [
+        row
+        for row in rows
+        if is_tender_match_cache_fresh(row.created_at, max_age_hours=max_age_hours)
+    ]
+
+
 def resolve_hybrid_tender_score(
     session: Session,
     *,
@@ -468,8 +491,16 @@ def resolve_hybrid_tender_score(
     rule_score: int,
     rule_reasons: list[str],
     max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+    hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None = None,
 ) -> tuple[int, list[str], str]:
-    """Use fresh AI cache when available; otherwise fall back to rule score."""
+    """Use in-run hybrid pairs, then fresh AI cache; otherwise fall back to rule score."""
+    key = (tender_source, tender_id)
+    if hybrid_pairs and key in hybrid_pairs:
+        pair = hybrid_pairs[key]
+        reasoning = (pair.get("reasoning") or "").strip()
+        reasons = [reasoning[:240]] if reasoning else list(rule_reasons)
+        return int(pair["score"]), reasons, "ai_match"
+
     cached = get_fresh_cached_match(
         session,
         company_kind=company_kind,

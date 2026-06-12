@@ -25,7 +25,9 @@ from pipeline.ai_matching import (
     HYBRID_AI_CANDIDATE_LIMIT,
     HYBRID_INLINE_SCORE_CAP,
     TenderPairCandidate,
+    _load_tender_row,
     build_match_reason_from_rules,
+    load_fresh_company_tender_matches,
     resolve_hybrid_tender_score,
     score_tender_pairs,
 )
@@ -50,11 +52,14 @@ CONSTRUCTION_DEFAULT_MIN_SCORE = 50
 
 # Architecture Intelligence — independent thresholds (not comparable to construction)
 ARCHITECTURE_DEFAULT_MIN_SCORE = 40
-ARCHITECTURE_TENDER_STRETCH_THRESHOLD = 40
+ARCHITECTURE_TENDER_AI_THRESHOLD = 25
+ARCHITECTURE_TENDER_STRETCH_THRESHOLD = 25
 ARCHITECTURE_PERMIT_MARKET_THRESHOLD = 50
 ARCHITECTURE_PERMIT_MARKET_STRETCH = 45
 ARCHITECTURE_PERMIT_OWN_THRESHOLD = 55
 ARCHITECTURE_OWN_PERMIT_BONUS = 12
+ARCHITECTURE_TENDER_RESERVED_SLOTS = 5
+ARCHITECTURE_PERMIT_RESERVED_SLOTS = 5
 
 ARCHITECTURE_PERMIT_TYPE_RE = re.compile(
     r"\bnew building\b|\baddition\b|\balteration\b|\brenovation\b|\bdemolition\b|\bheritage\b"
@@ -722,10 +727,15 @@ def _rule_tenders_to_opportunity_items(
     *,
     rules_threshold: int,
     stretch_threshold: int,
+    hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None = None,
+    ai_rules_threshold: int | None = None,
+    ai_stretch_threshold: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     matches: list[dict[str, Any]] = []
     stretch: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
+    ai_match_floor = ai_rules_threshold if ai_rules_threshold is not None else rules_threshold
+    ai_stretch_floor = ai_stretch_threshold if ai_stretch_threshold is not None else stretch_threshold
 
     for candidate in rule_candidates:
         key = (candidate.tender_source, candidate.tender_id)
@@ -741,23 +751,80 @@ def _rule_tenders_to_opportunity_items(
             tender_id=candidate.tender_id,
             rule_score=candidate.rule_score,
             rule_reasons=candidate.reasons,
+            hybrid_pairs=hybrid_pairs,
         )
-        item = {
-            "type": "tender",
-            "id": candidate.payload["id"],
-            "score": score,
-            "reasons": reasons,
-            "source": source,
-            "context": "open_tender",
-            "payload": candidate.payload,
-            "_tender_key": key,
-        }
-        if source == "ai_match":
-            item["context"] = "cached_tender_match"
-
-        if score >= rules_threshold:
+        item = _tender_opportunity_item(candidate.payload, key, score, reasons, source)
+        match_floor = ai_match_floor if source == "ai_match" else rules_threshold
+        stretch_floor = ai_stretch_floor if source == "ai_match" else stretch_threshold
+        if score >= match_floor:
             matches.append(item)
-        elif score >= stretch_threshold:
+        elif score >= stretch_floor:
+            item["context"] = "stretch_tender"
+            stretch.append(item)
+
+    return matches, stretch
+
+
+def _tender_opportunity_item(
+    payload: dict[str, Any],
+    key: tuple[str, int],
+    score: int,
+    reasons: list[str],
+    source: str,
+) -> dict[str, Any]:
+    item = {
+        "type": "tender",
+        "id": payload["id"],
+        "score": score,
+        "reasons": reasons,
+        "source": source,
+        "context": "cached_tender_match" if source == "ai_match" else "open_tender",
+        "payload": payload,
+        "_tender_key": key,
+    }
+    return item
+
+
+def _cached_ai_tenders_to_opportunity_items(
+    session: Session,
+    company_id: int,
+    kind: Kind,
+    *,
+    rules_threshold: int,
+    stretch_threshold: int,
+    seen_keys: set[tuple[str, int]],
+    ai_rules_threshold: int | None = None,
+    ai_stretch_threshold: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Surface fresh tender_matches rows that were not in the rule scan."""
+    matches: list[dict[str, Any]] = []
+    stretch: list[dict[str, Any]] = []
+    ai_match_floor = ai_rules_threshold if ai_rules_threshold is not None else rules_threshold
+    ai_stretch_floor = ai_stretch_threshold if ai_stretch_threshold is not None else stretch_threshold
+
+    for row in load_fresh_company_tender_matches(
+        session, company_kind=kind, company_id=company_id
+    ):
+        key = (row.tender_source, row.tender_id)
+        if key in seen_keys:
+            continue
+
+        tender = _load_tender_row(session, row.tender_source, row.tender_id)
+        if tender is None:
+            continue
+        deadline = getattr(tender, "closing_date", None) or getattr(tender, "deadline", "") or ""
+        if not _is_tender_open(deadline):
+            continue
+
+        payload = _tender_payload(tender, row.tender_source)
+        reasoning = (row.reasoning or "").strip()
+        reasons = [reasoning[:240]] if reasoning else ["Cached AI tender match"]
+        item = _tender_opportunity_item(payload, key, row.score, reasons, "ai_match")
+        seen_keys.add(key)
+
+        if row.score >= ai_match_floor:
+            matches.append(item)
+        elif row.score >= ai_stretch_floor:
             item["context"] = "stretch_tender"
             stretch.append(item)
 
@@ -1079,6 +1146,92 @@ def _apply_balanced_ranking(
     return selected[:limit]
 
 
+def _assemble_architecture_opportunities(
+    tenders: list[dict[str, Any]],
+    permits: list[dict[str, Any]],
+    *,
+    limit: int = 15,
+    tender_stretch: list[dict[str, Any]] | None = None,
+    permit_stretch: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Reserve tender and permit slots; keep AI-scored tenders visible above permit backfill."""
+    tender_stretch = tender_stretch or []
+    permit_stretch = permit_stretch or []
+    ai_tenders = sorted(
+        [t for t in tenders if t.get("source") == "ai_match"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    rule_tenders = sorted(
+        [t for t in tenders if t.get("source") != "ai_match"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    ordered_tenders = ai_tenders + rule_tenders
+    stretch_ai = sorted(
+        [t for t in tender_stretch if t.get("source") == "ai_match"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    stretch_rule = sorted(
+        [t for t in tender_stretch if t.get("source") != "ai_match"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    stretch_tenders = stretch_ai + stretch_rule
+    permits = sorted(permits, key=_match_sort_key, reverse=True)
+    stretch_permits = sorted(permit_stretch, key=_match_sort_key, reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+
+    def add_item(item: dict[str, Any]) -> bool:
+        key = (item["type"], item["id"])
+        if key in seen:
+            return False
+        selected.append(item)
+        seen.add(key)
+        return True
+
+    for item in ordered_tenders[:ARCHITECTURE_TENDER_RESERVED_SLOTS]:
+        add_item(item)
+
+    if len([x for x in selected if x["type"] == "tender"]) < ARCHITECTURE_TENDER_RESERVED_SLOTS:
+        for item in ordered_tenders[ARCHITECTURE_TENDER_RESERVED_SLOTS:]:
+            if len([x for x in selected if x["type"] == "tender"]) >= ARCHITECTURE_TENDER_RESERVED_SLOTS:
+                break
+            add_item(item)
+
+    if len([x for x in selected if x["type"] == "tender"]) < ARCHITECTURE_TENDER_RESERVED_SLOTS:
+        for item in stretch_tenders:
+            if len([x for x in selected if x["type"] == "tender"]) >= ARCHITECTURE_TENDER_RESERVED_SLOTS:
+                break
+            add_item(item)
+
+    permit_count = sum(1 for x in selected if x["type"] == "permit")
+    for item in permits:
+        if permit_count >= ARCHITECTURE_PERMIT_RESERVED_SLOTS:
+            break
+        if add_item(item):
+            permit_count += 1
+
+    if permit_count < ARCHITECTURE_PERMIT_RESERVED_SLOTS:
+        for item in stretch_permits:
+            if permit_count >= ARCHITECTURE_PERMIT_RESERVED_SLOTS:
+                break
+            if add_item(item):
+                permit_count += 1
+
+    if len(selected) < limit:
+        remainder = ordered_tenders + stretch_tenders + permits + stretch_permits
+        for item in sorted(remainder, key=_match_sort_key, reverse=True):
+            if len(selected) >= limit:
+                break
+            add_item(item)
+
+    return selected[:limit]
+
+
 def _discover_construction_opportunities(
     session: Session,
     company: Company,
@@ -1103,6 +1256,7 @@ def _discover_construction_opportunities(
         rule_candidates,
         rules_threshold=tender_rules_threshold,
         stretch_threshold=tender_stretch_threshold,
+        hybrid_pairs=hybrid_scoring.get("pairs") or {},
     )
 
     permit_matches: list[dict[str, Any]] = []
@@ -1185,13 +1339,16 @@ def _discover_architecture_opportunities(
 ) -> dict[str, Any]:
     """Architecture discovery with tender and permit thresholds kept independent."""
     tender_rules_threshold = min_score
-    tender_stretch_threshold = ARCHITECTURE_TENDER_STRETCH_THRESHOLD
+    tender_stretch_threshold = max(20, min_score - 15)
+    ai_tender_threshold = ARCHITECTURE_TENDER_AI_THRESHOLD
+    ai_tender_stretch_threshold = ARCHITECTURE_TENDER_STRETCH_THRESHOLD
     signals = CompanySignals.from_arch_company(company)
 
     rule_candidates = _scan_architecture_rule_tenders(session, signals, max_candidates)
     hybrid_scoring = _run_hybrid_tender_scoring(
         session, company, "architecture", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
     )
+    hybrid_pairs = hybrid_scoring.get("pairs") or {}
     tender_matches, tender_stretch = _rule_tenders_to_opportunity_items(
         session,
         company.id,
@@ -1199,7 +1356,23 @@ def _discover_architecture_opportunities(
         rule_candidates,
         rules_threshold=tender_rules_threshold,
         stretch_threshold=tender_stretch_threshold,
+        hybrid_pairs=hybrid_pairs,
+        ai_rules_threshold=ai_tender_threshold,
+        ai_stretch_threshold=ai_tender_stretch_threshold,
     )
+    seen_tender_keys = {item["_tender_key"] for item in tender_matches + tender_stretch}
+    cached_matches, cached_stretch = _cached_ai_tenders_to_opportunity_items(
+        session,
+        company.id,
+        "architecture",
+        rules_threshold=tender_rules_threshold,
+        stretch_threshold=tender_stretch_threshold,
+        seen_keys=seen_tender_keys,
+        ai_rules_threshold=ai_tender_threshold,
+        ai_stretch_threshold=ai_tender_stretch_threshold,
+    )
+    tender_matches.extend(cached_matches)
+    tender_stretch.extend(cached_stretch)
 
     permit_matches: list[dict[str, Any]] = []
     permit_stretch: list[dict[str, Any]] = []
@@ -1223,7 +1396,13 @@ def _discover_architecture_opportunities(
 
     matches = tender_matches + permit_matches
     total_candidates = len(matches) + len(tender_stretch) + len(permit_stretch)
-    top = _apply_balanced_ranking(matches, limit=limit, active_types=["tender", "permit"])
+    top = _assemble_architecture_opportunities(
+        tender_matches,
+        permit_matches,
+        limit=limit,
+        tender_stretch=tender_stretch,
+        permit_stretch=permit_stretch,
+    )
     if len(top) < limit:
         for pool in (tender_stretch, permit_stretch):
             for item in sorted(pool, key=_match_sort_key, reverse=True):
@@ -1233,6 +1412,9 @@ def _discover_architecture_opportunities(
                 if any((m["type"], m["id"]) == key for m in top):
                     continue
                 top.append(item)
+
+    for item in top:
+        item.pop("_tender_key", None)
 
     return {
         "company_id": company.id,
@@ -1244,8 +1426,10 @@ def _discover_architecture_opportunities(
         "ranking_model": "architecture_intelligence_v1_hybrid",
         "hybrid_scoring": hybrid_scoring,
         "thresholds": {
+            "tender_ai": ai_tender_threshold,
             "tender_rules": tender_rules_threshold,
             "tender_stretch": tender_stretch_threshold,
+            "tender_ai_stretch": ai_tender_stretch_threshold,
             "permit_market": ARCHITECTURE_PERMIT_MARKET_THRESHOLD,
             "permit_own": ARCHITECTURE_PERMIT_OWN_THRESHOLD,
         },
