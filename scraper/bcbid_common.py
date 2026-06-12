@@ -130,18 +130,78 @@ def parse_grid_row(row) -> dict[str, str] | None:
     }
 
 
-def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -> Iterator[BeautifulSoup]:
-    load_bcbid_cookies(session)
+def _grid_row_count(soup: BeautifulSoup) -> int:
+    grid = soup.find("table", id="body_x_grid_grd")
+    if not grid:
+        return 0
+    return len(grid.find_all("tr", attrs={"data-id": True}))
+
+
+def _log_listing_response(response: requests.Response, soup: BeautifulSoup, *, label: str) -> None:
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    auth_failure = is_bcbid_auth_failure(soup, html=response.text)
+    rows = _grid_row_count(soup)
+    print(
+        f"[BC Bid] {label}: HTTP {response.status_code}, "
+        f"final_url={response.url}, title={title!r}, "
+        f"auth_or_login_page={auth_failure}, grid_rows={rows}"
+    )
+
+
+def _build_reset_filters_payload(soup: BeautifulSoup) -> dict[str, str]:
+    payload = extract_form_payload(soup)
+    reset_name = "body:x:prxFilterBar:x:cmdRazBtn"
+    payload[reset_name] = "Reset"
+    for key in list(payload.keys()):
+        lowered = key.lower()
+        if "status" in lowered and key != reset_name:
+            payload[key] = ""
+    return payload
+
+
+def _fetch_unfiltered_browse_listing(session: requests.Session, log_prefix: str) -> BeautifulSoup:
+    """Load the public browse page and click Reset so no status filter hides open rows."""
     print(f"{log_prefix} Fetching opportunities listing...")
     response = polite_get(session, BCBID_BROWSE_URL)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
+    _log_listing_response(response, soup, label="Initial listing GET")
 
-    grid = soup.find("table", id="body_x_grid_grd")
-    if is_bcbid_auth_failure(soup, html=response.text) or grid is None:
-        reason = "listing page auth failure or missing opportunities grid"
+    if is_bcbid_auth_failure(soup, html=response.text):
         handle_bcbid_auth_failure(soup, html=response.text)
-        raise BcbidSessionExpiredError(reason)
+        raise BcbidSessionExpiredError("listing page auth failure on initial GET")
+
+    if _grid_row_count(soup) == 0:
+        print(f"{log_prefix} Grid empty on first load — posting Reset to clear filters...")
+    else:
+        print(f"{log_prefix} Posting Reset to ensure no restrictive status filter is applied...")
+
+    reset_payload = _build_reset_filters_payload(soup)
+    reset_response = polite_post(session, BCBID_BROWSE_URL, data=reset_payload)
+    reset_response.raise_for_status()
+    reset_soup = BeautifulSoup(reset_response.text, "html.parser")
+    _log_listing_response(reset_response, reset_soup, label="After Reset POST")
+
+    if is_bcbid_auth_failure(reset_soup, html=reset_response.text):
+        handle_bcbid_auth_failure(reset_soup, html=reset_response.text)
+        raise BcbidSessionExpiredError("listing page auth failure after Reset")
+
+    grid = reset_soup.find("table", id="body_x_grid_grd")
+    if grid is None:
+        handle_bcbid_auth_failure(reset_soup, html=reset_response.text)
+        raise BcbidSessionExpiredError("opportunities grid missing after Reset")
+
+    if _grid_row_count(reset_soup) == 0:
+        print(
+            f"{log_prefix} WARNING: grid present but 0 rows after Reset "
+            "(valid session but no open opportunities returned)"
+        )
+    return reset_soup
+
+
+def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -> Iterator[BeautifulSoup]:
+    load_bcbid_cookies(session)
+    soup = _fetch_unfiltered_browse_listing(session, log_prefix)
 
     yield soup
 

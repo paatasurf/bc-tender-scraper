@@ -33,8 +33,9 @@ def _scrape_bcbid_or_empty(session) -> tuple[list, str | None]:
     except BcbidSessionExpiredError as exc:
         print(f"[BC Bid] Failed: {exc}")
         return [], f"session_expired: {exc.reason}"
-    except requests.TooManyRedirects:
-        handle_bcbid_auth_failure(html="redirect loop (Exceeded 30 redirects)")
+    except requests.TooManyRedirects as exc:
+        print(f"[BC Bid] COOKIES REJECTED — redirect loop after {exc.args[0] if exc.args else '30+ redirects'}")
+        handle_bcbid_auth_failure(html="redirect loop (cookies rejected by BC Bid)")
         return [], "session_expired: redirect loop (cookies invalid or expired)"
     except Exception as exc:
         print(f"[BC Bid] Failed: {exc}")
