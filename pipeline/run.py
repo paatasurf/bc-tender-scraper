@@ -6,7 +6,7 @@ Scheduled path (production, no manual intervention):
     → pipeline.executor.start_pipeline_subprocess()
     → run_pipeline.py (file lock)
     → pipeline.run.run_pipeline()
-       1. scraper.main.run() — federal/MERX/commercial tenders, permits, news, …
+       1. scraper.main.run() — federal/BC Bid/MERX/commercial tenders, permits, news, …
        2. db.import_csv.import_all_csvs()
        3. db.import_contract_awards.import_contract_awards()
        4. pipeline.ai_scoring.score_unscored_tenders() (optional)
@@ -35,6 +35,10 @@ def run_pipeline() -> int:
         import_all_csvs(session)
         print("[Pipeline] Importing contract awards...")
         import_contract_awards(session)
+        print("[Pipeline] Refreshing company award stats...")
+        from pipeline.refresh_company_award_stats import refresh_company_award_stats
+
+        refresh_company_award_stats(session)
         if env_flag("PIPELINE_SKIP_AI_SCORING"):
             print("[Pipeline] Skipping AI scoring (PIPELINE_SKIP_AI_SCORING=true)")
         else:

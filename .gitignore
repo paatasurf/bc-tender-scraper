@@ -1,4 +1,5 @@
 .env
+bcbid_cookies.txt
 .pipeline.lock
 pipeline.log
 __pycache__/

@@ -10,8 +10,13 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from scraper.bcbid_auth import (
+    BcbidSessionExpiredError,
+    handle_bcbid_auth_failure,
+    is_bcbid_auth_failure,
+)
 from scraper.config import BCBID_BASE_URL, BCBID_BROWSE_URL
-from scraper.utils import clean_text, is_browser_check, load_netscape_cookies, polite_get, polite_post
+from scraper.utils import clean_text, load_netscape_cookies, polite_get, polite_post
 
 
 def _cookie_file_has_entries(cookie_file: Path) -> bool:
@@ -119,12 +124,11 @@ def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
-    if is_browser_check(soup):
-        raise RuntimeError(
-            "BC Bid returned a browser check page. Export cookies from your browser after "
-            "visiting bcbid.gov.bc.ca and save them to bcbid_cookies.txt (Netscape format), "
-            "then run the scraper again."
-        )
+    grid = soup.find("table", id="body_x_grid_grd")
+    if is_bcbid_auth_failure(soup, html=response.text) or grid is None:
+        reason = "listing page auth failure or missing opportunities grid"
+        handle_bcbid_auth_failure(soup, html=response.text)
+        raise BcbidSessionExpiredError(reason)
 
     yield soup
 
@@ -145,7 +149,11 @@ def iter_browse_pages(session: requests.Session, log_prefix: str = "[BC Bid]") -
         response = polite_post(session, BCBID_BROWSE_URL, data=payload)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        if is_browser_check(soup):
+        if is_bcbid_auth_failure(soup, html=response.text):
+            handle_bcbid_auth_failure(soup, html=response.text)
+            break
+        if soup.find("table", id="body_x_grid_grd") is None:
+            handle_bcbid_auth_failure(soup, html=response.text)
             break
         yield soup
 

@@ -6,13 +6,17 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-from scraper.bcbid_common import extract_estimated_value, iter_browse_pages, parse_grid_row
+from scraper.bcbid_common import (
+    extract_estimated_value,
+    iter_browse_pages,
+    load_bcbid_cookies,
+    parse_grid_row,
+)
 from scraper.models import Tender
+from scraper.bcbid_auth import handle_bcbid_auth_failure, is_bcbid_auth_failure
 from scraper.utils import (
     clean_text,
     extract_label_value_map,
-    is_browser_check,
-    load_netscape_cookies,
     matches_target_category,
     polite_get,
 )
@@ -24,7 +28,8 @@ def _parse_detail_page(session: requests.Session, summary: dict[str, str]) -> Te
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
-    if is_browser_check(soup):
+    if is_bcbid_auth_failure(soup, html=response.text):
+        handle_bcbid_auth_failure(soup, html=response.text)
         return None
 
     labels = extract_label_value_map(soup)
@@ -70,8 +75,7 @@ def scrape_bcbid_tenders(
     session: requests.Session,
     cookie_path: Path | None = None,
 ) -> list[Tender]:
-    cookie_file = cookie_path or Path("bcbid_cookies.txt")
-    load_netscape_cookies(session, cookie_file)
+    load_bcbid_cookies(session, cookie_path)
 
     summaries: list[dict[str, str]] = []
     for soup in iter_browse_pages(session):

@@ -24,6 +24,7 @@ from pipeline.runs import (
 from scraper.runners import (
     run_building_permits_scraper,
     run_commercial_scraper,
+    run_bcbid_scraper,
     run_federal_scraper,
     run_linkedin_scraper,
     run_merx_arch_scraper,
@@ -68,6 +69,21 @@ def scrape_federal(
         background_tasks,
         "scrape-federal",
         run_federal_scraper,
+        body.run_id if body else None,
+    )
+
+
+@router.post("/scrape/bcbid")
+def scrape_bcbid(
+    background_tasks: BackgroundTasks,
+    body: InternalRunRequest | None = None,
+) -> dict[str, str]:
+    """Refresh BC Bid provincial tenders and merge with existing federal rows in tenders.csv."""
+    _require_manual_pipeline()
+    return _enqueue_step(
+        background_tasks,
+        "scrape-bcbid",
+        run_bcbid_scraper,
         body.run_id if body else None,
     )
 
