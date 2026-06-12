@@ -7,12 +7,6 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-BCBID_BASE_URL = "https://www.bcbid.gov.bc.ca"
-BCBID_BROWSE_URL = f"{BCBID_BASE_URL}/page.aspx/en/rfp/request_browse_public"
-BCBID_DETAIL_URL_TEMPLATE = (
-    f"{BCBID_BASE_URL}/page.aspx/en/bpm/process_manage_extranet/{{tender_id}}"
-)
-
 # buyandsell.gc.ca now resolves to CanadaBuys; keep legacy host as first attempt.
 FEDERAL_HOSTS = (
     "https://buyandsell.gc.ca",

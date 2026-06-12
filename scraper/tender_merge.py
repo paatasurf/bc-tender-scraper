@@ -8,7 +8,6 @@ from scraper.models import Tender
 
 PROVINCIAL_SOURCES = {
     MERX_OPEN_SOURCE,
-    "bcbid.gov.bc.ca",
 }
 
 

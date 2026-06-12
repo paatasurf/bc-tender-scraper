@@ -6,7 +6,7 @@ Scheduled path (production, no manual intervention):
     → pipeline.executor.start_pipeline_subprocess()
     → run_pipeline.py (file lock)
     → pipeline.run.run_pipeline()
-       1. scraper.main.run() — federal/BC Bid/MERX/commercial tenders, permits, news, …
+       1. scraper.main.run() — federal/MERX/commercial tenders, permits, news, …
        2. db.import_csv.import_all_csvs()
        3. db.import_contract_awards.import_contract_awards()
        4. pipeline.ai_scoring.score_unscored_tenders() (optional)
