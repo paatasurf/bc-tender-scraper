@@ -21,6 +21,7 @@ from db.models import (
     ArchTender,
     CommercialTender,
     Company,
+    ContractAward,
     Job,
     LinkedInSignal,
     NewsSignal,
@@ -30,6 +31,8 @@ from db.models import (
 )
 from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
+from pipeline.executor import pipeline_status as get_pipeline_runtime_status
+from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -44,7 +47,9 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 async def lifespan(_app: FastAPI):
     # Start the API even if Postgres is temporarily in recovery after disk pressure.
     init_db(raise_on_failure=False)
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 app = FastAPI(
@@ -82,10 +87,13 @@ def database_unavailable_handler(_request: Request, exc: Exception) -> JSONRespo
 @app.get("/api/health")
 def health() -> dict[str, str | bool]:
     db_ok = check_db_connection()
+    scheduler = scheduler_status()
     return {
         "status": "ok" if db_ok else "degraded",
         "database_connected": db_ok,
         "anthropic_api_key_configured": bool(get_anthropic_api_key()),
+        "scheduler_enabled": bool(scheduler.get("enabled")),
+        "scheduler_running": bool(scheduler.get("running")),
     }
 
 
@@ -102,6 +110,11 @@ def stats() -> dict[str, int]:
             "jobs": session.scalar(select(func.count()).select_from(Job)) or 0,
             "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender)) or 0,
             "commercial_tenders": session.scalar(select(func.count()).select_from(CommercialTender)) or 0,
+            "contract_awards": session.scalar(select(func.count()).select_from(ContractAward)) or 0,
+            "contract_awards_matched": session.scalar(
+                select(func.count()).select_from(ContractAward).where(ContractAward.company_id.isnot(None))
+            )
+            or 0,
         }
     finally:
         session.close()
@@ -233,35 +246,116 @@ def list_jobs(
 
 @app.get("/api/contract-awards")
 def list_contract_awards(
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    source: str | None = Query(None, max_length=40),
+    matched: bool | None = Query(None, description="Filter by company match status"),
+    company_id: int | None = Query(None, ge=1),
 ) -> dict[str, Any]:
-    """Top applicants by aggregated Vancouver building permit project value."""
     session = get_session()
     try:
-        value_sum = func.sum(func.cast(func.nullif(Permit.project_value, ""), Float))
+        query = select(ContractAward)
+        if source:
+            query = query.where(ContractAward.source == source)
+        if matched is True:
+            query = query.where(ContractAward.company_id.isnot(None))
+        elif matched is False:
+            query = query.where(ContractAward.company_id.is_(None))
+        if company_id is not None:
+            query = query.where(ContractAward.company_id == company_id)
+
+        count_query = select(func.count()).select_from(ContractAward)
+        if source:
+            count_query = count_query.where(ContractAward.source == source)
+        if matched is True:
+            count_query = count_query.where(ContractAward.company_id.isnot(None))
+        elif matched is False:
+            count_query = count_query.where(ContractAward.company_id.is_(None))
+        if company_id is not None:
+            count_query = count_query.where(ContractAward.company_id == company_id)
+        total = session.scalar(count_query) or 0
+        rows = session.scalars(
+            query.order_by(ContractAward.award_date.desc(), ContractAward.id.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+
+        company_names: dict[int, str] = {}
+        company_ids = {row.company_id for row in rows if row.company_id is not None}
+        if company_ids:
+            for cid, name in session.execute(
+                select(Company.id, Company.name).where(Company.id.in_(company_ids))
+            ).all():
+                company_names[cid] = name
+
+        data = []
+        for row in rows:
+            item = _row_to_dict(row)
+            item["matched_company_name"] = company_names.get(row.company_id or 0, "")
+            data.append(item)
+
+        return {"total": total, "limit": limit, "offset": offset, "data": data}
+    finally:
+        session.close()
+
+
+@app.get("/api/contract-awards/summary")
+def contract_awards_summary() -> dict[str, Any]:
+    session = get_session()
+    try:
+        total = session.scalar(select(func.count()).select_from(ContractAward)) or 0
+        matched = (
+            session.scalar(
+                select(func.count()).select_from(ContractAward).where(ContractAward.company_id.isnot(None))
+            )
+            or 0
+        )
+        by_source = session.execute(
+            select(ContractAward.source, func.count())
+            .group_by(ContractAward.source)
+            .order_by(func.count().desc())
+        ).all()
+        value_sum = session.scalar(select(func.coalesce(func.sum(ContractAward.award_value), 0.0))) or 0.0
+        return {
+            "total_awards": total,
+            "matched_awards": matched,
+            "match_rate": round(matched / total * 100, 1) if total else 0.0,
+            "total_award_value": float(value_sum),
+            "by_source": {source: count for source, count in by_source},
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/contract-awards/top-vendors")
+def contract_awards_top_vendors(
+    limit: int = Query(20, ge=1, le=100),
+) -> dict[str, Any]:
+    session = get_session()
+    try:
         rows = session.execute(
             select(
-                Permit.applicant.label("company"),
-                value_sum.label("total_value"),
-                func.count(Permit.id).label("permit_count"),
+                ContractAward.winner_company,
+                func.count(ContractAward.id).label("award_count"),
+                func.coalesce(func.sum(ContractAward.award_value), 0.0).label("total_value"),
+                func.max(ContractAward.company_id).label("company_id"),
             )
-            .where(Permit.applicant != "", Permit.applicant.isnot(None))
-            .group_by(Permit.applicant)
-            .having(value_sum > 0)
-            .order_by(value_sum.desc())
+            .group_by(ContractAward.winner_company)
+            .order_by(func.coalesce(func.sum(ContractAward.award_value), 0.0).desc())
             .limit(limit)
         ).all()
 
         data = [
             {
-                "company": row.company,
-                "contract": f"{row.permit_count} permits",
-                "value": float(row.total_value or 0),
-                "date": "",
+                "vendor": row.winner_company,
+                "award_count": row.award_count,
+                "total_value": float(row.total_value or 0),
+                "company_id": row.company_id,
+                "matched": row.company_id is not None,
             }
             for row in rows
         ]
-        return {"total": len(data), "limit": limit, "offset": 0, "data": data}
+        return {"total": len(data), "limit": limit, "data": data}
     finally:
         session.close()
 
@@ -471,10 +565,14 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/pipeline/status")
-def pipeline_status() -> dict[str, str | int | bool]:
-    from pipeline.executor import pipeline_status as get_status
-
-    return get_status()
+def pipeline_status() -> dict[str, Any]:
+    runtime = get_pipeline_runtime_status()
+    scheduler = scheduler_status()
+    return {
+        **runtime,
+        "scheduler": scheduler,
+        "daily_job": "daily_scrape_import → run_pipeline.py",
+    }
 
 
 def _run_ai_scoring() -> None:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from scraper.runners import (
     run_building_permits_scraper,
     run_commercial_scraper,
-    run_contract_awards_scraper,
     run_federal_scraper,
     run_linkedin_scraper,
     run_merx_arch_scraper,
@@ -26,7 +25,6 @@ def run() -> int:
         ("Reddit signals", run_reddit_scraper),
         ("News signals", run_news_scraper),
         ("LinkedIn signals", run_linkedin_scraper),
-        ("Contract awards", run_contract_awards_scraper),
     )
 
     for label, runner in steps:

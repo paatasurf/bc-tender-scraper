@@ -21,6 +21,29 @@ def _scheduled_pipeline_run() -> None:
     logger.info("Scheduled pipeline started: %s", result)
 
 
+def scheduler_status() -> dict[str, str | int | bool | None]:
+    enabled = os.getenv("SCHEDULER_ENABLED", "true").lower() in {"1", "true", "yes"}
+    timezone = os.getenv("SCHEDULE_TIMEZONE", "America/Vancouver")
+    hour = int(os.getenv("SCHEDULE_HOUR", "6"))
+    minute = int(os.getenv("SCHEDULE_MINUTE", "0"))
+
+    status: dict[str, str | int | bool | None] = {
+        "enabled": enabled,
+        "running": bool(_scheduler and _scheduler.running),
+        "job_id": "daily_scrape_import",
+        "timezone": timezone,
+        "schedule": f"{hour:02d}:{minute:02d}",
+        "next_run_at": None,
+    }
+
+    if _scheduler and _scheduler.running:
+        job = _scheduler.get_job("daily_scrape_import")
+        if job and job.next_run_time:
+            status["next_run_at"] = job.next_run_time.isoformat()
+
+    return status
+
+
 def start_scheduler() -> BackgroundScheduler | None:
     global _scheduler
 

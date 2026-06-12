@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -139,6 +139,20 @@ class Company(Base):
     company_tier: Mapped[str] = mapped_column(String(20), default="")
     enrichment_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    award_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    total_award_value: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    avg_award_value: Mapped[float] = mapped_column(Float, default=0.0)
+    award_categories: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    award_clients: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    buyer_levels: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    award_sources: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    first_award_date: Mapped[str] = mapped_column(String(20), default="")
+    last_award_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    primary_address: Mapped[str] = mapped_column(String(500), default="")
+    primary_city: Mapped[str] = mapped_column(String(100), default="")
+    primary_province: Mapped[str] = mapped_column(String(50), default="")
+    data_sources: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    canonical_vendor_name: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -208,6 +222,39 @@ class PipelineRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str] = mapped_column(Text, default="")
     counts_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class ContractAward(Base):
+    __tablename__ = "contract_awards"
+    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_contract_awards_source_external_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    url: Mapped[str] = mapped_column(String(500), default="")
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    procurement_category: Mapped[str] = mapped_column(String(40), default="", index=True)
+    procurement_method: Mapped[str] = mapped_column(String(80), default="")
+    winner_company: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    winner_address: Mapped[str] = mapped_column(String(500), default="")
+    winner_city: Mapped[str] = mapped_column(String(100), default="")
+    winner_province: Mapped[str] = mapped_column(String(50), default="")
+    company_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    match_method: Mapped[str] = mapped_column(String(30), default="")
+    match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    buyer_organization: Mapped[str] = mapped_column(String(300), default="", index=True)
+    buyer_level: Mapped[str] = mapped_column(String(20), default="")
+    award_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="CAD")
+    award_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    contract_start_date: Mapped[str] = mapped_column(String(20), default="")
+    contract_end_date: Mapped[str] = mapped_column(String(20), default="")
+    delivery_region: Mapped[str] = mapped_column(String(200), default="")
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ArchTender(Base):

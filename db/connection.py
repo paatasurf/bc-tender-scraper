@@ -385,6 +385,32 @@ def _ensure_company_intelligence_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_company_award_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS award_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS total_award_value FLOAT NOT NULL DEFAULT 0.0",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS avg_award_value FLOAT NOT NULL DEFAULT 0.0",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS award_categories VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS award_clients VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS buyer_levels VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS award_sources VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS first_award_date VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_award_date VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_address VARCHAR(500) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_city VARCHAR(100) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_province VARCHAR(50) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS data_sources VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS canonical_vendor_name VARCHAR(300) DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_companies_award_count ON companies (award_count)",
+        "CREATE INDEX IF NOT EXISTS ix_companies_total_award_value ON companies (total_award_value)",
+        "CREATE INDEX IF NOT EXISTS ix_companies_last_award_date ON companies (last_award_date)",
+        "CREATE INDEX IF NOT EXISTS ix_companies_data_sources ON companies USING GIN (data_sources)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_pipeline_runs_table(engine) -> None:
     statements = (
         """
@@ -414,6 +440,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
     _ensure_company_intelligence_columns(engine)
+    _ensure_company_award_columns(engine)
     _widen_commercial_text_columns(engine)
 
 

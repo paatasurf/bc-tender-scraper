@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from config.env import env_flag
+from db.import_contract_awards import import_contract_awards
 from scraper.building_permits import scrape_building_permits
 from scraper.commercial import scrape_commercial_tenders
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
-from scraper.contract_awards import scrape_contract_awards
 from scraper.federal import scrape_federal_tenders
 from scraper.linkedin_signals import scrape_linkedin_signals
 from scraper.news_signals import scrape_news_signals
@@ -57,6 +57,11 @@ def run_linkedin_scraper() -> dict[str, Any]:
 
 
 def run_contract_awards_scraper() -> dict[str, Any]:
-    session = create_session()
-    awards = scrape_contract_awards(session)
-    return {"awards_saved": len(awards)}
+    from db.connection import get_session, init_db
+
+    init_db()
+    session = get_session()
+    try:
+        return import_contract_awards(session)
+    finally:
+        session.close()

@@ -4,6 +4,7 @@ from typing import Any
 
 from config.env import env_flag
 from db.connection import get_session, init_db
+from db.import_contract_awards import import_contract_awards
 from db.import_csv import import_all_csvs
 from pipeline.ai_scoring import score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
@@ -15,6 +16,15 @@ def run_import_step() -> dict[str, Any]:
     session = get_session()
     try:
         return import_all_csvs(session)
+    finally:
+        session.close()
+
+
+def run_import_contract_awards_step() -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        return import_contract_awards(session)
     finally:
         session.close()
 

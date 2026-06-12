@@ -11,6 +11,7 @@ from pipeline.internal_steps import (
     run_ai_scoring_step,
     run_arch_company_intelligence_step,
     run_company_intelligence_step,
+    run_import_contract_awards_step,
     run_import_step,
 )
 from pipeline.runs import (
@@ -23,7 +24,6 @@ from pipeline.runs import (
 from scraper.runners import (
     run_building_permits_scraper,
     run_commercial_scraper,
-    run_contract_awards_scraper,
     run_federal_scraper,
     run_linkedin_scraper,
     run_merx_arch_scraper,
@@ -161,11 +161,26 @@ def scrape_contract_awards(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
 ) -> dict[str, str]:
+    """Legacy alias for import-contract-awards."""
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
-        "scrape-contract-awards",
-        run_contract_awards_scraper,
+        "import-contract-awards",
+        run_import_contract_awards_step,
+        body.run_id if body else None,
+    )
+
+
+@router.post("/import/contract-awards")
+def import_contract_awards_route(
+    background_tasks: BackgroundTasks,
+    body: InternalRunRequest | None = None,
+) -> dict[str, str]:
+    _require_manual_pipeline()
+    return _enqueue_step(
+        background_tasks,
+        "import-contract-awards",
+        run_import_contract_awards_step,
         body.run_id if body else None,
     )
 
