@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 from config.env import get_anthropic_api_key
 from db.models import ArchCompany
 from pipeline.company_intelligence import (
-    CLAUDE_MODEL,
     MAX_LIST_ITEMS,
     _batch_limit,
     _extract_json,
 )
 from pipeline.scrape_arch_houzz import _printable
+
+WEBSITE_RESEARCH_MODEL = "claude-haiku-4-5-20251001"
 
 DEFAULT_WEBSITE_BATCH_LIMIT = 25
 REQUEST_DELAY_SECONDS = 15.0
@@ -48,7 +49,7 @@ def _research_firm(
     client: anthropic.Anthropic, company: ArchCompany, domain: str
 ) -> dict[str, Any]:
     response = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=WEBSITE_RESEARCH_MODEL,
         max_tokens=MAX_RESPONSE_TOKENS,
         messages=[{"role": "user", "content": _build_prompt(company, domain)}],
         tools=[

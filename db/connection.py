@@ -411,6 +411,56 @@ def _ensure_company_award_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_bd_intelligence_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_trade VARCHAR(50) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS trade_tags VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS capability_profile_json JSONB",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS capability_profile_at TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS ix_companies_primary_trade ON companies (primary_trade)",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS primary_trade VARCHAR(50) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS trade_tags VARCHAR[] DEFAULT '{}'",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS capability_profile_json JSONB",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS capability_profile_at TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS ix_arch_companies_primary_trade ON arch_companies (primary_trade)",
+        "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS estimated_value_numeric FLOAT",
+        "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS buyer_level VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS buyer_level VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS estimated_value_numeric FLOAT",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
+def _ensure_cip_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS cip_json JSONB",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS cip_at TIMESTAMPTZ",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS cip_version INTEGER",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS dominant_sector VARCHAR(30) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS work_orientation VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS specialization_confidence FLOAT",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS geographic_reach VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS value_p25 FLOAT",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS value_p75 FLOAT",
+        "CREATE INDEX IF NOT EXISTS ix_companies_dominant_sector ON companies (dominant_sector)",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS cip_json JSONB",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS cip_at TIMESTAMPTZ",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS cip_version INTEGER",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS dominant_sector VARCHAR(30) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS work_orientation VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS specialization_confidence FLOAT",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS geographic_reach VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS value_p25 FLOAT",
+        "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS value_p75 FLOAT",
+        "CREATE INDEX IF NOT EXISTS ix_arch_companies_dominant_sector ON arch_companies (dominant_sector)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_pipeline_runs_table(engine) -> None:
     statements = (
         """
@@ -441,6 +491,8 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_ai_columns(engine)
     _ensure_company_intelligence_columns(engine)
     _ensure_company_award_columns(engine)
+    _ensure_bd_intelligence_columns(engine)
+    _ensure_cip_columns(engine)
     _widen_commercial_text_columns(engine)
 
 

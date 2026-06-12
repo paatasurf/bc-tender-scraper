@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -21,6 +21,8 @@ class Tender(Base):
     posted_date: Mapped[str] = mapped_column(String(50), default="")
     closing_date: Mapped[str] = mapped_column(String(50), default="")
     estimated_value: Mapped[str] = mapped_column(String(100), default="")
+    estimated_value_numeric: Mapped[float | None] = mapped_column(Float, nullable=True)
+    buyer_level: Mapped[str] = mapped_column(String(20), default="")
     location: Mapped[str] = mapped_column(String(200), default="")
     tender_id: Mapped[str] = mapped_column(String(100), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
@@ -109,6 +111,8 @@ class CommercialTender(Base):
     url: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     tender_id: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(Text, default="")
+    buyer_level: Mapped[str] = mapped_column(String(20), default="")
+    estimated_value_numeric: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(Text, default="")
@@ -153,6 +157,19 @@ class Company(Base):
     primary_province: Mapped[str] = mapped_column(String(50), default="")
     data_sources: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     canonical_vendor_name: Mapped[str] = mapped_column(String(300), default="")
+    primary_trade: Mapped[str] = mapped_column(String(50), default="", index=True)
+    trade_tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    capability_profile_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    capability_profile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cip_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    cip_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cip_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dominant_sector: Mapped[str] = mapped_column(String(30), default="", index=True)
+    work_orientation: Mapped[str] = mapped_column(String(20), default="")
+    specialization_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geographic_reach: Mapped[str] = mapped_column(String(20), default="")
+    value_p25: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_p75: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -192,6 +209,19 @@ class ArchCompany(Base):
     website_notable_projects: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     ai_reliability_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
+    primary_trade: Mapped[str] = mapped_column(String(50), default="", index=True)
+    trade_tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    capability_profile_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    capability_profile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cip_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    cip_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cip_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dominant_sector: Mapped[str] = mapped_column(String(30), default="", index=True)
+    work_orientation: Mapped[str] = mapped_column(String(20), default="")
+    specialization_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geographic_reach: Mapped[str] = mapped_column(String(20), default="")
+    value_p25: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_p75: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

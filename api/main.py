@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from datetime import datetime
 
 from db.connection import check_db_connection, get_session, init_db, is_transient_db_error
+from pipeline.opportunity_discovery import ARCHITECTURE_DEFAULT_MIN_SCORE, CONSTRUCTION_DEFAULT_MIN_SCORE
 from db.models import (
     ArchCompany,
     ArchTender,
@@ -446,7 +447,7 @@ def get_company(name: str) -> dict[str, Any]:
 def company_opportunities(
     company_id: int,
     kind: Literal["construction", "architecture"] = Query("construction"),
-    min_score: int = Query(65, ge=0, le=100),
+    min_score: int = Query(CONSTRUCTION_DEFAULT_MIN_SCORE, ge=0, le=100),
     limit: int = Query(15, ge=1, le=50),
 ) -> dict[str, Any]:
     from pipeline.opportunity_discovery import discover_opportunities
@@ -560,7 +561,7 @@ def get_arch_company(name: str) -> dict[str, Any]:
 @app.get("/api/arch-companies/{company_id}/opportunities")
 def arch_company_opportunities(
     company_id: int,
-    min_score: int = Query(65, ge=0, le=100),
+    min_score: int = Query(ARCHITECTURE_DEFAULT_MIN_SCORE, ge=0, le=100),
     limit: int = Query(15, ge=1, le=50),
 ) -> dict[str, Any]:
     from pipeline.opportunity_discovery import discover_opportunities
@@ -575,6 +576,116 @@ def arch_company_opportunities(
                 min_score=min_score,
                 limit=limit,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@app.get("/api/companies/{company_id}/bd-intelligence")
+def company_bd_intelligence(
+    company_id: int,
+    kind: Literal["construction", "architecture"] = Query("construction"),
+    active_limit: int = Query(5, ge=0, le=10),
+    pipeline_limit: int = Query(5, ge=0, le=10),
+    intel_limit: int = Query(5, ge=0, le=10),
+    relationship_limit: int = Query(3, ge=0, le=10),
+    growth_limit: int = Query(2, ge=0, le=5),
+    refresh_profile: bool = Query(False),
+    include_rejections: bool = Query(False),
+    min_bps: int | None = Query(None, ge=50, le=95),
+) -> dict[str, Any]:
+    from pipeline.bd_recommendations import recommend_bd_intelligence
+
+    session = get_session()
+    try:
+        try:
+            return recommend_bd_intelligence(
+                session,
+                company_id=company_id,
+                kind=kind,
+                active_limit=active_limit,
+                pipeline_limit=pipeline_limit,
+                intel_limit=intel_limit,
+                relationship_limit=relationship_limit,
+                growth_limit=growth_limit,
+                refresh_profile=refresh_profile,
+                include_rejections=include_rejections,
+                min_bps=min_bps,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@app.get("/api/companies/{company_id}/capability-profile")
+def company_capability_profile(
+    company_id: int,
+    kind: Literal["construction", "architecture"] = Query("construction"),
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    from pipeline.cip_builder import get_cip
+
+    session = get_session()
+    try:
+        try:
+            cip = get_cip(session, company_id=company_id, kind=kind, refresh=refresh)
+            return cip.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/{company_id}/bd-intelligence")
+def arch_company_bd_intelligence(
+    company_id: int,
+    active_limit: int = Query(5, ge=0, le=10),
+    pipeline_limit: int = Query(5, ge=0, le=10),
+    intel_limit: int = Query(0, ge=0, le=10),
+    relationship_limit: int = Query(3, ge=0, le=10),
+    growth_limit: int = Query(2, ge=0, le=5),
+    refresh_profile: bool = Query(False),
+    include_rejections: bool = Query(False),
+    min_bps: int | None = Query(None, ge=50, le=95),
+) -> dict[str, Any]:
+    from pipeline.bd_recommendations import recommend_bd_intelligence
+
+    session = get_session()
+    try:
+        try:
+            return recommend_bd_intelligence(
+                session,
+                company_id=company_id,
+                kind="architecture",
+                active_limit=active_limit,
+                pipeline_limit=pipeline_limit,
+                intel_limit=intel_limit,
+                relationship_limit=relationship_limit,
+                growth_limit=growth_limit,
+                refresh_profile=refresh_profile,
+                include_rejections=include_rejections,
+                min_bps=min_bps,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/{company_id}/capability-profile")
+def arch_company_capability_profile(
+    company_id: int,
+    refresh: bool = Query(False),
+) -> dict[str, Any]:
+    from pipeline.cip_builder import get_cip
+
+    session = get_session()
+    try:
+        try:
+            cip = get_cip(session, company_id=company_id, kind="architecture", refresh=refresh)
+            return cip.to_dict()
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     finally:
