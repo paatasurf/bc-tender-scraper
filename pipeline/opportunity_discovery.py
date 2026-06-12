@@ -1,7 +1,8 @@
-"""Internal (non-AI) opportunity discovery for company profiles."""
+"""Internal opportunity discovery for company profiles."""
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -18,11 +19,41 @@ from db.models import (
     ContractAward,
     Permit,
     Tender,
+    TenderMatch,
 )
 from pipeline.company_matching import normalize_vendor_name
 
 Kind = Literal["construction", "architecture"]
 OpportunityType = Literal["tender", "permit", "contract_award"]
+
+# Construction Intelligence — independent thresholds (not comparable across types)
+CONSTRUCTION_TENDER_AI_THRESHOLD = 65
+CONSTRUCTION_TENDER_RULES_THRESHOLD = 55
+CONSTRUCTION_TENDER_STRETCH_THRESHOLD = 45
+CONSTRUCTION_PERMIT_MARKET_THRESHOLD = 70
+CONSTRUCTION_PERMIT_MARKET_STRETCH = 65
+CONSTRUCTION_PERMIT_OWN_THRESHOLD = 65
+CONSTRUCTION_AWARD_THRESHOLD = 60
+CONSTRUCTION_TENDER_RESERVED_SLOTS = 5
+CONSTRUCTION_PERMIT_RESERVED_SLOTS = 5
+CONSTRUCTION_AWARD_MAX_SLOTS = 3
+CONSTRUCTION_OWN_PERMIT_MAX_SLOTS = 2
+CONSTRUCTION_OWN_PERMIT_BONUS = 4
+
+CONSTRUCTION_TITLE_RE = re.compile(
+    r"\bconstruction\b|\brenovation\b|\bretrofit\b|\bbuilding\b|\bcivil\b|\binfrastructure\b"
+    r"|\broof\b|\bpaving\b|\bhvac\b|\belectrical\b|\bmechanical\b|\btenant\b|\bdemolition\b"
+    r"|\bdesign.?build\b|\bgeneral contractor\b",
+    re.I,
+)
+CONSULTING_ONLY_RE = re.compile(
+    r"\bconsultant\b|\bprofessional services\b|\bengineering services\b",
+    re.I,
+)
+ADDRESS_NOISE_RE = re.compile(
+    r"^\d+(st|nd|rd|th)$|^(street|st|avenue|ave|drive|dr|boulevard|blvd|road|rd|way|lane|ln)$",
+    re.I,
+)
 
 STOP_WORDS = frozenset(
     {
@@ -125,6 +156,24 @@ def _company_keywords(signals: CompanySignals) -> set[str]:
     return _expand_keywords(roots)
 
 
+def _tender_company_keywords(signals: CompanySignals) -> set[str]:
+    """Construction tender keywords — exclude street-number noise from google_address."""
+    roots: set[str] = set()
+    for source in (
+        [signals.name],
+        signals.project_types,
+        signals.neighborhoods,
+        signals.award_categories,
+    ):
+        for text in source:
+            roots.update(_tokenize(str(text)))
+    for token in _tokenize(signals.google_address):
+        if token.isdigit() or ADDRESS_NOISE_RE.match(token):
+            continue
+        roots.add(token)
+    return _expand_keywords(roots)
+
+
 def _parse_value(raw: str | float | None) -> float:
     if raw is None:
         return 0.0
@@ -196,7 +245,91 @@ def _is_tender_open(deadline: str) -> bool:
     return parsed >= date.today()
 
 
+def _buyer_relevance_points(signals: CompanySignals, organization: str) -> tuple[int, str | None]:
+    org_l = (organization or "").lower().strip()
+    if not org_l:
+        return 0, None
+    for client in signals.award_clients:
+        c = client.strip().lower()
+        if not c:
+            continue
+        if c in org_l or org_l in c:
+            return 15, f"Known buyer: {client[:60]}"
+    for level in signals.buyer_levels:
+        if level and level.lower() in org_l:
+            return 10, f"Buyer level fit: {level}"
+    return 0, None
+
+
+def _score_construction_tender_rules(
+    signals: CompanySignals,
+    payload: dict[str, Any],
+) -> tuple[int, list[str]]:
+    """Tender Pursuit Rank (rules fallback) for commercial construction companies."""
+    title = payload.get("title", "")
+    category = payload.get("category", "")
+    org = payload.get("company", "")
+    deadline = payload.get("deadline", "")
+    value = float(payload.get("value") or 0)
+    haystack = " ".join(filter(None, [title, category, org]))
+    hay_l = haystack.lower()
+
+    keywords = _tender_company_keywords(signals)
+    kw_pts, kw_matched = _keyword_points(haystack, keywords)
+    cat_pts, cat_matched = _overlap_points(haystack, signals.project_types + signals.award_categories, 18)
+    loc_pts, loc_matched = _overlap_points(haystack, signals.neighborhoods, 10)
+    val_pts, val_reason = _value_fit_score(signals.avg_project_value or signals.avg_award_value, value)
+    buyer_pts, buyer_reason = _buyer_relevance_points(signals, org)
+
+    trade_hit = bool(CONSTRUCTION_TITLE_RE.search(hay_l))
+    cat_hit = any(pt.lower() in hay_l or pt.lower() in category.lower() for pt in signals.project_types if pt)
+    scope_pts = 0
+    if category.lower() == "construction" and (trade_hit or cat_hit):
+        scope_pts = 14
+    elif trade_hit and cat_hit:
+        scope_pts = 12
+    elif trade_hit:
+        scope_pts = 8
+
+    fresh_pts = 0
+    fresh_reason = None
+    parsed = _parse_date(deadline)
+    if parsed and (parsed - date.today()).days <= 30:
+        fresh_pts = 10
+        fresh_reason = "Closing within 30 days"
+
+    has_rel = bool(kw_matched or cat_matched or loc_matched or buyer_pts)
+    rel_pts = _reliability_points(signals, has_rel)
+
+    penalty = 0
+    if CONSULTING_ONLY_RE.search(hay_l) and not trade_hit:
+        penalty = 10
+
+    score = min(
+        100,
+        max(0, kw_pts + cat_pts + loc_pts + val_pts + buyer_pts + scope_pts + rel_pts + fresh_pts - penalty),
+    )
+
+    reasons: list[str] = []
+    if scope_pts >= 12:
+        reasons.append("Construction scope alignment")
+    if buyer_reason:
+        reasons.append(buyer_reason)
+    if kw_matched:
+        reasons.append(f"Trade keyword match: {', '.join(kw_matched[:4])}")
+    if cat_matched:
+        reasons.append(f"Category fit: {', '.join(cat_matched[:3])}")
+    if loc_matched:
+        reasons.append(f"Location overlap: {', '.join(loc_matched[:3])}")
+    if val_reason:
+        reasons.append(val_reason)
+    if fresh_reason:
+        reasons.append(fresh_reason)
+    return score, reasons or ["Open construction tender"]
+
+
 def _score_tender(signals: CompanySignals, haystack: str, value: float, deadline: str) -> tuple[int, list[str]]:
+    """Legacy unified tender scorer (architecture / fallback)."""
     keywords = _company_keywords(signals)
     kw_pts, kw_matched = _keyword_points(haystack, keywords)
     cat_pts, cat_matched = _overlap_points(haystack, signals.project_types + signals.award_categories, 18)
@@ -226,7 +359,13 @@ def _score_tender(signals: CompanySignals, haystack: str, value: float, deadline
     return score, reasons
 
 
-def _score_permit(signals: CompanySignals, permit: Permit, *, own: bool) -> tuple[int, list[str]]:
+def _score_permit(
+    signals: CompanySignals,
+    permit: Permit,
+    *,
+    own: bool,
+    construction_mode: bool = False,
+) -> tuple[int, list[str]]:
     haystack = " ".join(
         filter(None, [permit.permit_type, permit.address, permit.description, permit.applicant])
     )
@@ -236,7 +375,7 @@ def _score_permit(signals: CompanySignals, permit: Permit, *, own: bool) -> tupl
     loc_pts, loc_matched = _overlap_points(haystack, signals.neighborhoods + [signals.google_address], 15)
     value = _parse_value(permit.project_value)
     val_pts, val_reason = _value_fit_score(signals.avg_project_value, value)
-    base = 12 if own else 0
+    base = (CONSTRUCTION_OWN_PERMIT_BONUS if construction_mode else 12) if own else 0
     score = min(100, base + kw_pts + cat_pts + loc_pts + val_pts)
     reasons: list[str] = []
     if own:
@@ -377,6 +516,54 @@ def _load_tender_candidates(session: Session, kind: Kind, limit: int) -> list[tu
     return rows
 
 
+def _load_cached_tender_matches(
+    session: Session,
+    company_id: int,
+    *,
+    min_score: int = CONSTRUCTION_TENDER_AI_THRESHOLD,
+) -> list[dict[str, Any]]:
+    """Load AI-scored tenders from tender_matches (primary tender source for construction)."""
+    cached_rows = session.scalars(
+        select(TenderMatch)
+        .where(
+            TenderMatch.company_kind == "construction",
+            TenderMatch.company_id == company_id,
+            TenderMatch.score >= min_score,
+        )
+        .order_by(TenderMatch.score.desc(), TenderMatch.id.desc())
+    ).all()
+
+    matches: list[dict[str, Any]] = []
+    for cached in cached_rows:
+        if cached.tender_source == "commercial":
+            row = session.get(CommercialTender, cached.tender_id)
+        elif cached.tender_source == "federal":
+            row = session.get(Tender, cached.tender_id)
+        else:
+            continue
+        if row is None:
+            continue
+        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
+        if not _is_tender_open(deadline):
+            continue
+        payload = _tender_payload(row, cached.tender_source)
+        reasoning = (cached.reasoning or "").strip()
+        reasons = [reasoning[:240]] if reasoning else ["AI-matched construction tender"]
+        matches.append(
+            {
+                "type": "tender",
+                "id": payload["id"],
+                "score": cached.score,
+                "reasons": reasons,
+                "source": "ai_match",
+                "context": "cached_tender_match",
+                "payload": payload,
+                "_tender_key": (cached.tender_source, payload["id"]),
+            }
+        )
+    return matches
+
+
 def _load_permit_candidates(session: Session, signals: CompanySignals, limit: int) -> list[tuple[Permit, bool]]:
     results: list[tuple[Permit, bool]] = []
     seen: set[int] = set()
@@ -481,6 +668,328 @@ def _load_award_candidates(session: Session, company: Company, limit: int) -> li
     return results[: limit * 2]
 
 
+def _match_sort_key(item: dict[str, Any]) -> tuple[int, float]:
+    return item["score"], item.get("payload", {}).get("value") or 0
+
+
+def _percentile_rank(score: int, scores: list[int]) -> float:
+    if not scores:
+        return 0.0
+    below = sum(1 for s in scores if s < score)
+    return (below / len(scores)) * 100.0
+
+
+def _business_value_index(
+    item: dict[str, Any],
+    *,
+    tender_scores: list[int],
+    permit_scores: list[int],
+    award_scores: list[int],
+) -> float:
+    score = item["score"]
+    typ = item["type"]
+    if typ == "tender":
+        pct = _percentile_rank(score, tender_scores)
+        weight = 0.50
+    elif typ == "permit":
+        pct = _percentile_rank(score, permit_scores)
+        weight = 0.30
+    else:
+        pct = _percentile_rank(score, award_scores)
+        weight = 0.20
+
+    value = float(item.get("payload", {}).get("value") or 0)
+    value_bonus = min(10.0, math.log10(value + 1) * 2) if value > 0 else 0.0
+    urgency = 0.0
+    if typ == "tender":
+        parsed = _parse_date(str(item.get("payload", {}).get("deadline", "")))
+        if parsed and (parsed - date.today()).days <= 30:
+            urgency = 5.0
+
+    return pct * weight + value_bonus + urgency
+
+
+def _assemble_construction_opportunities(
+    tenders: list[dict[str, Any]],
+    permits: list[dict[str, Any]],
+    awards: list[dict[str, Any]],
+    *,
+    limit: int = 15,
+    tender_stretch: list[dict[str, Any]] | None = None,
+    permit_stretch: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Reserve tender and permit slots; backfill by business value index."""
+    tender_stretch = tender_stretch or []
+    permit_stretch = permit_stretch or []
+    tenders = sorted(tenders, key=_match_sort_key, reverse=True)
+    stretch_tenders = sorted(tender_stretch, key=_match_sort_key, reverse=True)
+    market_permits = sorted(
+        [p for p in permits if p.get("context") != "own_permit"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    own_permits = sorted(
+        [p for p in permits if p.get("context") == "own_permit"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    stretch_market = sorted(
+        [p for p in (permit_stretch or []) if p.get("context") != "own_permit"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    stretch_own = sorted(
+        [p for p in (permit_stretch or []) if p.get("context") == "own_permit"],
+        key=_match_sort_key,
+        reverse=True,
+    )
+    awards = sorted(awards, key=_match_sort_key, reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+
+    def add_item(item: dict[str, Any]) -> bool:
+        key = (item["type"], item["id"])
+        if key in seen:
+            return False
+        selected.append(item)
+        seen.add(key)
+        return True
+
+    for item in tenders[:CONSTRUCTION_TENDER_RESERVED_SLOTS]:
+        add_item(item)
+
+    if len(selected) < CONSTRUCTION_TENDER_RESERVED_SLOTS:
+        for item in tenders[CONSTRUCTION_TENDER_RESERVED_SLOTS:]:
+            if len([x for x in selected if x["type"] == "tender"]) >= CONSTRUCTION_TENDER_RESERVED_SLOTS:
+                break
+            add_item(item)
+
+    if len([x for x in selected if x["type"] == "tender"]) < CONSTRUCTION_TENDER_RESERVED_SLOTS:
+        for item in stretch_tenders:
+            if len([x for x in selected if x["type"] == "tender"]) >= CONSTRUCTION_TENDER_RESERVED_SLOTS:
+                break
+            add_item(item)
+
+    permit_count = sum(1 for x in selected if x["type"] == "permit")
+    own_count = sum(1 for x in selected if x.get("context") == "own_permit")
+    permit_pool = market_permits + own_permits
+    for item in permit_pool:
+        if permit_count >= CONSTRUCTION_PERMIT_RESERVED_SLOTS:
+            break
+        if item.get("context") == "own_permit":
+            if own_count >= CONSTRUCTION_OWN_PERMIT_MAX_SLOTS:
+                continue
+            own_count += 1
+        if add_item(item):
+            permit_count += 1
+
+    if permit_count < CONSTRUCTION_PERMIT_RESERVED_SLOTS:
+        for item in stretch_market + stretch_own:
+            if permit_count >= CONSTRUCTION_PERMIT_RESERVED_SLOTS:
+                break
+            if item.get("context") == "own_permit":
+                if own_count >= CONSTRUCTION_OWN_PERMIT_MAX_SLOTS:
+                    continue
+                own_count += 1
+            if add_item(item):
+                permit_count += 1
+
+    award_count = 0
+    for item in awards:
+        if award_count >= CONSTRUCTION_AWARD_MAX_SLOTS:
+            break
+        if add_item(item):
+            award_count += 1
+
+    if len(selected) >= limit:
+        return selected[:limit]
+
+    tender_scores = [t["score"] for t in tenders + stretch_tenders]
+    permit_scores = [p["score"] for p in permits + permit_stretch]
+    award_scores = [a["score"] for a in awards]
+
+    remainder = tenders + stretch_tenders + permits + permit_stretch + awards
+    remainder.sort(
+        key=lambda item: _business_value_index(
+            item,
+            tender_scores=tender_scores,
+            permit_scores=permit_scores,
+            award_scores=award_scores,
+        ),
+        reverse=True,
+    )
+    for item in remainder:
+        if len(selected) >= limit:
+            break
+        if item.get("context") == "own_permit":
+            if sum(1 for x in selected if x.get("context") == "own_permit") >= CONSTRUCTION_OWN_PERMIT_MAX_SLOTS:
+                continue
+        add_item(item)
+
+    return selected[:limit]
+
+
+def _apply_balanced_ranking(
+    matches: list[dict[str, Any]],
+    *,
+    limit: int,
+    active_types: list[OpportunityType],
+) -> list[dict[str, Any]]:
+    """Reserve slots per opportunity type, then re-rank the combined set by score."""
+    if not matches or not active_types:
+        return []
+
+    by_type: dict[OpportunityType, list[dict[str, Any]]] = {t: [] for t in active_types}
+    for match in matches:
+        match_type = match.get("type")
+        if match_type in by_type:
+            by_type[match_type].append(match)
+
+    for match_type in active_types:
+        by_type[match_type].sort(key=_match_sort_key, reverse=True)
+
+    type_count = len(active_types)
+    base_quota = limit // type_count
+    extra_slots = limit % type_count
+
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+
+    for index, match_type in enumerate(active_types):
+        quota = base_quota + (1 if index < extra_slots else 0)
+        for match in by_type[match_type][:quota]:
+            key = (match["type"], match["id"])
+            if key in seen:
+                continue
+            selected.append(match)
+            seen.add(key)
+
+    if len(selected) < limit:
+        for match in sorted(matches, key=_match_sort_key, reverse=True):
+            key = (match["type"], match["id"])
+            if key in seen:
+                continue
+            selected.append(match)
+            seen.add(key)
+            if len(selected) >= limit:
+                break
+
+    selected.sort(key=_match_sort_key, reverse=True)
+    return selected[:limit]
+
+
+def _discover_construction_opportunities(
+    session: Session,
+    company: Company,
+    *,
+    limit: int,
+    max_candidates: int,
+) -> dict[str, Any]:
+    """Construction Intelligence ranking with tender_matches priority and slot assembly."""
+    signals = CompanySignals.from_company(company)
+    seen_tender_keys: set[tuple[str, int]] = set()
+    tender_matches: list[dict[str, Any]] = []
+    tender_stretch: list[dict[str, Any]] = []
+
+    for item in _load_cached_tender_matches(session, company.id):
+        key = item.pop("_tender_key", (item["payload"]["tender_source"], item["id"]))
+        seen_tender_keys.add(key)
+        tender_matches.append(item)
+
+    for row, source in _load_tender_candidates(session, "construction", max_candidates):
+        key = (source, row.id)
+        if key in seen_tender_keys:
+            continue
+        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
+        if not _is_tender_open(deadline):
+            continue
+        payload = _tender_payload(row, source)
+        score, reasons = _score_construction_tender_rules(signals, payload)
+        seen_tender_keys.add(key)
+        item = {
+            "type": "tender",
+            "id": payload["id"],
+            "score": score,
+            "reasons": reasons,
+            "source": "rules",
+            "context": "open_tender",
+            "payload": payload,
+        }
+        if score >= CONSTRUCTION_TENDER_RULES_THRESHOLD:
+            tender_matches.append(item)
+        elif score >= CONSTRUCTION_TENDER_STRETCH_THRESHOLD:
+            item["context"] = "stretch_tender"
+            tender_stretch.append(item)
+
+    permit_matches: list[dict[str, Any]] = []
+    permit_stretch: list[dict[str, Any]] = []
+    for permit, own in _load_permit_candidates(session, signals, max_candidates // 2):
+        score, reasons = _score_permit(signals, permit, own=own, construction_mode=True)
+        threshold = CONSTRUCTION_PERMIT_OWN_THRESHOLD if own else CONSTRUCTION_PERMIT_MARKET_THRESHOLD
+        stretch_threshold = CONSTRUCTION_PERMIT_OWN_THRESHOLD if own else CONSTRUCTION_PERMIT_MARKET_STRETCH
+        item = {
+            "type": "permit",
+            "id": permit.id,
+            "score": score,
+            "reasons": reasons,
+            "source": "rules",
+            "context": "own_permit" if own else "market_permit",
+            "payload": _permit_payload(permit),
+        }
+        if score >= threshold:
+            permit_matches.append(item)
+        elif score >= stretch_threshold:
+            permit_stretch.append(item)
+
+    award_matches: list[dict[str, Any]] = []
+    for award, context in _load_award_candidates(session, company, max_candidates // 2):
+        score, reasons = _score_contract_award(signals, award, context=context)
+        if score < CONSTRUCTION_AWARD_THRESHOLD:
+            continue
+        award_matches.append(
+            {
+                "type": "contract_award",
+                "id": award.id,
+                "score": score,
+                "reasons": reasons,
+                "source": "rules",
+                "context": context,
+                "payload": _award_payload(award),
+            }
+        )
+
+    total_candidates = len(tender_matches) + len(tender_stretch) + len(permit_matches) + len(permit_stretch) + len(award_matches)
+    top = _assemble_construction_opportunities(
+        tender_matches,
+        permit_matches,
+        award_matches,
+        limit=limit,
+        tender_stretch=tender_stretch,
+        permit_stretch=permit_stretch,
+    )
+
+    for item in top:
+        item.pop("_tender_key", None)
+
+    return {
+        "company_id": company.id,
+        "kind": "construction",
+        "min_score": CONSTRUCTION_TENDER_RULES_THRESHOLD,
+        "limit": limit,
+        "total_candidates": total_candidates,
+        "matches": top,
+        "ranking_model": "construction_intelligence_v2",
+        "thresholds": {
+            "tender_ai": CONSTRUCTION_TENDER_AI_THRESHOLD,
+            "tender_rules": CONSTRUCTION_TENDER_RULES_THRESHOLD,
+            "permit_market": CONSTRUCTION_PERMIT_MARKET_THRESHOLD,
+            "permit_own": CONSTRUCTION_PERMIT_OWN_THRESHOLD,
+            "award": CONSTRUCTION_AWARD_THRESHOLD,
+        },
+    }
+
+
 def discover_opportunities(
     session: Session,
     *,
@@ -490,29 +999,29 @@ def discover_opportunities(
     limit: int = 15,
     max_candidates: int = 400,
 ) -> dict[str, Any]:
-    """Rank tenders, permits, and contract awards using internal rules only."""
-    matches: list[dict[str, Any]] = []
-
-    if kind == "architecture":
-        company = session.get(ArchCompany, company_id)
-        if company is None:
-            raise ValueError(f"Architecture company {company_id} not found")
-        signals = CompanySignals.from_arch_company(company)
-        include_awards = False
-    else:
+    """Rank tenders, permits, and contract awards for a company profile."""
+    if kind == "construction":
         company = session.get(Company, company_id)
         if company is None:
             raise ValueError(f"Company {company_id} not found")
-        signals = CompanySignals.from_company(company)
-        include_awards = True
+        return _discover_construction_opportunities(
+            session,
+            company,
+            limit=limit,
+            max_candidates=max_candidates,
+        )
+
+    matches: list[dict[str, Any]] = []
+    company = session.get(ArchCompany, company_id)
+    if company is None:
+        raise ValueError(f"Architecture company {company_id} not found")
+    signals = CompanySignals.from_arch_company(company)
 
     for row, source in _load_tender_candidates(session, kind, max_candidates):
         deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
         if not _is_tender_open(deadline):
             continue
-        if kind == "architecture" and source != "arch":
-            continue
-        if kind == "construction" and source == "arch":
+        if source != "arch":
             continue
         payload = _tender_payload(row, source)
         haystack = " ".join(
@@ -552,28 +1061,7 @@ def discover_opportunities(
             }
         )
 
-    if include_awards and isinstance(company, Company):
-        for award, context in _load_award_candidates(session, company, max_candidates // 2):
-            score, reasons = _score_contract_award(signals, award, context=context)
-            if score < min_score:
-                continue
-            matches.append(
-                {
-                    "type": "contract_award",
-                    "id": award.id,
-                    "score": score,
-                    "reasons": reasons,
-                    "source": "rules",
-                    "context": context,
-                    "payload": _award_payload(award),
-                }
-            )
-
-    matches.sort(
-        key=lambda item: (item["score"], item.get("payload", {}).get("value") or 0),
-        reverse=True,
-    )
-    top = matches[:limit]
+    top = _apply_balanced_ranking(matches, limit=limit, active_types=["tender", "permit"])
 
     return {
         "company_id": company_id,
