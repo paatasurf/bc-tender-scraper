@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal
 
 import anthropic
 from sqlalchemy import func, select
@@ -28,6 +30,20 @@ MATCHING_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_COMPANIES = 10
 DEFAULT_MAX_TENDERS = 50
 DEFAULT_DELAY_SECONDS = 1.0
+
+# Hybrid discover: rule top-N → Haiku scorer-only, weekly cache refresh
+TENDER_MATCH_CACHE_MAX_AGE_HOURS = 168
+HYBRID_AI_CANDIDATE_LIMIT = 20
+HYBRID_INLINE_SCORE_CAP = 5
+
+CompanyKind = Literal["construction", "architecture"]
+
+
+@dataclass(frozen=True)
+class TenderPairCandidate:
+    tender_source: str
+    tender_id: int
+    match_reason: str
 
 
 def _batch_limit(env_name: str, default: int) -> int:
@@ -262,6 +278,239 @@ def _match_result_dict(
     if breakdown is not None:
         result["breakdown"] = breakdown
     return result
+
+
+def build_match_reason_from_rules(reasons: list[str]) -> str:
+    if not reasons:
+        return "Rule-based tender match candidate."
+    return "; ".join(reasons[:3])[:500]
+
+
+def _cache_created_at_utc(created_at: datetime | None) -> datetime | None:
+    if created_at is None:
+        return None
+    if created_at.tzinfo is None:
+        return created_at.replace(tzinfo=timezone.utc)
+    return created_at.astimezone(timezone.utc)
+
+
+def is_tender_match_cache_fresh(
+    created_at: datetime | None,
+    *,
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+) -> bool:
+    stamped = _cache_created_at_utc(created_at)
+    if stamped is None:
+        return False
+    return datetime.now(timezone.utc) - stamped <= timedelta(hours=max_age_hours)
+
+
+def get_fresh_cached_match(
+    session: Session,
+    *,
+    company_kind: CompanyKind,
+    company_id: int,
+    tender_source: str,
+    tender_id: int,
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+) -> TenderMatch | None:
+    row = session.scalars(
+        select(TenderMatch).where(
+            TenderMatch.company_kind == company_kind,
+            TenderMatch.company_id == company_id,
+            TenderMatch.tender_source == tender_source,
+            TenderMatch.tender_id == tender_id,
+        )
+    ).first()
+    if row is None or not is_tender_match_cache_fresh(row.created_at, max_age_hours=max_age_hours):
+        return None
+    return row
+
+
+def _load_tender_row(
+    session: Session,
+    tender_source: str,
+    tender_id: int,
+) -> ArchTender | ConstructionTender | None:
+    if tender_source == "arch":
+        return session.get(ArchTender, tender_id)
+    if tender_source == "federal":
+        return session.get(Tender, tender_id)
+    if tender_source == "commercial":
+        return session.get(CommercialTender, tender_id)
+    return None
+
+
+def score_tender_pairs(
+    session: Session,
+    company: Company | ArchCompany,
+    kind: CompanyKind,
+    candidates: list[TenderPairCandidate],
+    *,
+    persist: bool = True,
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+    inline_cap: int | None = None,
+) -> dict[str, Any]:
+    """Scorer-only hybrid path: skip Haiku when cache is fresh; cap new API calls per run."""
+    pairs: dict[tuple[str, int], dict[str, Any]] = {}
+    stats = {
+        "cache_hits": 0,
+        "freshly_scored": 0,
+        "skipped_cap": 0,
+        "skipped_no_key": 0,
+        "api_errors": 0,
+        "api_key_missing": False,
+    }
+    api_calls = 0
+
+    company_id = company.id
+    api_key = get_anthropic_api_key()
+    client: anthropic.Anthropic | None = None
+    delay = _request_delay()
+
+    for candidate in candidates:
+        key = (candidate.tender_source, candidate.tender_id)
+        cached = get_fresh_cached_match(
+            session,
+            company_kind=kind,
+            company_id=company_id,
+            tender_source=candidate.tender_source,
+            tender_id=candidate.tender_id,
+            max_age_hours=max_age_hours,
+        )
+        if cached is not None:
+            stats["cache_hits"] += 1
+            pairs[key] = {
+                "score": cached.score,
+                "reasoning": (cached.reasoning or "").strip(),
+                "origin": "cache",
+            }
+            continue
+
+        if inline_cap is not None and api_calls >= inline_cap:
+            stats["skipped_cap"] += 1
+            continue
+
+        if client is None:
+            if not api_key:
+                stats["api_key_missing"] = True
+                continue
+            client = anthropic.Anthropic(api_key=api_key)
+
+        tender = _load_tender_row(session, candidate.tender_source, candidate.tender_id)
+        if tender is None:
+            stats["skipped_no_key"] += 1
+            continue
+
+        if api_calls > 0 and delay > 0:
+            time.sleep(delay)
+
+        try:
+            if kind == "construction" and isinstance(company, Company):
+                scored = run_construction_company_scorer(
+                    client,
+                    company,
+                    tender,
+                    candidate.tender_source,
+                    candidate.match_reason,
+                )
+            elif kind == "architecture" and isinstance(company, ArchCompany):
+                scored = run_company_scorer(
+                    client,
+                    company,
+                    tender,
+                    candidate.match_reason,
+                )
+            else:
+                stats["skipped_no_key"] += 1
+                continue
+        except Exception as exc:
+            stats["api_errors"] += 1
+            print(
+                f"[AI Matching] Hybrid scorer failed for company={company_id} "
+                f"tender={candidate.tender_source}:{candidate.tender_id}: {exc}"
+            )
+            continue
+
+        api_calls += 1
+        stats["freshly_scored"] += 1
+        reasoning = scored["reasoning"]
+        score = int(scored["score"])
+
+        if persist:
+            _upsert_tender_match(
+                session,
+                company_kind=kind,
+                company_id=company_id,
+                tender_source=candidate.tender_source,
+                tender_id=candidate.tender_id,
+                score=score,
+                reasoning=reasoning,
+            )
+            session.commit()
+
+        pairs[key] = {
+            "score": score,
+            "reasoning": reasoning,
+            "origin": "fresh",
+        }
+
+    return {"pairs": pairs, **stats}
+
+
+def resolve_hybrid_tender_score(
+    session: Session,
+    *,
+    company_kind: CompanyKind,
+    company_id: int,
+    tender_source: str,
+    tender_id: int,
+    rule_score: int,
+    rule_reasons: list[str],
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+) -> tuple[int, list[str], str]:
+    """Use fresh AI cache when available; otherwise fall back to rule score."""
+    cached = get_fresh_cached_match(
+        session,
+        company_kind=company_kind,
+        company_id=company_id,
+        tender_source=tender_source,
+        tender_id=tender_id,
+        max_age_hours=max_age_hours,
+    )
+    if cached is not None:
+        reasoning = (cached.reasoning or "").strip()
+        reasons = [reasoning[:240]] if reasoning else list(rule_reasons)
+        return cached.score, reasons, "ai_match"
+    return rule_score, list(rule_reasons), "rules"
+
+
+def warm_hybrid_tender_cache(
+    session: Session,
+    *,
+    company_id: int,
+    kind: CompanyKind,
+    candidates: list[TenderPairCandidate],
+    inline_cap: int | None = None,
+) -> dict[str, Any]:
+    """Score rule-selected pairs and persist; used by Discover (capped) and warm-cache script."""
+    if kind == "construction":
+        company = session.get(Company, company_id)
+        if company is None:
+            raise ValueError(f"Company {company_id} not found")
+    else:
+        company = session.get(ArchCompany, company_id)
+        if company is None:
+            raise ValueError(f"Architecture company {company_id} not found")
+
+    return score_tender_pairs(
+        session,
+        company,
+        kind,
+        candidates,
+        persist=True,
+        inline_cap=inline_cap,
+    )
 
 
 def _upsert_tender_match(

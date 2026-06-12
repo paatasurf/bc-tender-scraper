@@ -19,9 +19,16 @@ from db.models import (
     ContractAward,
     Permit,
     Tender,
-    TenderMatch,
 )
 from pipeline.company_matching import normalize_vendor_name
+from pipeline.ai_matching import (
+    HYBRID_AI_CANDIDATE_LIMIT,
+    HYBRID_INLINE_SCORE_CAP,
+    TenderPairCandidate,
+    build_match_reason_from_rules,
+    resolve_hybrid_tender_score,
+    score_tender_pairs,
+)
 
 Kind = Literal["construction", "architecture"]
 OpportunityType = Literal["tender", "permit", "contract_award"]
@@ -58,6 +65,16 @@ BC_METRO_GEO_RE = re.compile(
     r"\bbc\b|\bvancouver\b|\bburnaby\b|\brichmond\b|\bsurrey\b|\bvictoria\b|\bkelowna\b|\bnanaimo\b",
     re.I,
 )
+
+
+@dataclass
+class RuleTenderCandidate:
+    tender_source: str
+    tender_id: int
+    payload: dict[str, Any]
+    rule_score: int
+    reasons: list[str]
+
 
 CONSTRUCTION_TITLE_RE = re.compile(
     r"\bconstruction\b|\brenovation\b|\bretrofit\b|\bbuilding\b|\bcivil\b|\binfrastructure\b"
@@ -587,52 +604,164 @@ def _load_tender_candidates(session: Session, kind: Kind, limit: int) -> list[tu
     return rows
 
 
-def _load_cached_tender_matches(
+def _scan_construction_rule_tenders(
     session: Session,
-    company_id: int,
-    *,
-    min_score: int = CONSTRUCTION_TENDER_AI_THRESHOLD,
-) -> list[dict[str, Any]]:
-    """Load AI-scored tenders from tender_matches (primary tender source for construction)."""
-    cached_rows = session.scalars(
-        select(TenderMatch)
-        .where(
-            TenderMatch.company_kind == "construction",
-            TenderMatch.company_id == company_id,
-            TenderMatch.score >= min_score,
-        )
-        .order_by(TenderMatch.score.desc(), TenderMatch.id.desc())
-    ).all()
-
-    matches: list[dict[str, Any]] = []
-    for cached in cached_rows:
-        if cached.tender_source == "commercial":
-            row = session.get(CommercialTender, cached.tender_id)
-        elif cached.tender_source == "federal":
-            row = session.get(Tender, cached.tender_id)
-        else:
-            continue
-        if row is None:
-            continue
+    signals: CompanySignals,
+    max_candidates: int,
+) -> list[RuleTenderCandidate]:
+    results: list[RuleTenderCandidate] = []
+    for row, source in _load_tender_candidates(session, "construction", max_candidates):
         deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
         if not _is_tender_open(deadline):
             continue
-        payload = _tender_payload(row, cached.tender_source)
-        reasoning = (cached.reasoning or "").strip()
-        reasons = [reasoning[:240]] if reasoning else ["AI-matched construction tender"]
-        matches.append(
-            {
-                "type": "tender",
-                "id": payload["id"],
-                "score": cached.score,
-                "reasons": reasons,
-                "source": "ai_match",
-                "context": "cached_tender_match",
-                "payload": payload,
-                "_tender_key": (cached.tender_source, payload["id"]),
-            }
+        payload = _tender_payload(row, source)
+        score, reasons = _score_construction_tender_rules(signals, payload)
+        results.append(
+            RuleTenderCandidate(
+                tender_source=source,
+                tender_id=payload["id"],
+                payload=payload,
+                rule_score=score,
+                reasons=reasons,
+            )
         )
-    return matches
+    return results
+
+
+def _scan_architecture_rule_tenders(
+    session: Session,
+    signals: CompanySignals,
+    max_candidates: int,
+) -> list[RuleTenderCandidate]:
+    results: list[RuleTenderCandidate] = []
+    for row, source in _load_tender_candidates(session, "architecture", max_candidates):
+        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
+        if not _is_tender_open(deadline):
+            continue
+        if source != "arch":
+            continue
+        payload = _tender_payload(row, source)
+        haystack = " ".join(
+            filter(
+                None,
+                [payload["title"], payload["category"], payload["company"], payload.get("deadline", "")],
+            )
+        )
+        score, reasons = _score_tender(signals, haystack, payload["value"], payload["deadline"])
+        results.append(
+            RuleTenderCandidate(
+                tender_source=source,
+                tender_id=payload["id"],
+                payload=payload,
+                rule_score=score,
+                reasons=reasons or ["General market opportunity"],
+            )
+        )
+    return results
+
+
+def _run_hybrid_tender_scoring(
+    session: Session,
+    company: Company | ArchCompany,
+    kind: Kind,
+    rule_candidates: list[RuleTenderCandidate],
+    *,
+    inline_cap: int = HYBRID_INLINE_SCORE_CAP,
+) -> dict[str, Any]:
+    """Send rule top-N to Haiku scorer (cache-aware, capped). Never raises — rules remain fallback."""
+    if not rule_candidates:
+        return {
+            "cache_hits": 0,
+            "freshly_scored": 0,
+            "skipped_cap": 0,
+            "skipped_no_key": 0,
+            "api_errors": 0,
+            "api_key_missing": False,
+            "candidates_considered": 0,
+        }
+
+    top = sorted(rule_candidates, key=lambda item: item.rule_score, reverse=True)[:HYBRID_AI_CANDIDATE_LIMIT]
+    pair_candidates = [
+        TenderPairCandidate(
+            tender_source=item.tender_source,
+            tender_id=item.tender_id,
+            match_reason=build_match_reason_from_rules(item.reasons),
+        )
+        for item in top
+    ]
+    try:
+        result = score_tender_pairs(
+            session,
+            company,
+            kind,
+            pair_candidates,
+            persist=True,
+            inline_cap=inline_cap,
+        )
+    except Exception as exc:
+        print(f"[Hybrid Matching] Scoring skipped for company={company.id} kind={kind}: {exc}")
+        return {
+            "cache_hits": 0,
+            "freshly_scored": 0,
+            "skipped_cap": 0,
+            "skipped_no_key": 0,
+            "api_errors": 1,
+            "api_key_missing": False,
+            "candidates_considered": len(pair_candidates),
+        }
+
+    result["candidates_considered"] = len(pair_candidates)
+    return result
+
+
+def _rule_tenders_to_opportunity_items(
+    session: Session,
+    company_id: int,
+    kind: Kind,
+    rule_candidates: list[RuleTenderCandidate],
+    *,
+    rules_threshold: int,
+    stretch_threshold: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    matches: list[dict[str, Any]] = []
+    stretch: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+
+    for candidate in rule_candidates:
+        key = (candidate.tender_source, candidate.tender_id)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        score, reasons, source = resolve_hybrid_tender_score(
+            session,
+            company_kind=kind,
+            company_id=company_id,
+            tender_source=candidate.tender_source,
+            tender_id=candidate.tender_id,
+            rule_score=candidate.rule_score,
+            rule_reasons=candidate.reasons,
+        )
+        item = {
+            "type": "tender",
+            "id": candidate.payload["id"],
+            "score": score,
+            "reasons": reasons,
+            "source": source,
+            "context": "open_tender",
+            "payload": candidate.payload,
+            "_tender_key": key,
+        }
+        if source == "ai_match":
+            item["context"] = "cached_tender_match"
+
+        if score >= rules_threshold:
+            matches.append(item)
+        elif score >= stretch_threshold:
+            item["context"] = "stretch_tender"
+            stretch.append(item)
+
+    return matches, stretch
 
 
 def _load_permit_candidates(session: Session, signals: CompanySignals, limit: int) -> list[tuple[Permit, bool]]:
@@ -958,43 +1087,23 @@ def _discover_construction_opportunities(
     max_candidates: int,
     min_score: int = CONSTRUCTION_TENDER_RULES_THRESHOLD,
 ) -> dict[str, Any]:
-    """Construction Intelligence ranking with tender_matches priority and slot assembly."""
+    """Construction Intelligence ranking with hybrid tender scoring and slot assembly."""
     tender_rules_threshold = min_score
     tender_stretch_threshold = max(0, min_score - 10)
     signals = CompanySignals.from_company(company)
-    seen_tender_keys: set[tuple[str, int]] = set()
-    tender_matches: list[dict[str, Any]] = []
-    tender_stretch: list[dict[str, Any]] = []
 
-    for item in _load_cached_tender_matches(session, company.id):
-        key = item.pop("_tender_key", (item["payload"]["tender_source"], item["id"]))
-        seen_tender_keys.add(key)
-        tender_matches.append(item)
-
-    for row, source in _load_tender_candidates(session, "construction", max_candidates):
-        key = (source, row.id)
-        if key in seen_tender_keys:
-            continue
-        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
-        if not _is_tender_open(deadline):
-            continue
-        payload = _tender_payload(row, source)
-        score, reasons = _score_construction_tender_rules(signals, payload)
-        seen_tender_keys.add(key)
-        item = {
-            "type": "tender",
-            "id": payload["id"],
-            "score": score,
-            "reasons": reasons,
-            "source": "rules",
-            "context": "open_tender",
-            "payload": payload,
-        }
-        if score >= tender_rules_threshold:
-            tender_matches.append(item)
-        elif score >= tender_stretch_threshold:
-            item["context"] = "stretch_tender"
-            tender_stretch.append(item)
+    rule_candidates = _scan_construction_rule_tenders(session, signals, max_candidates)
+    hybrid_scoring = _run_hybrid_tender_scoring(
+        session, company, "construction", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
+    )
+    tender_matches, tender_stretch = _rule_tenders_to_opportunity_items(
+        session,
+        company.id,
+        "construction",
+        rule_candidates,
+        rules_threshold=tender_rules_threshold,
+        stretch_threshold=tender_stretch_threshold,
+    )
 
     permit_matches: list[dict[str, Any]] = []
     permit_stretch: list[dict[str, Any]] = []
@@ -1053,7 +1162,8 @@ def _discover_construction_opportunities(
         "limit": limit,
         "total_candidates": total_candidates,
         "matches": top,
-        "ranking_model": "construction_intelligence_v2",
+        "ranking_model": "construction_intelligence_v2_hybrid",
+        "hybrid_scoring": hybrid_scoring,
         "thresholds": {
             "tender_ai": CONSTRUCTION_TENDER_AI_THRESHOLD,
             "tender_rules": tender_rules_threshold,
@@ -1077,37 +1187,19 @@ def _discover_architecture_opportunities(
     tender_rules_threshold = min_score
     tender_stretch_threshold = ARCHITECTURE_TENDER_STRETCH_THRESHOLD
     signals = CompanySignals.from_arch_company(company)
-    tender_matches: list[dict[str, Any]] = []
-    tender_stretch: list[dict[str, Any]] = []
 
-    for row, source in _load_tender_candidates(session, "architecture", max_candidates):
-        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
-        if not _is_tender_open(deadline):
-            continue
-        if source != "arch":
-            continue
-        payload = _tender_payload(row, source)
-        haystack = " ".join(
-            filter(
-                None,
-                [payload["title"], payload["category"], payload["company"], payload.get("deadline", "")],
-            )
-        )
-        score, reasons = _score_tender(signals, haystack, payload["value"], payload["deadline"])
-        item = {
-            "type": "tender",
-            "id": payload["id"],
-            "score": score,
-            "reasons": reasons or ["General market opportunity"],
-            "source": "rules",
-            "context": "open_tender",
-            "payload": payload,
-        }
-        if score >= tender_rules_threshold:
-            tender_matches.append(item)
-        elif score >= tender_stretch_threshold:
-            item["context"] = "stretch_tender"
-            tender_stretch.append(item)
+    rule_candidates = _scan_architecture_rule_tenders(session, signals, max_candidates)
+    hybrid_scoring = _run_hybrid_tender_scoring(
+        session, company, "architecture", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
+    )
+    tender_matches, tender_stretch = _rule_tenders_to_opportunity_items(
+        session,
+        company.id,
+        "architecture",
+        rule_candidates,
+        rules_threshold=tender_rules_threshold,
+        stretch_threshold=tender_stretch_threshold,
+    )
 
     permit_matches: list[dict[str, Any]] = []
     permit_stretch: list[dict[str, Any]] = []
@@ -1149,7 +1241,8 @@ def _discover_architecture_opportunities(
         "limit": limit,
         "total_candidates": total_candidates,
         "matches": top,
-        "ranking_model": "architecture_intelligence_v1",
+        "ranking_model": "architecture_intelligence_v1_hybrid",
+        "hybrid_scoring": hybrid_scoring,
         "thresholds": {
             "tender_rules": tender_rules_threshold,
             "tender_stretch": tender_stretch_threshold,
