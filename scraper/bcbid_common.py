@@ -31,9 +31,10 @@ def _cookie_file_has_entries(cookie_file: Path) -> bool:
 
 
 def _normalize_cookie_content(content: str) -> str:
-    if "\\n" in content and "\n" not in content.strip():
+    content = content.strip().lstrip("\ufeff")
+    if "\\n" in content and content.count("\n") <= 1:
         content = content.replace("\\n", "\n")
-    return content
+    return content.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _resolve_bcbid_cookie_file() -> Path:
@@ -42,16 +43,28 @@ def _resolve_bcbid_cookie_file() -> Path:
         return cookie_file
     content = os.environ.get("BCBID_COOKIES_CONTENT")
     if not content:
+        print("[BC Bid] No bcbid_cookies.txt or BCBID_COOKIES_CONTENT configured")
         return cookie_file
+    normalized = _normalize_cookie_content(content)
+    line_count = sum(
+        1
+        for line in normalized.splitlines()
+        if line and not line.startswith("#") and len(line.split("\t")) == 7
+    )
+    print(f"[BC Bid] Using BCBID_COOKIES_CONTENT ({line_count} Netscape cookie lines)")
     fd, path = tempfile.mkstemp(suffix=".txt", prefix="bcbid_cookies_")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(_normalize_cookie_content(content))
+        handle.write(normalized)
     return Path(path)
 
 
-def load_bcbid_cookies(session: requests.Session, cookie_path: Path | None = None) -> None:
+def load_bcbid_cookies(session: requests.Session, cookie_path: Path | None = None) -> int:
     cookie_file = cookie_path or _resolve_bcbid_cookie_file()
+    before = len(session.cookies)
     load_netscape_cookies(session, cookie_file)
+    loaded = len(session.cookies) - before
+    print(f"[BC Bid] Loaded {loaded} cookies from {cookie_file.name}")
+    return loaded
 
 
 def extract_form_payload(soup: BeautifulSoup) -> dict[str, str]:

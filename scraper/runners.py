@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from config.env import env_flag
 from db.import_contract_awards import import_contract_awards
 from scraper.bcbid import scrape_bcbid_tenders
-from scraper.bcbid_auth import BcbidSessionExpiredError
+from scraper.bcbid_auth import BcbidSessionExpiredError, handle_bcbid_auth_failure
 from scraper.building_permits import scrape_building_permits
 from scraper.commercial import scrape_commercial_tenders
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
@@ -31,6 +33,9 @@ def _scrape_bcbid_or_empty(session) -> tuple[list, str | None]:
     except BcbidSessionExpiredError as exc:
         print(f"[BC Bid] Failed: {exc}")
         return [], f"session_expired: {exc.reason}"
+    except requests.TooManyRedirects:
+        handle_bcbid_auth_failure(html="redirect loop (Exceeded 30 redirects)")
+        return [], "session_expired: redirect loop (cookies invalid or expired)"
     except Exception as exc:
         print(f"[BC Bid] Failed: {exc}")
         return [], str(exc)
