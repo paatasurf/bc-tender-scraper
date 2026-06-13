@@ -30,6 +30,7 @@ from db.models import (
     RedditSignal,
     Tender,
 )
+from api.chat import router as chat_router
 from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
@@ -69,6 +70,7 @@ app.add_middleware(
 )
 
 app.include_router(internal_router)
+app.include_router(chat_router, prefix="/api", tags=["chat"])
 
 
 @app.exception_handler(OperationalError)
