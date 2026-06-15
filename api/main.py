@@ -1,5 +1,3 @@
-get_companies
-
 import config.env  # noqa: F401  # load env before pipeline imports
 
 import os
