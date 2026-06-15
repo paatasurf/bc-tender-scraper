@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/companies/id/{company_id}/opportunities — Construction Tender Match Extension",
+  "description": "Extension to discover_opportunities response for kind=construction. Each tender-type match includes breakdown where total equals sum of component points.",
+  "type": "object",
+  "required": ["company_id", "kind", "matches"],
+  "properties": {
+    "company_id": { "type": "integer" },
+    "kind": { "const": "construction" },
+    "min_score": { "type": "integer" },
+    "limit": { "type": "integer" },
+    "matches": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ConstructionOpportunityMatch" }
+    }
+  },
+  "$defs": {
+    "BreakdownItem": {
+      "type": "object",
+      "required": ["points", "detail"],
+      "properties": {
+        "points": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string" }
+      }
+    },
+    "MatchBreakdown": {
+      "type": "object",
+      "required": [
+        "keywords",
+        "category",
+        "specialization",
+        "location",
+        "value",
+        "reliability",
+        "freshness"
+      ],
+      "properties": {
+        "keywords": { "$ref": "#/$defs/BreakdownItem", "description": "Max 35" },
+        "category": { "$ref": "#/$defs/BreakdownItem", "description": "Max 20" },
+        "specialization": { "$ref": "#/$defs/BreakdownItem", "description": "Max 15" },
+        "location": { "$ref": "#/$defs/BreakdownItem", "description": "Max 15; city/region only" },
+        "value": { "$ref": "#/$defs/BreakdownItem", "description": "Max 15" },
+        "reliability": { "$ref": "#/$defs/BreakdownItem", "description": "Max 5" },
+        "freshness": { "$ref": "#/$defs/BreakdownItem", "description": "Max 10" }
+      }
+    },
+    "ConstructionOpportunityMatch": {
+      "type": "object",
+      "required": ["type", "id", "score", "reasons", "source", "payload"],
+      "properties": {
+        "type": { "const": "tender" },
+        "id": { "type": "integer" },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "MUST equal sum(breakdown.*.points) when breakdown present"
+        },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "source": { "enum": ["rules", "ai_match"] },
+        "context": { "type": "string" },
+        "breakdown": { "$ref": "#/$defs/MatchBreakdown" },
+        "payload": {
+          "type": "object",
+          "description": "Existing tender payload (title, category, tender_source, etc.)"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["breakdown"] },
+          "then": {
+            "description": "When breakdown is present, score must match sum of points"
+          }
+        }
+      ]
+    }
+  }
+}

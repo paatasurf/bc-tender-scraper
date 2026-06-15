@@ -852,8 +852,9 @@ def trigger_ai_matching(
     request = body or AIMatchingRequest()
     kind = (request.kind or "architecture").strip().lower()
     architecture_sync = request.sync and kind == "architecture"
+    construction_sync = request.sync and kind == "construction"
 
-    if not architecture_sync and not get_anthropic_api_key():
+    if not architecture_sync and not construction_sync and not get_anthropic_api_key():
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
 
     if request.sync:

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "POST /api/ai-matching — Construction Sync Response",
+  "description": "Contract for kind=construction, sync=true. Mirrors architecture sync shape; all seven breakdown keys active for construction.",
+  "type": "object",
+  "required": ["status", "kind", "company_id", "min_score", "limit", "matches"],
+  "properties": {
+    "status": { "const": "complete" },
+    "kind": { "const": "construction" },
+    "company_id": { "type": "integer" },
+    "min_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "limit": { "type": "integer", "minimum": 1 },
+    "matches": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ConstructionMatch" }
+    }
+  },
+  "$defs": {
+    "BreakdownItem": {
+      "type": "object",
+      "required": ["points", "detail"],
+      "properties": {
+        "points": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string" }
+      }
+    },
+    "MatchBreakdown": {
+      "type": "object",
+      "required": [
+        "keywords",
+        "category",
+        "specialization",
+        "location",
+        "value",
+        "reliability",
+        "freshness"
+      ],
+      "properties": {
+        "keywords": { "$ref": "#/$defs/BreakdownItem" },
+        "category": { "$ref": "#/$defs/BreakdownItem" },
+        "specialization": { "$ref": "#/$defs/BreakdownItem" },
+        "location": { "$ref": "#/$defs/BreakdownItem" },
+        "value": { "$ref": "#/$defs/BreakdownItem" },
+        "reliability": { "$ref": "#/$defs/BreakdownItem" },
+        "freshness": { "$ref": "#/$defs/BreakdownItem" }
+      }
+    },
+    "ConstructionMatch": {
+      "type": "object",
+      "required": [
+        "tender_id",
+        "tender_source",
+        "score",
+        "reasoning",
+        "match_reason",
+        "breakdown",
+        "tender"
+      ],
+      "properties": {
+        "tender_id": { "type": "integer" },
+        "tender_source": { "enum": ["federal", "commercial"] },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "MUST equal sum of breakdown.*.points"
+        },
+        "reasoning": { "type": "string" },
+        "match_reason": { "type": "string" },
+        "breakdown": { "$ref": "#/$defs/MatchBreakdown" },
+        "tender": {
+          "type": "object",
+          "required": ["id", "title", "tender_source"],
+          "properties": {
+            "id": { "type": "integer" },
+            "title": { "type": "string" },
+            "company": { "type": "string" },
+            "value": { "type": "string" },
+            "deadline": { "type": "string" },
+            "category": { "type": "string" },
+            "location": { "type": "string" },
+            "url": { "type": "string" },
+            "tender_source": { "enum": ["federal", "commercial"] }
+          }
+        }
+      }
+    }
+  }
+}

@@ -32,6 +32,8 @@ from pipeline.ai_matching import (
     score_tender_pairs,
 )
 
+from pipeline.scoring.construction_match_scoring import score_construction_match
+
 Kind = Literal["construction", "architecture"]
 OpportunityType = Literal["tender", "permit", "contract_award"]
 
@@ -785,6 +787,45 @@ def _tender_opportunity_item(
     return item
 
 
+def _attach_construction_tender_breakdown(
+    session: Session,
+    company: Company,
+    items: list[dict[str, Any]],
+    hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None = None,
+) -> None:
+    """Attach deterministic score + 7-key breakdown to construction tender opportunity items."""
+    for item in items:
+        if item.get("type") != "tender":
+            continue
+
+        key = item.get("_tender_key")
+        if not key:
+            payload = item.get("payload") or {}
+            source = str(payload.get("tender_source") or "federal")
+            tender_id = int(payload.get("id") or item.get("id") or 0)
+            key = (source, tender_id)
+
+        if hybrid_pairs and key in hybrid_pairs:
+            pair = hybrid_pairs[key]
+            breakdown = pair.get("breakdown")
+            if breakdown:
+                item["score"] = int(pair["score"])
+                item["breakdown"] = breakdown
+                reasoning = (pair.get("reasoning") or "").strip()
+                if reasoning:
+                    item["reasons"] = [reasoning[:240]]
+                continue
+
+        tender = _load_tender_row(session, key[0], key[1])
+        if tender is None:
+            continue
+        scored = score_construction_match(company, tender, key[0])
+        item["score"] = scored.score
+        item["breakdown"] = scored.api_breakdown
+        if scored.match_reason:
+            item["reasons"] = [scored.match_reason[:240]]
+
+
 def _cached_ai_tenders_to_opportunity_items(
     session: Session,
     company_id: int,
@@ -1258,6 +1299,9 @@ def _discover_construction_opportunities(
         stretch_threshold=tender_stretch_threshold,
         hybrid_pairs=hybrid_scoring.get("pairs") or {},
     )
+    hybrid_pairs = hybrid_scoring.get("pairs") or {}
+    _attach_construction_tender_breakdown(session, company, tender_matches, hybrid_pairs)
+    _attach_construction_tender_breakdown(session, company, tender_stretch, hybrid_pairs)
 
     permit_matches: list[dict[str, Any]] = []
     permit_stretch: list[dict[str, Any]] = []

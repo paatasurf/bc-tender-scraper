@@ -29,6 +29,13 @@ from pipeline.scoring.arch_match_scoring import (
     build_match_reason,
     score_architecture_match,
 )
+from pipeline.scoring.construction_match_scoring import (
+    CANONICAL_KEYS as CONSTRUCTION_CANONICAL_KEYS,
+    breakdown_json_to_api_breakdown as breakdown_json_to_construction_api_breakdown,
+    build_fallback_explanation as build_construction_fallback_explanation,
+    build_match_reason as build_construction_match_reason,
+    score_construction_match,
+)
 from pipeline.scoring.explain import BreakdownFactor
 
 ConstructionTender = Tender | CommercialTender
@@ -432,17 +439,53 @@ def score_tender_pairs(
             tender_id=candidate.tender_id,
             max_age_hours=max_age_hours,
         )
-        if cached is not None:
+        if cached is not None and not (kind == "construction" and not cached.breakdown_json):
             stats["cache_hits"] += 1
-            pairs[key] = {
+            pair_data: dict[str, Any] = {
                 "score": cached.score,
                 "reasoning": (cached.reasoning or "").strip(),
                 "origin": "cache",
             }
+            if kind == "construction" and cached.breakdown_json:
+                pair_data["breakdown"] = breakdown_json_to_construction_api_breakdown(
+                    cached.breakdown_json
+                )
+            elif kind == "architecture" and cached.breakdown_json:
+                pair_data["breakdown"] = breakdown_json_to_api_breakdown(cached.breakdown_json)
+            pairs[key] = pair_data
             continue
 
-        if inline_cap is not None and api_calls >= inline_cap:
+        if inline_cap is not None and api_calls >= inline_cap and kind != "construction":
             stats["skipped_cap"] += 1
+            continue
+
+        tender = _load_tender_row(session, candidate.tender_source, candidate.tender_id)
+        if tender is None:
+            stats["skipped_no_key"] += 1
+            continue
+
+        if kind == "construction" and isinstance(company, Company):
+            scored = score_construction_match(company, tender, candidate.tender_source)
+            reasoning = build_construction_fallback_explanation(scored.breakdown)
+            stats["freshly_scored"] += 1
+            if persist:
+                _upsert_tender_match(
+                    session,
+                    company_kind=kind,
+                    company_id=company_id,
+                    tender_source=candidate.tender_source,
+                    tender_id=candidate.tender_id,
+                    score=scored.score,
+                    reasoning=reasoning,
+                    breakdown_json=scored.breakdown_json,
+                )
+                session.commit()
+            pairs[key] = {
+                "score": scored.score,
+                "reasoning": reasoning,
+                "breakdown": scored.api_breakdown,
+                "origin": "fresh",
+            }
             continue
 
         if client is None:
@@ -451,24 +494,11 @@ def score_tender_pairs(
                 continue
             client = anthropic.Anthropic(api_key=api_key)
 
-        tender = _load_tender_row(session, candidate.tender_source, candidate.tender_id)
-        if tender is None:
-            stats["skipped_no_key"] += 1
-            continue
-
         if api_calls > 0 and delay > 0:
             time.sleep(delay)
 
         try:
-            if kind == "construction" and isinstance(company, Company):
-                scored = run_construction_company_scorer(
-                    client,
-                    company,
-                    tender,
-                    candidate.tender_source,
-                    candidate.match_reason,
-                )
-            elif kind == "architecture" and isinstance(company, ArchCompany):
+            if kind == "architecture" and isinstance(company, ArchCompany):
                 scored = run_company_scorer(
                     client,
                     company,
@@ -1031,8 +1061,7 @@ Scoring guide:
     return _normalize_scorer_payload(payload, match_reason)
 
 
-def _score_construction_tender_matches(
-    client: anthropic.Anthropic,
+def _score_construction_matches_deterministic(
     session: Session,
     company: Company,
     catalog: list[CatalogEntry],
@@ -1040,46 +1069,62 @@ def _score_construction_tender_matches(
     *,
     persist: bool,
     min_score: int,
-    delay: float,
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
 ) -> tuple[list[dict[str, Any]], int, int]:
-    try:
-        candidates = run_construction_tender_matcher(client, company, catalog)
-    except Exception as exc:
-        print(f"[AI Matching] Construction matcher failed for {company.name[:50]}: {exc}")
-        return [], 0, 0
-
+    """Deterministic construction scoring for sync path. Returns (results, evaluated, scored)."""
     results: list[dict[str, Any]] = []
     scored_count = 0
 
-    for candidate in candidates:
-        key = (candidate["tender_source"], candidate["tender_id"])
-        tender = catalog_by_key.get(key)
-        if tender is None:
+    for tender_source, tender in catalog:
+        cached = get_fresh_cached_match(
+            session,
+            company_kind="construction",
+            company_id=company.id,
+            tender_source=tender_source,
+            tender_id=tender.id,
+            max_age_hours=max_age_hours,
+        )
+        if cached is not None and cached.breakdown_json:
+            api_breakdown = breakdown_json_to_construction_api_breakdown(cached.breakdown_json)
+            cached_factors = [
+                BreakdownFactor(
+                    factor=key,
+                    label=key.replace("_", " ").title(),
+                    points=int((cached.breakdown_json or {}).get(key, {}).get("points", 0)),
+                    max_points=int((cached.breakdown_json or {}).get(key, {}).get("max_points", 0)),
+                    detail=str((cached.breakdown_json or {}).get(key, {}).get("detail", "")),
+                )
+                for key in CONSTRUCTION_CANONICAL_KEYS
+                if cached.breakdown_json and key in cached.breakdown_json
+            ]
+            reasoning = (cached.reasoning or "").strip()
+            if not reasoning:
+                reasoning = build_construction_fallback_explanation(cached_factors)
+            match_reason = (
+                build_construction_match_reason(cached_factors)
+                if cached_factors
+                else "Cached construction match"
+            )
+            if cached.score < min_score:
+                continue
+            payload = _construction_tender_dict(tender_source, tender)
+            results.append(
+                _match_result_dict(
+                    tender_id=tender.id,
+                    tender_source=tender_source,
+                    tender_payload=payload,
+                    score=cached.score,
+                    reasoning=reasoning,
+                    match_reason=match_reason,
+                    breakdown=api_breakdown,
+                )
+            )
             continue
 
-        if delay > 0:
-            time.sleep(delay)
-
-        try:
-            scored = run_construction_company_scorer(
-                client,
-                company,
-                tender,
-                candidate["tender_source"],
-                candidate["match_reason"],
-            )
-        except Exception as exc:
-            print(
-                f"[AI Matching] Construction scorer failed for company={company.id} "
-                f"tender={candidate['tender_source']}:{candidate['tender_id']}: {exc}"
-            )
-            continue
-
+        scored = score_construction_match(company, tender, tender_source)
         scored_count += 1
-        if scored["score"] < min_score:
-            continue
+        reasoning = build_construction_fallback_explanation(scored.breakdown)
 
-        tender_source = candidate["tender_source"]
         if persist:
             _upsert_tender_match(
                 session,
@@ -1087,10 +1132,14 @@ def _score_construction_tender_matches(
                 company_id=company.id,
                 tender_source=tender_source,
                 tender_id=tender.id,
-                score=scored["score"],
-                reasoning=scored["reasoning"],
+                score=scored.score,
+                reasoning=reasoning,
+                breakdown_json=scored.breakdown_json,
             )
             session.commit()
+
+        if scored.score < min_score:
+            continue
 
         payload = _construction_tender_dict(tender_source, tender)
         results.append(
@@ -1098,14 +1147,14 @@ def _score_construction_tender_matches(
                 tender_id=tender.id,
                 tender_source=tender_source,
                 tender_payload=payload,
-                score=scored["score"],
-                reasoning=scored["reasoning"],
-                match_reason=candidate["match_reason"],
-                breakdown=scored.get("breakdown"),
+                score=scored.score,
+                reasoning=reasoning,
+                match_reason=scored.match_reason,
+                breakdown=scored.api_breakdown,
             )
         )
 
-    return results, len(candidates), scored_count
+    return results, len(catalog), scored_count
 
 
 def run_construction_ai_matching_sync(
@@ -1116,13 +1165,8 @@ def run_construction_ai_matching_sync(
     min_score: int = 65,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
-    """Run matcher + scorer for one construction company and return ranked matches."""
-    api_key = get_anthropic_api_key()
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
-
+    """Run deterministic scoring for one construction company and return ranked matches."""
     tender_limit = max_tenders or _batch_limit("AI_MATCHING_MAX_TENDERS", DEFAULT_MAX_TENDERS)
-    delay = _request_delay()
 
     catalog = _load_construction_tender_catalog(session, tender_limit)
     if not catalog:
@@ -1137,27 +1181,24 @@ def run_construction_ai_matching_sync(
     if company is None:
         raise ValueError(f"Construction company {company_id} not found")
 
-    client = anthropic.Anthropic(api_key=api_key)
     print(
-        f"[AI Matching] Construction sync run for {company.name[:70]} against "
-        f"{len(catalog)} tenders (model={MATCHING_MODEL})"
+        f"[AI Matching] Construction deterministic sync for {company.name[:70]} against "
+        f"{len(catalog)} tenders"
     )
 
-    results, candidates_found, scored_count = _score_construction_tender_matches(
-        client,
+    results, evaluated, scored_count = _score_construction_matches_deterministic(
         session,
         company,
         catalog,
         catalog_by_key,
         persist=True,
         min_score=min_score,
-        delay=delay,
     )
 
     results.sort(key=lambda item: item["score"], reverse=True)
     print(
-        f"[AI Matching] Construction sync complete: {candidates_found} candidates, "
-        f"{scored_count} scored, {len(results)} above min_score={min_score}"
+        f"[AI Matching] Construction sync complete: {evaluated} evaluated, "
+        f"{scored_count} freshly scored, {len(results)} above min_score={min_score}"
     )
     return results[:limit]
 

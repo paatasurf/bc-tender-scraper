@@ -10,6 +10,14 @@ from typing import Any
 from db.models import ArchCompany, ArchTender
 from pipeline.company_intelligence import _parse_value
 from pipeline.scoring.explain import BreakdownFactor, build_reasons
+from pipeline.scoring.match_scoring_common import (
+    _factor_to_json,
+    _normalize_text,
+    _parse_date,
+    _token_set,
+    _tokens_overlap,
+    assert_score_equals_breakdown,
+)
 
 MAX_PROJECT_TYPE = 40
 MAX_SPECIALIZATION = 25
@@ -43,28 +51,6 @@ _BC_REGION_KEYWORDS = (
 )
 
 
-def _normalize_text(value: str | None) -> str:
-    if not value:
-        return ""
-    cleaned = re.sub(r"[^\w\s-]", " ", value.lower())
-    return re.sub(r"\s+", " ", cleaned).strip()
-
-
-def _token_set(value: str | None) -> set[str]:
-    text = _normalize_text(value)
-    if not text:
-        return set()
-    return {t for t in text.split() if len(t) >= 3}
-
-
-def _tokens_overlap(a: str | None, b: str | None) -> bool:
-    left = _token_set(a)
-    right = _token_set(b)
-    if not left or not right:
-        return False
-    return bool(left & right)
-
-
 def _fuzzy_type_match(category: str, type_tags: list[str]) -> str | None:
     """Return first matching company type tag for tender category, if any."""
     cat_norm = _normalize_text(category)
@@ -84,16 +70,6 @@ def _fuzzy_type_match(category: str, type_tags: list[str]) -> str | None:
             best_overlap = overlap
             best = tag
     return best if best_overlap >= 1 else None
-
-
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    cleaned = str(value).replace("/", "-").strip()[:10]
-    try:
-        return datetime.strptime(cleaned, "%Y-%m-%d").date()
-    except ValueError:
-        return None
 
 
 def _tender_location_text(tender: ArchTender) -> str:
@@ -361,14 +337,6 @@ class ScoredArchMatch:
         }
 
 
-def _factor_to_json(factor: BreakdownFactor) -> dict[str, Any]:
-    return {
-        "points": factor.points,
-        "max_points": factor.max_points,
-        "detail": factor.detail,
-    }
-
-
 def to_api_breakdown(factors: list[BreakdownFactor]) -> dict[str, dict[str, Any]]:
     """Map five canonical components to the 7-key API shape for frontend compatibility."""
     by_id = {f.factor: f for f in factors}
@@ -444,9 +412,7 @@ def score_architecture_match(company: ArchCompany, tender: ArchTender) -> Scored
 
     breakdown_json = {f.factor: _factor_to_json(f) for f in factors}
     api_breakdown = to_api_breakdown(factors)
-    api_sum = sum(item["points"] for item in api_breakdown.values())
-    if api_sum != total:
-        raise ValueError(f"API breakdown sum {api_sum} != total {total}")
+    assert_score_equals_breakdown(total, api_breakdown)
 
     return ScoredArchMatch(
         score=total,
