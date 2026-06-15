@@ -349,6 +349,16 @@ def _ensure_tender_matches_table(engine) -> None:
             conn.execute(text(statement))
 
 
+def _migrate_tender_matches_breakdown_json(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE tender_matches "
+                "ADD COLUMN IF NOT EXISTS breakdown_json JSONB"
+            )
+        )
+
+
 def _migrate_tender_matches_company_kind(engine) -> None:
     statements = (
         "ALTER TABLE tender_matches "
@@ -487,6 +497,7 @@ def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
     _migrate_tender_matches_company_kind(engine)
+    _migrate_tender_matches_breakdown_json(engine)
     _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
     _ensure_company_intelligence_columns(engine)

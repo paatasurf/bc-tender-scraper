@@ -1,0 +1,105 @@
+=== CURRENT BRANCH (PARENT) ===
+master
+
+=== CURRENT BRANCH (SUBMODULE) ===
+main
+
+=== FULL GIT STATUS (PARENT) ===
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+  (commit or discard the untracked or modified content in submodules)
+	modified:   .env.example
+	modified:   api/internal.py
+	modified:   api/main.py
+	modified:   db/connection.py
+	modified:   db/models.py
+	modified:   pipeline/internal_steps.py
+	modified:   pipeline/research_arch_websites.py
+	modified:   pipeline/run.py
+	modified:   pipeline/scheduler.py
+	modified:   reddit_signals.csv
+	modified:   scraper/main.py
+	modified:   scraper/runners.py
+	modified:   v0-construction-dashboard (modified content, untracked content)
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	_audit_git.py
+	_audit_git2.py
+	_audit_output.json
+	_audit_output2.json
+	_preserve_audit.txt
+	_sc_audit.json
+	active-company-classification.json
+	classifier-audit-output.json
+	db/import_contract_awards.py
+	db/migrations/002_company_award_columns.sql
+	news_signals.csv
+	pipeline/company_matching.py
+	pipeline/import_contract_awards.py
+	pipeline/populate_companies_from_awards.py
+	pipeline/refresh_company_award_stats.py
+	run_award_company_phase_c.py
+	run_contract_awards.py
+	run_populate_award_companies.py
+
+no changes added to commit (use "git add" and/or "git commit -a")
+
+=== STAGED FILES (PARENT) ===
+(none)
+
+=== MODIFIED FILES (PARENT) ===
+.env.example
+api/internal.py
+api/main.py
+db/connection.py
+db/models.py
+pipeline/internal_steps.py
+pipeline/research_arch_websites.py
+pipeline/run.py
+pipeline/scheduler.py
+reddit_signals.csv
+scraper/main.py
+scraper/runners.py
+v0-construction-dashboard (modified content, untracked content)
+
+=== UNTRACKED FILES (PARENT) ===
+
+=== FULL GIT STATUS (SUBMODULE) ===
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/api/contract-awards/route.ts
+	modified:   components/company-intelligence-dashboard.tsx
+	modified:   lib/api.ts
+	modified:   lib/types.ts
+	modified:   next-env.d.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	scripts/_probe-sources.mjs
+	scripts/audit-active-companies.mjs
+	scripts/audit-company-activity.mjs
+	scripts/audit-contractor-classification.mjs
+	scripts/audit-unknown-companies.mjs
+	scripts/classify-active-companies.mjs
+	scripts/classify-v1-snapshot.mjs
+	scripts/estimate-acquisition-sources.mjs
+	scripts/market-map-active-companies.mjs
+	scripts/rank-unknown-companies.mjs
+	scripts/reclassify-unknown-comparison.mjs
+	scripts/source-overlap-analysis.mjs
+	scripts/verify-construction-ai.mjs
+	tsconfig.tsbuildinfo
+
+no changes added to commit (use "git add" and/or "git commit -a")
+
+=== STAGED FILES (SUBMODULE) ===
+(none)

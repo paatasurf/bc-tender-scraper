@@ -1,4 +1,4 @@
-from __future__ import annotations
+get_companies
 
 import config.env  # noqa: F401  # load env before pipeline imports
 
@@ -30,7 +30,6 @@ from db.models import (
     RedditSignal,
     Tender,
 )
-from api.chat import router as chat_router
 from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
@@ -70,7 +69,6 @@ app.add_middleware(
 )
 
 app.include_router(internal_router)
-app.include_router(chat_router, prefix="/api", tags=["chat"])
 
 
 @app.exception_handler(OperationalError)
@@ -853,10 +851,12 @@ def trigger_ai_matching(
     background_tasks: BackgroundTasks,
     body: AIMatchingRequest | None = None,
 ) -> dict[str, Any]:
-    if not get_anthropic_api_key():
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
-
     request = body or AIMatchingRequest()
+    kind = (request.kind or "architecture").strip().lower()
+    architecture_sync = request.sync and kind == "architecture"
+
+    if not architecture_sync and not get_anthropic_api_key():
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
 
     if request.sync:
         if request.company_id is None:
@@ -867,7 +867,6 @@ def trigger_ai_matching(
 
         from pipeline.ai_matching import run_unified_ai_matching_sync
 
-        kind = (request.kind or "architecture").strip().lower()
         if kind not in {"architecture", "construction"}:
             raise HTTPException(
                 status_code=400,

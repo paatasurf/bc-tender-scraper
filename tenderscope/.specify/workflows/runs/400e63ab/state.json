@@ -1,0 +1,31 @@
+{
+  "run_id": "400e63ab",
+  "workflow_id": "speckit",
+  "status": "failed",
+  "current_step_index": 0,
+  "current_step_id": "specify",
+  "step_results": {
+    "specify": {
+      "integration": "cursor",
+      "model": null,
+      "options": {},
+      "input": {
+        "args": "TenderScope BC construction market intelligence platform"
+      },
+      "output": {
+        "command": "speckit.specify",
+        "integration": "cursor",
+        "model": null,
+        "options": {},
+        "input": {
+          "args": "TenderScope BC construction market intelligence platform"
+        },
+        "exit_code": 1,
+        "dispatched": false
+      },
+      "status": "failed"
+    }
+  },
+  "created_at": "2026-06-15T04:22:09.852107+00:00",
+  "updated_at": "2026-06-15T04:22:09.868929+00:00"
+}

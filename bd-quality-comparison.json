@@ -1,0 +1,181 @@
+{
+  "v2_summary": {
+    "label": "business_fit_v1",
+    "companies": 20,
+    "avg_total_shown": 1.8,
+    "avg_active_shown": 0.2,
+    "companies_with_zero": 11,
+    "companies_with_active": 1,
+    "companies_over_20": 0,
+    "max_shown": 11
+  },
+  "baseline_summary": {
+    "label": "phase1_keyword",
+    "avg_total_shown": 91.0,
+    "avg_active_shown": 3.5,
+    "companies_with_zero": 5,
+    "companies_over_20": 13
+  },
+  "per_company": [
+    {
+      "company_id": 165,
+      "baseline_shown": 75,
+      "v2_shown": 1,
+      "baseline_active_top10": 10,
+      "v2_active": 0,
+      "delta_shown": -74
+    },
+    {
+      "company_id": 6999,
+      "baseline_shown": 264,
+      "v2_shown": 0,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": -264
+    },
+    {
+      "company_id": 22,
+      "baseline_shown": 0,
+      "v2_shown": 0,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": 0
+    },
+    {
+      "company_id": 670,
+      "baseline_shown": 72,
+      "v2_shown": 4,
+      "baseline_active_top10": 10,
+      "v2_active": 0,
+      "delta_shown": -68
+    },
+    {
+      "company_id": 9444,
+      "baseline_shown": 78,
+      "v2_shown": 2,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": -76
+    },
+    {
+      "company_id": 4443,
+      "baseline_shown": 78,
+      "v2_shown": 2,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": -76
+    },
+    {
+      "company_id": 207,
+      "baseline_shown": 3,
+      "v2_shown": 0,
+      "baseline_active_top10": 3,
+      "v2_active": 0,
+      "delta_shown": -3
+    },
+    {
+      "company_id": 1310,
+      "baseline_shown": 4,
+      "v2_shown": 1,
+      "baseline_active_top10": 3,
+      "v2_active": 0,
+      "delta_shown": -3
+    },
+    {
+      "company_id": 839,
+      "baseline_shown": 69,
+      "v2_shown": 0,
+      "baseline_active_top10": 10,
+      "v2_active": 0,
+      "delta_shown": -69
+    },
+    {
+      "company_id": 2951,
+      "baseline_shown": 68,
+      "v2_shown": 0,
+      "baseline_active_top10": 10,
+      "v2_active": 0,
+      "delta_shown": -68
+    },
+    {
+      "company_id": 126,
+      "baseline_shown": 0,
+      "v2_shown": 0,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": 0
+    },
+    {
+      "company_id": 2,
+      "baseline_shown": 0,
+      "v2_shown": 0,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": 0
+    },
+    {
+      "company_id": 9,
+      "baseline_shown": 0,
+      "v2_shown": 0,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": 0
+    },
+    {
+      "company_id": 6,
+      "baseline_shown": 0,
+      "v2_shown": 0,
+      "baseline_active_top10": 0,
+      "v2_active": 0,
+      "delta_shown": 0
+    },
+    {
+      "company_id": 1735,
+      "baseline_shown": 204,
+      "v2_shown": 7,
+      "baseline_active_top10": 1,
+      "v2_active": 0,
+      "delta_shown": -197
+    },
+    {
+      "company_id": 2539,
+      "baseline_shown": 31,
+      "v2_shown": 5,
+      "baseline_active_top10": 2,
+      "v2_active": 0,
+      "delta_shown": -26
+    },
+    {
+      "company_id": 2070,
+      "baseline_shown": 230,
+      "v2_shown": 11,
+      "baseline_active_top10": 2,
+      "v2_active": 4,
+      "delta_shown": -219
+    },
+    {
+      "company_id": 134107,
+      "baseline_shown": 231,
+      "v2_shown": 0,
+      "baseline_active_top10": 10,
+      "v2_active": 0,
+      "delta_shown": -231
+    },
+    {
+      "company_id": 4060,
+      "baseline_shown": 206,
+      "v2_shown": 0,
+      "baseline_active_top10": 2,
+      "v2_active": 0,
+      "delta_shown": -206
+    },
+    {
+      "company_id": 370,
+      "baseline_shown": 208,
+      "v2_shown": 2,
+      "baseline_active_top10": 6,
+      "v2_active": 0,
+      "delta_shown": -206
+    }
+  ]
+}

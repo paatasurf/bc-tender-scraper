@@ -22,6 +22,14 @@ from db.models import (
 )
 from pipeline.arch_company_intelligence import _arch_company_profile_lines
 from pipeline.company_intelligence import _company_profile_lines, _extract_json, _tender_lines
+from pipeline.scoring.arch_match_scoring import (
+    ScoredArchMatch,
+    breakdown_json_to_api_breakdown,
+    build_fallback_explanation,
+    build_match_reason,
+    score_architecture_match,
+)
+from pipeline.scoring.explain import BreakdownFactor
 
 ConstructionTender = Tender | CommercialTender
 CatalogEntry = tuple[str, ArchTender | ConstructionTender]
@@ -76,6 +84,52 @@ def _tender_catalog_json(tenders: list[ArchTender]) -> str:
         for tender in tenders
     ]
     return json.dumps(payload, indent=2)
+
+
+def _call_claude_text(client: anthropic.Anthropic, prompt: str, *, max_tokens: int = 300) -> str:
+    response = client.messages.create(
+        model=MATCHING_MODEL,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text_blocks = [block.text for block in response.content if block.type == "text"]
+    if not text_blocks:
+        raise ValueError("Claude returned no text content")
+    return text_blocks[0].strip()
+
+
+def build_arch_match_fallback_explanation(factors: list[BreakdownFactor]) -> str:
+    return build_fallback_explanation(factors)
+
+
+def generate_arch_match_explanation(
+    client: anthropic.Anthropic,
+    company: ArchCompany,
+    tender: ArchTender,
+    factors: list[BreakdownFactor],
+) -> str:
+    """Claude text-only narrative from pre-computed breakdown (no scores in output)."""
+    breakdown_lines = "\n".join(
+        f"- {factor.label}: {factor.detail}"
+        for factor in factors
+        if factor.points > 0
+    ) or "- Limited alignment across scoring factors"
+    prompt = f"""You are a BC architecture market intelligence assistant.
+
+Write 2-3 sentences explaining why this architecture firm may or may not be a good fit for this tender.
+Use ONLY the qualitative factor descriptions below. Do NOT include any numbers, scores, percentages, or rankings.
+
+FIRM: {company.name}
+TENDER: {tender.title}
+ISSUER: {tender.company or 'Unknown'}
+CATEGORY: {tender.category or 'Unknown'}
+
+SCORING FACTORS (qualitative only):
+{breakdown_lines}
+
+Respond with plain text only — no JSON, no bullet lists, no numeric scores."""
+
+    return _call_claude_text(client, prompt, max_tokens=300)
 
 
 def _call_claude(client: anthropic.Anthropic, prompt: str, *, max_tokens: int = 800) -> dict[str, Any]:
@@ -553,25 +607,169 @@ def _upsert_tender_match(
     tender_id: int,
     score: int,
     reasoning: str,
+    breakdown_json: dict[str, Any] | None = None,
 ) -> None:
     table = TenderMatch.__table__
-    stmt = insert(table).values(
-        company_kind=company_kind,
-        company_id=company_id,
-        tender_source=tender_source,
-        tender_id=tender_id,
-        score=score,
-        reasoning=reasoning[:4000],
-    )
+    values: dict[str, Any] = {
+        "company_kind": company_kind,
+        "company_id": company_id,
+        "tender_source": tender_source,
+        "tender_id": tender_id,
+        "score": score,
+        "reasoning": reasoning[:4000],
+    }
+    if breakdown_json is not None:
+        values["breakdown_json"] = breakdown_json
+
+    stmt = insert(table).values(**values)
+    update_set: dict[str, Any] = {
+        "score": stmt.excluded.score,
+        "reasoning": stmt.excluded.reasoning,
+        "created_at": func.now(),
+    }
+    if breakdown_json is not None:
+        update_set["breakdown_json"] = stmt.excluded.breakdown_json
+
     stmt = stmt.on_conflict_do_update(
         index_elements=["company_kind", "company_id", "tender_source", "tender_id"],
-        set_={
-            "score": stmt.excluded.score,
-            "reasoning": stmt.excluded.reasoning,
-            "created_at": func.now(),
-        },
+        set_=update_set,
     )
     session.execute(stmt)
+
+
+def _resolve_architecture_explanation(
+    client: anthropic.Anthropic | None,
+    company: ArchCompany,
+    tender: ArchTender,
+    scored: ScoredArchMatch,
+) -> str:
+    if client is None:
+        return build_arch_match_fallback_explanation(scored.breakdown)
+    try:
+        return generate_arch_match_explanation(client, company, tender, scored.breakdown)
+    except Exception as exc:
+        print(
+            f"[AI Matching] Explanation failed for company={company.id} tender={tender.id}: {exc}"
+        )
+        return build_arch_match_fallback_explanation(scored.breakdown)
+
+
+def _score_architecture_matches_deterministic(
+    session: Session,
+    company: ArchCompany,
+    tenders: list[ArchTender],
+    *,
+    client: anthropic.Anthropic | None,
+    persist: bool,
+    min_score: int,
+    delay: float,
+    max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Deterministic architecture scoring for sync path. Returns (results, evaluated, scored)."""
+    results: list[dict[str, Any]] = []
+    scored_count = 0
+    api_calls = 0
+
+    for tender in tenders:
+        cached = get_fresh_cached_match(
+            session,
+            company_kind="architecture",
+            company_id=company.id,
+            tender_source="arch",
+            tender_id=tender.id,
+            max_age_hours=max_age_hours,
+        )
+        if cached is not None:
+            api_breakdown = breakdown_json_to_api_breakdown(cached.breakdown_json)
+            cached_factors = [
+                BreakdownFactor(
+                    factor=key,
+                    label=key.replace("_", " ").title(),
+                    points=int((cached.breakdown_json or {}).get(key, {}).get("points", 0)),
+                    max_points=int((cached.breakdown_json or {}).get(key, {}).get("max_points", 0)),
+                    detail=str((cached.breakdown_json or {}).get(key, {}).get("detail", "")),
+                )
+                for key in ("project_type", "specialization", "region", "value_fit", "freshness")
+                if cached.breakdown_json and key in cached.breakdown_json
+            ]
+            reasoning = (cached.reasoning or "").strip()
+            if not reasoning:
+                reasoning = build_arch_match_fallback_explanation(cached_factors)
+            match_reason = (
+                build_match_reason(cached_factors)
+                if cached_factors
+                else "Cached architecture match"
+            )
+            payload = _arch_tender_dict(tender)
+            payload["tender_source"] = "arch"
+            if cached.score < min_score:
+                continue
+            results.append(
+                _match_result_dict(
+                    tender_id=tender.id,
+                    tender_source="arch",
+                    tender_payload=payload,
+                    score=cached.score,
+                    reasoning=reasoning,
+                    match_reason=match_reason,
+                    breakdown=api_breakdown,
+                )
+            )
+            continue
+
+        scored = score_architecture_match(company, tender)
+        scored_count += 1
+
+        if api_calls > 0 and delay > 0:
+            time.sleep(delay)
+
+        reasoning = _resolve_architecture_explanation(client, company, tender, scored)
+        if client is not None:
+            api_calls += 1
+
+        if scored.score < min_score:
+            if persist:
+                _upsert_tender_match(
+                    session,
+                    company_kind="architecture",
+                    company_id=company.id,
+                    tender_source="arch",
+                    tender_id=tender.id,
+                    score=scored.score,
+                    reasoning=reasoning,
+                    breakdown_json=scored.breakdown_json,
+                )
+                session.commit()
+            continue
+
+        if persist:
+            _upsert_tender_match(
+                session,
+                company_kind="architecture",
+                company_id=company.id,
+                tender_source="arch",
+                tender_id=tender.id,
+                score=scored.score,
+                reasoning=reasoning,
+                breakdown_json=scored.breakdown_json,
+            )
+            session.commit()
+
+        payload = _arch_tender_dict(tender)
+        payload["tender_source"] = "arch"
+        results.append(
+            _match_result_dict(
+                tender_id=tender.id,
+                tender_source="arch",
+                tender_payload=payload,
+                score=scored.score,
+                reasoning=reasoning,
+                match_reason=scored.match_reason,
+                breakdown=scored.api_breakdown,
+            )
+        )
+
+    return results, len(tenders), scored_count
 
 
 def _score_company_tender_matches(
@@ -972,10 +1170,11 @@ def run_ai_matching_sync(
     min_score: int = 65,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
-    """Run matcher + scorer for one architecture firm and return ranked matches."""
+    """Run deterministic scoring for one architecture firm and return ranked matches."""
     api_key = get_anthropic_api_key()
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+    client: anthropic.Anthropic | None = None
+    if api_key:
+        client = anthropic.Anthropic(api_key=api_key)
 
     tender_limit = max_tenders or _batch_limit("AI_MATCHING_MAX_TENDERS", DEFAULT_MAX_TENDERS)
     delay = _request_delay()
@@ -988,25 +1187,21 @@ def run_ai_matching_sync(
     if not tenders:
         return []
 
-    tender_by_id = {tender.id: tender for tender in tenders}
     company = session.scalars(
         select(ArchCompany).where(ArchCompany.id == company_id)
     ).first()
     if company is None:
         raise ValueError(f"Architecture company {company_id} not found")
 
-    client = anthropic.Anthropic(api_key=api_key)
     print(
-        f"[AI Matching] Sync run for {company.name[:70]} against {len(tenders)} tenders "
-        f"(model={MATCHING_MODEL})"
+        f"[AI Matching] Deterministic sync for {company.name[:70]} against {len(tenders)} tenders"
     )
 
-    results, candidates_found, scored_count = _score_company_tender_matches(
-        client,
+    results, evaluated, scored_count = _score_architecture_matches_deterministic(
         session,
         company,
         tenders,
-        tender_by_id,
+        client=client,
         persist=True,
         min_score=min_score,
         delay=delay,
@@ -1014,8 +1209,8 @@ def run_ai_matching_sync(
 
     results.sort(key=lambda item: item["score"], reverse=True)
     print(
-        f"[AI Matching] Sync complete: {candidates_found} candidates, "
-        f"{scored_count} scored, {len(results)} above min_score={min_score}"
+        f"[AI Matching] Deterministic sync complete: {evaluated} evaluated, "
+        f"{scored_count} freshly scored, {len(results)} above min_score={min_score}"
     )
     return results[:limit]
 

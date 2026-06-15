@@ -1,0 +1,523 @@
+{
+  "per_company": [
+    {
+      "company_id": 165,
+      "category": "General Contractor",
+      "before_total": 1,
+      "after_total": 4,
+      "before_active": 0,
+      "after_active": 3,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 4,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2605017:",
+        "federal_tender:2:Stage 2 - Snowshed Rehabilitation, Glacier National Park",
+        "federal_tender:40:EZ899-270166 Catenary Lighting Upgrade to LED",
+        "federal_tender:5:EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades"
+      ],
+      "final_recommendation_count": 4,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 3,
+        "90+": 1,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 6999,
+      "category": "General Contractor",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 22,
+      "category": "General Contractor",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 670,
+      "category": "General Contractor",
+      "before_total": 4,
+      "after_total": 7,
+      "before_active": 0,
+      "after_active": 3,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 7,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2605018:",
+        "building_permit:2605019:",
+        "building_permit:2605020:",
+        "building_permit:2605021:",
+        "federal_tender:2:Stage 2 - Snowshed Rehabilitation, Glacier National Park"
+      ],
+      "final_recommendation_count": 7,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 3,
+        "90+": 4,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 9444,
+      "category": "Concrete Contractor",
+      "before_total": 2,
+      "after_total": 2,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 2,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2604860:",
+        "building_permit:2604861:"
+      ],
+      "final_recommendation_count": 2,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 1,
+        "90+": 1,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 4443,
+      "category": "Concrete Contractor",
+      "before_total": 2,
+      "after_total": 2,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 2,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2604860:",
+        "building_permit:2604861:"
+      ],
+      "final_recommendation_count": 2,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 1,
+        "90+": 1,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 207,
+      "category": "Electrical Contractor",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 1310,
+      "category": "Electrical Contractor",
+      "before_total": 1,
+      "after_total": 5,
+      "before_active": 0,
+      "after_active": 2,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 3,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2604954:",
+        "commercial_rfp:41:Roof, Envelope, Electrical and Mechanical Renewals Boundary Lodge. ITT 1070-2627",
+        "federal_tender:40:EZ899-270166 Catenary Lighting Upgrade to LED"
+      ],
+      "final_recommendation_count": 5,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 4,
+        "80-89": 1,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 839,
+      "category": "Mechanical Contractor",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 2951,
+      "category": "Mechanical Contractor",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 126,
+      "category": "Architecture Firm",
+      "before_total": 0,
+      "after_total": 4,
+      "before_active": 0,
+      "after_active": 4,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 4,
+      "fp_titles": [],
+      "fn_titles": [
+        "design_rfp:19:RFQ Mechanical Engineering Service",
+        "design_rfp:24:EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC an",
+        "design_rfp:30:Project Delivery Support Services Fraser River Tunnel Project Request for Propos",
+        "design_rfp:5:Fish and Wildlife Habitat Restoration Services Pre-RFP Release Notice"
+      ],
+      "final_recommendation_count": 4,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 4,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 2,
+      "category": "Architecture Firm",
+      "before_total": 0,
+      "after_total": 4,
+      "before_active": 0,
+      "after_active": 4,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 4,
+      "fp_titles": [],
+      "fn_titles": [
+        "design_rfp:19:RFQ Mechanical Engineering Service",
+        "design_rfp:24:EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC an",
+        "design_rfp:30:Project Delivery Support Services Fraser River Tunnel Project Request for Propos",
+        "design_rfp:5:Fish and Wildlife Habitat Restoration Services Pre-RFP Release Notice"
+      ],
+      "final_recommendation_count": 4,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 4,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 9,
+      "category": "Architecture Firm",
+      "before_total": 0,
+      "after_total": 4,
+      "before_active": 0,
+      "after_active": 4,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 4,
+      "fp_titles": [],
+      "fn_titles": [
+        "design_rfp:19:RFQ Mechanical Engineering Service",
+        "design_rfp:24:EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC an",
+        "design_rfp:30:Project Delivery Support Services Fraser River Tunnel Project Request for Propos",
+        "design_rfp:5:Fish and Wildlife Habitat Restoration Services Pre-RFP Release Notice"
+      ],
+      "final_recommendation_count": 4,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 4,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 6,
+      "category": "Architecture Firm",
+      "before_total": 0,
+      "after_total": 4,
+      "before_active": 0,
+      "after_active": 4,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 4,
+      "fp_titles": [],
+      "fn_titles": [
+        "design_rfp:19:RFQ Mechanical Engineering Service",
+        "design_rfp:24:EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC an",
+        "design_rfp:30:Project Delivery Support Services Fraser River Tunnel Project Request for Propos",
+        "design_rfp:5:Fish and Wildlife Habitat Restoration Services Pre-RFP Release Notice"
+      ],
+      "final_recommendation_count": 4,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 4,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 1735,
+      "category": "Engineering Consultant",
+      "before_total": 7,
+      "after_total": 7,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 7,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2604578:",
+        "building_permit:2604581:",
+        "building_permit:2604922:",
+        "contract_award:3424:Consultant for Marpole CC Passive House Certification",
+        "contract_award:4315:Consultant for Sunset Passive House Certifier"
+      ],
+      "final_recommendation_count": 7,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 4,
+        "80-89": 1,
+        "90+": 2,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 2539,
+      "category": "Engineering Consultant",
+      "before_total": 5,
+      "after_total": 9,
+      "before_active": 0,
+      "after_active": 4,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 9,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2604952:",
+        "building_permit:2604953:",
+        "building_permit:2604955:",
+        "building_permit:2604956:",
+        "building_permit:2604957:"
+      ],
+      "final_recommendation_count": 9,
+      "bps_distribution": {
+        "65-69": 3,
+        "70-79": 0,
+        "80-89": 1,
+        "90+": 5,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 2070,
+      "category": "Engineering Consultant",
+      "before_total": 11,
+      "after_total": 3,
+      "before_active": 4,
+      "after_active": 2,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 3,
+      "fp_titles": [],
+      "fn_titles": [
+        "commercial_rfp:104:1070-2526-1066 - Construction Management Services - 2nd Stage Women's & Long-Ter",
+        "federal_tender:4:EZ899-270045 - RCMP - Boat House Roof Remediation - Masset, BC",
+        "repeat_client::"
+      ],
+      "final_recommendation_count": 3,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 2,
+        "80-89": 1,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 134107,
+      "category": "Engineering Consultant",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 4060,
+      "category": "Engineering Consultant",
+      "before_total": 0,
+      "after_total": 0,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 0,
+      "fp_titles": [],
+      "fn_titles": [],
+      "final_recommendation_count": 0,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 0,
+        "<65": 0
+      }
+    },
+    {
+      "company_id": 370,
+      "category": "General Contractor",
+      "before_total": 2,
+      "after_total": 2,
+      "before_active": 0,
+      "after_active": 0,
+      "false_positives_removed": 0,
+      "false_negatives_recovered": 2,
+      "fp_titles": [],
+      "fn_titles": [
+        "building_permit:2604654:",
+        "building_permit:2604655:"
+      ],
+      "final_recommendation_count": 2,
+      "bps_distribution": {
+        "65-69": 0,
+        "70-79": 0,
+        "80-89": 0,
+        "90+": 2,
+        "<65": 0
+      }
+    }
+  ],
+  "totals": {
+    "false_positives_removed": 0,
+    "false_negatives_recovered": 55
+  },
+  "before_summary": {
+    "label": "before",
+    "companies": 20,
+    "avg_total_shown": 1.8,
+    "avg_active_shown": 0.2,
+    "companies_with_zero": 11,
+    "companies_with_active": 1,
+    "companies_over_20": 0,
+    "max_shown": 11,
+    "avg_bps": 0,
+    "bps_distribution": {
+      "65-69": 0,
+      "70-79": 0,
+      "80-89": 0,
+      "90+": 0,
+      "<65": 0
+    }
+  },
+  "after_summary": {
+    "label": "after",
+    "companies": 20,
+    "avg_total_shown": 2.9,
+    "avg_active_shown": 1.5,
+    "companies_with_zero": 7,
+    "companies_with_active": 9,
+    "companies_over_20": 0,
+    "max_shown": 9,
+    "avg_bps": 81.2,
+    "bps_distribution": {
+      "65-69": 3,
+      "70-79": 26,
+      "80-89": 12,
+      "90+": 16,
+      "<65": 0
+    }
+  },
+  "phase1_keyword_summary": {
+    "label": "phase1_keyword",
+    "companies": 20,
+    "avg_total_shown": 91.0,
+    "avg_active_shown": 3.5,
+    "companies_with_zero": 5,
+    "companies_with_active": 12,
+    "companies_over_20": 13,
+    "max_shown": 264,
+    "avg_bps": 0,
+    "bps_distribution": {
+      "65-69": 0,
+      "70-79": 0,
+      "80-89": 0,
+      "90+": 0,
+      "<65": 0
+    }
+  },
+  "detail_examples_count": 10
+}

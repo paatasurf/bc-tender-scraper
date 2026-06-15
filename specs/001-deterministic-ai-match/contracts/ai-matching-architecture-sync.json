@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "POST /api/ai-matching — Architecture Sync Response",
+  "description": "Contract for kind=architecture, sync=true. Extends existing response; breakdown keys mapped for frontend compatibility.",
+  "type": "object",
+  "required": ["status", "kind", "company_id", "min_score", "limit", "matches"],
+  "properties": {
+    "status": { "const": "complete" },
+    "kind": { "const": "architecture" },
+    "company_id": { "type": "integer" },
+    "min_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "limit": { "type": "integer", "minimum": 1 },
+    "matches": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ArchitectureMatch" }
+    }
+  },
+  "$defs": {
+    "BreakdownItem": {
+      "type": "object",
+      "required": ["points", "detail"],
+      "properties": {
+        "points": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string" }
+      }
+    },
+    "MatchBreakdown": {
+      "type": "object",
+      "required": [
+        "keywords",
+        "category",
+        "specialization",
+        "location",
+        "value",
+        "reliability",
+        "freshness"
+      ],
+      "properties": {
+        "keywords": { "$ref": "#/$defs/BreakdownItem", "description": "Always 0 for architecture v1" },
+        "category": { "$ref": "#/$defs/BreakdownItem", "description": "Project type experience (max 40)" },
+        "specialization": { "$ref": "#/$defs/BreakdownItem", "description": "Specialization match (max 25)" },
+        "location": { "$ref": "#/$defs/BreakdownItem", "description": "Region match (max 15)" },
+        "value": { "$ref": "#/$defs/BreakdownItem", "description": "Value fit (max 10)" },
+        "reliability": { "$ref": "#/$defs/BreakdownItem", "description": "Always 0 for architecture v1" },
+        "freshness": { "$ref": "#/$defs/BreakdownItem", "description": "Deadline freshness (max 10)" }
+      }
+    },
+    "ArchitectureMatch": {
+      "type": "object",
+      "required": [
+        "tender_id",
+        "tender_source",
+        "score",
+        "reasoning",
+        "match_reason",
+        "breakdown",
+        "tender"
+      ],
+      "properties": {
+        "tender_id": { "type": "integer" },
+        "tender_source": { "const": "arch" },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "MUST equal sum of breakdown.*.points"
+        },
+        "reasoning": { "type": "string" },
+        "match_reason": { "type": "string" },
+        "breakdown": { "$ref": "#/$defs/MatchBreakdown" },
+        "tender": {
+          "type": "object",
+          "required": ["id", "title", "company", "value", "deadline", "category", "url", "tender_source"],
+          "properties": {
+            "id": { "type": "integer" },
+            "title": { "type": "string" },
+            "company": { "type": "string" },
+            "value": { "type": "string" },
+            "deadline": { "type": "string" },
+            "status": { "type": "string" },
+            "category": { "type": "string" },
+            "url": { "type": "string" },
+            "tender_id": { "type": "string" },
+            "ai_budget_estimate": { "type": "string" },
+            "tender_source": { "const": "arch" }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "status": "complete",
+      "kind": "architecture",
+      "company_id": 42,
+      "min_score": 65,
+      "limit": 5,
+      "matches": [
+        {
+          "tender_id": 101,
+          "tender_source": "arch",
+          "score": 85,
+          "reasoning": "Strong residential portfolio and Vancouver service area alignment make this a compelling fit.",
+          "match_reason": "Project type experience; Region match",
+          "breakdown": {
+            "keywords": { "points": 0, "detail": "Included in project type score" },
+            "category": { "points": 40, "detail": "18 residential projects in portfolio" },
+            "specialization": { "points": 25, "detail": "Category matches website specializations" },
+            "location": { "points": 15, "detail": "Tender in Vancouver; firm serves Vancouver" },
+            "value": { "points": 5, "detail": "Tender value within 2× of typical project size" },
+            "reliability": { "points": 0, "detail": "Not used for architecture matching" },
+            "freshness": { "points": 0, "detail": "Deadline expired" }
+          },
+          "tender": {
+            "id": 101,
+            "title": "Residential Design Services — Vancouver",
+            "company": "City of Vancouver",
+            "value": "$1,800,000",
+            "deadline": "2026-03-01",
+            "category": "Residential Architecture",
+            "url": "https://example.com/tender/101",
+            "tender_source": "arch"
+          }
+        }
+      ]
+    }
+  ]
+}

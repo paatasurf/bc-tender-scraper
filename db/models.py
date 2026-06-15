@@ -238,6 +238,7 @@ class TenderMatch(Base):
     tender_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reasoning: Mapped[str] = mapped_column(Text, default="")
+    breakdown_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

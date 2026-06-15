@@ -1,0 +1,19 @@
+---
+alwaysApply: true
+---
+
+<!-- SPECKIT START -->
+TenderScope — BC construction market intelligence SaaS.
+
+Stack: Python/FastAPI/PostgreSQL (Railway), React (Vercel).
+
+Constitution (`.specify/memory/constitution.md` v1.0.0) — non-negotiable:
+1. Transparent scoring: Total Score = sum of weighted components (exposed in API/UI)
+2. Claude API: human-readable text only — never scores or numbers
+3. Location matching: city/region level only — never street address
+4. API: consistent JSON response structures across all endpoints
+5. Scoring logic: Python only — not in prompts or frontend
+
+Active plan: `specs/001-deterministic-ai-match/plan.md`
+Spec: `specs/001-deterministic-ai-match/spec.md`
+<!-- SPECKIT END -->

@@ -1,0 +1,4 @@
+{"event": "step_started", "step_id": "specify", "type": "command", "timestamp": "2026-06-15T04:29:04.493773+00:00"}
+{"event": "step_completed", "step_id": "specify", "status": "failed", "timestamp": "2026-06-15T04:29:04.506709+00:00"}
+{"event": "step_failed", "step_id": "specify", "error": "Cannot dispatch command 'speckit.specify': integration 'cursor-agent' CLI not found or not installed. Install the CLI tool or check 'specify integration list'.", "timestamp": "2026-06-15T04:29:04.507707+00:00"}
+{"event": "workflow_finished", "status": "failed", "timestamp": "2026-06-15T04:29:04.510225+00:00"}

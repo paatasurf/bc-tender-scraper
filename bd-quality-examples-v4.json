@@ -1,0 +1,1495 @@
+[
+  {
+    "company_id": 165,
+    "category": "General Contractor",
+    "company_intelligence_profile": {
+      "primary_trade": "general_building",
+      "secondary_trades": [
+        "electrical",
+        "hvac",
+        "plumbing",
+        "roofing"
+      ],
+      "trade_tags": [
+        "general_building",
+        "electrical",
+        "hvac",
+        "plumbing",
+        "roofing"
+      ],
+      "trade_confidence": 0.85,
+      "specialization_confidence": 0.85,
+      "company_type": "General Contractor",
+      "entity_class": "contractor",
+      "dominant_sector": "commercial",
+      "sector_focus": {
+        "commercial": 1.0
+      },
+      "work_orientation": "construction",
+      "geographic_reach": "local",
+      "avg_project_value": 90046.0,
+      "avg_award_value": 90046.0,
+      "value_range": {
+        "p25": 12000.0,
+        "median": 90046.0,
+        "p75": 116577.58,
+        "max": 221312.0
+      },
+      "market_segments": [],
+      "service_cities": [
+        "1550 Hartley Ave #108",
+        "Coquitlam",
+        "BC V3K 7A1"
+      ],
+      "project_types": [
+        "renovation_commercial"
+      ],
+      "delivery_types": [
+        "design",
+        "renovation"
+      ],
+      "project_clusters": [
+        {
+          "delivery": "renovation",
+          "sector": "commercial",
+          "geo": "Vancouver",
+          "count": 5,
+          "share": 1.0,
+          "avg_value": 85371.6
+        }
+      ],
+      "profile_completeness": 0.83,
+      "own_permit_count": 186,
+      "award_count": 0,
+      "growth_direction": []
+    },
+    "top_recommendations": [
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 92,
+        "reasons": [
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "active_opportunities",
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "organization": "Department of Public Works and Government Services (PSPC)",
+        "bps": 90,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "active_opportunities",
+        "title": "Stage 2 - Snowshed Rehabilitation, Glacier National Park",
+        "organization": "Parks Canada Agency (PC)",
+        "bps": 90,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "active_opportunities",
+        "title": "EZ899-270189 Lower Liard River Bridge Stringer Repairs",
+        "organization": "Department of Public Works and Government Services (PSPC)",
+        "bps": 74,
+        "reasons": [
+          "Business Fit",
+          "Sector Fit",
+          "Project Type Fit",
+          "Geography Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "active_opportunities",
+        "title": "1070-2526-1066 - Construction Management Services - 2nd Stage Women's & Long-Term Housing with preloading Scope Location: Interior | Posted: 42 days ago",
+        "organization": "BC Housing",
+        "bps": 73,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Steveston Paramount Maintenance Dredging Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 6,
+      "active": 5,
+      "pipeline": 1,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 207,
+    "category": "Electrical Contractor",
+    "company_intelligence_profile": {
+      "primary_trade": "electrical",
+      "secondary_trades": [
+        "general_building"
+      ],
+      "trade_tags": [
+        "electrical",
+        "general_building"
+      ],
+      "trade_confidence": 0.62,
+      "specialization_confidence": 0.62,
+      "company_type": "Trade Contractor",
+      "entity_class": "contractor",
+      "dominant_sector": "commercial",
+      "sector_focus": {},
+      "work_orientation": "construction",
+      "geographic_reach": "local",
+      "avg_project_value": 5582.79,
+      "avg_award_value": 5582.79,
+      "value_range": {
+        "p25": 5582.79,
+        "median": 5582.79,
+        "p75": 5582.79,
+        "max": 5582.79
+      },
+      "market_segments": [],
+      "service_cities": [],
+      "project_types": [
+        "renovation_commercial"
+      ],
+      "delivery_types": [],
+      "project_clusters": [],
+      "profile_completeness": 0.83,
+      "own_permit_count": 122,
+      "award_count": 0,
+      "growth_direction": []
+    },
+    "top_recommendations": [
+      {
+        "section": "active_opportunities",
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "organization": "Department of Public Works and Government Services (PSPC)",
+        "bps": 70,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Geography Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "active_opportunities",
+        "title": "Roof, Envelope, Electrical and Mechanical Renewals Boundary Lodge. ITT 1070-2627-068 Location: Grand Forks | Posted: 26 days ago",
+        "organization": "BC Housing",
+        "bps": 67,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "FEDERAL_GEO_MISMATCH",
+        "rejection_detail": "Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "Steveston Paramount Maintenance Dredging Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 2,
+      "active": 2,
+      "pipeline": 0,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 126,
+    "category": "Architecture Firm",
+    "company_intelligence_profile": {
+      "primary_trade": "architecture",
+      "secondary_trades": [
+        "consulting",
+        "engineering",
+        "general_building"
+      ],
+      "trade_tags": [
+        "architecture",
+        "consulting",
+        "engineering",
+        "general_building"
+      ],
+      "trade_confidence": 0.62,
+      "specialization_confidence": 0.62,
+      "company_type": "Architect",
+      "entity_class": "designer",
+      "dominant_sector": "commercial",
+      "sector_focus": {
+        "commercial": 0.5,
+        "institutional": 0.5
+      },
+      "work_orientation": "design",
+      "geographic_reach": "regional",
+      "avg_project_value": 0.0,
+      "avg_award_value": 0.0,
+      "value_range": {
+        "p25": 0.0,
+        "median": 0.0,
+        "p75": 0.0,
+        "max": 0.0
+      },
+      "market_segments": [
+        "commercial",
+        "institutional"
+      ],
+      "service_cities": [
+        "611 Alexander St #406",
+        "BC V6A 1C7"
+      ],
+      "project_types": [],
+      "delivery_types": [
+        "design"
+      ],
+      "project_clusters": [],
+      "profile_completeness": 0.5,
+      "own_permit_count": 0,
+      "award_count": 0,
+      "growth_direction": [
+        "institutional_expansion"
+      ]
+    },
+    "top_recommendations": [
+      {
+        "section": "active_opportunities",
+        "title": "Project Delivery Support Services Fraser River Tunnel Project Request for Proposals.",
+        "organization": "Infrastructure BC Inc.",
+        "bps": 73,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Geography Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Notice of Intent to Direct Award - Sumas Prairie Flood Risk Mitigation Program \u2013 Engineering Services Support for Consul",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history; sector_fit: 20 \u2014 Sector 'public' outside company focus (commercial)",
+        "bps": null
+      },
+      {
+        "title": "Notice of Intent # 2026-539 - NOTICE OF INTENT TO AWARD A PURCHASE ORDER FOR Mason Seating Expansion (Proprietary to Cen",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "2026-RFP-16 Streetlight Master Plan",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography",
+        "bps": null
+      },
+      {
+        "title": "RFP26 087 - 2026 Capital Utilities and Roads Projects",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "Engineering and Consulting Services for WorkSafeBC office locations and for WorkSafeBC Home Modification to Injured Work",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography",
+        "bps": null
+      },
+      {
+        "title": "2026 Open & Ongoing RFPQ",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "Professional Services Request for Building Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Housing Construction Program MDB CFHA RPCIP Comox & Esquimalt",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history; sector_fit: 20 \u2014 Sector 'residential' outside company focus (commercial)",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 1,
+      "active": 1,
+      "pipeline": 0,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 1735,
+    "category": "Engineering Consultant",
+    "company_intelligence_profile": {
+      "primary_trade": "consulting",
+      "secondary_trades": [
+        "general_building",
+        "hvac",
+        "engineering",
+        "electrical"
+      ],
+      "trade_tags": [
+        "consulting",
+        "general_building",
+        "hvac",
+        "engineering",
+        "electrical"
+      ],
+      "trade_confidence": 0.84,
+      "specialization_confidence": 0.84,
+      "company_type": "Engineering",
+      "entity_class": "consultant",
+      "dominant_sector": "commercial",
+      "sector_focus": {
+        "commercial": 0.75,
+        "residential": 0.25
+      },
+      "work_orientation": "construction",
+      "geographic_reach": "local",
+      "avg_project_value": 60574064.0,
+      "avg_award_value": 60574064.0,
+      "value_range": {
+        "p25": 26000000.0,
+        "median": 60574064.0,
+        "p75": 60574064.0,
+        "max": 69830259.93
+      },
+      "market_segments": [
+        "municipal"
+      ],
+      "service_cities": [
+        "Vancouver",
+        "700 W Pender St",
+        "BC V6C 1G8"
+      ],
+      "project_types": [
+        "new_build_residential",
+        "renovation_commercial"
+      ],
+      "delivery_types": [
+        "new_build",
+        "renovation"
+      ],
+      "project_clusters": [
+        {
+          "delivery": "renovation",
+          "sector": "commercial",
+          "geo": "Vancouver",
+          "count": 3,
+          "share": 0.75,
+          "avg_value": 13350000.0
+        },
+        {
+          "delivery": "new_build",
+          "sector": "residential",
+          "geo": "Vancouver",
+          "count": 1,
+          "share": 0.25,
+          "avg_value": 60574064.0
+        }
+      ],
+      "profile_completeness": 1.0,
+      "own_permit_count": 29,
+      "award_count": 1,
+      "growth_direction": [
+        "residential_expansion",
+        "new_build_residential"
+      ]
+    },
+    "top_recommendations": [
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 93,
+        "reasons": [
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 90,
+        "reasons": [
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 82,
+        "reasons": [
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "competitive_intelligence",
+        "title": "Consultant for Marpole CC Passive House Certification",
+        "organization": "",
+        "bps": 79,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "competitive_intelligence",
+        "title": "Consultant for Sunset Passive House Certifier",
+        "organization": "",
+        "bps": 77,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "FEDERAL_GEO_MISMATCH",
+        "rejection_detail": "Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 50 \u2014 Consulting firm with public-sector history \u2014 BC federal/provincial",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 10,
+      "active": 0,
+      "pipeline": 3,
+      "intel": 5
+    }
+  },
+  {
+    "company_id": 2070,
+    "category": "Engineering Consultant",
+    "company_intelligence_profile": {
+      "primary_trade": "engineering",
+      "secondary_trades": [
+        "general_building"
+      ],
+      "trade_tags": [
+        "engineering",
+        "general_building"
+      ],
+      "trade_confidence": 0.85,
+      "specialization_confidence": 0.85,
+      "company_type": "Engineering",
+      "entity_class": "consultant",
+      "dominant_sector": "residential",
+      "sector_focus": {
+        "residential": 1.0
+      },
+      "work_orientation": "construction",
+      "geographic_reach": "provincial",
+      "avg_project_value": 996443.18,
+      "avg_award_value": 996443.18,
+      "value_range": {
+        "p25": 750000.0,
+        "median": 996443.18,
+        "p75": 1221092.26,
+        "max": 1221092.26
+      },
+      "market_segments": [
+        "federal",
+        "municipal",
+        "provincial"
+      ],
+      "service_cities": [
+        "Montreal",
+        "1000 840 Howe Street",
+        "Robson St",
+        "BC V6Z 2M1"
+      ],
+      "project_types": [
+        "renovation_residential"
+      ],
+      "delivery_types": [
+        "renovation"
+      ],
+      "project_clusters": [
+        {
+          "delivery": "renovation",
+          "sector": "residential",
+          "geo": "Vancouver",
+          "count": 1,
+          "share": 1.0,
+          "avg_value": 750000.0
+        }
+      ],
+      "profile_completeness": 1.0,
+      "own_permit_count": 11,
+      "award_count": 48,
+      "growth_direction": []
+    },
+    "top_recommendations": [],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "FEDERAL_GEO_MISMATCH",
+        "rejection_detail": "Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "rejection_code": "SECTOR_FIT",
+        "rejection_detail": "sector_fit: 20 \u2014 Sector 'commercial' outside company focus (residential)",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 0,
+      "active": 0,
+      "pipeline": 0,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 839,
+    "category": "Mechanical Contractor",
+    "company_intelligence_profile": {
+      "primary_trade": "mechanical",
+      "secondary_trades": [
+        "general_building"
+      ],
+      "trade_tags": [
+        "mechanical",
+        "general_building"
+      ],
+      "trade_confidence": 0.55,
+      "specialization_confidence": 0.55,
+      "company_type": "Trade Contractor",
+      "entity_class": "contractor",
+      "dominant_sector": "commercial",
+      "sector_focus": {},
+      "work_orientation": "construction",
+      "geographic_reach": "regional",
+      "avg_project_value": 114662.79,
+      "avg_award_value": 114662.79,
+      "value_range": {
+        "p25": 114662.79,
+        "median": 114662.79,
+        "p75": 114662.79,
+        "max": 114662.79
+      },
+      "market_segments": [],
+      "service_cities": [
+        "4664 Lougheed Hwy. Ste 108",
+        "Burnaby",
+        "BC V5C 5T5"
+      ],
+      "project_types": [
+        "renovation_commercial"
+      ],
+      "delivery_types": [],
+      "project_clusters": [],
+      "profile_completeness": 0.83,
+      "own_permit_count": 43,
+      "award_count": 0,
+      "growth_direction": []
+    },
+    "top_recommendations": [
+      {
+        "section": "active_opportunities",
+        "title": "Roof, Envelope, Electrical and Mechanical Renewals Boundary Lodge. ITT 1070-2627-068 Location: Grand Forks | Posted: 26 days ago",
+        "organization": "BC Housing",
+        "bps": 67,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "FEDERAL_GEO_MISMATCH",
+        "rejection_detail": "Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 45 \u2014 Regional company \u2014 weak BC match; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 1,
+      "active": 1,
+      "pipeline": 0,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 9444,
+    "category": "Concrete Contractor",
+    "company_intelligence_profile": {
+      "primary_trade": "concrete",
+      "secondary_trades": [
+        "general_building",
+        "electrical",
+        "hvac",
+        "plumbing"
+      ],
+      "trade_tags": [
+        "concrete",
+        "general_building",
+        "electrical",
+        "hvac",
+        "plumbing"
+      ],
+      "trade_confidence": 0.85,
+      "specialization_confidence": 0.85,
+      "company_type": "Unknown",
+      "entity_class": "contractor",
+      "dominant_sector": "commercial",
+      "sector_focus": {
+        "commercial": 1.0
+      },
+      "work_orientation": "construction",
+      "geographic_reach": "local",
+      "avg_project_value": 90000.0,
+      "avg_award_value": 90000.0,
+      "value_range": {
+        "p25": 60000.0,
+        "median": 90000.0,
+        "p75": 138428.57,
+        "max": 500000.0
+      },
+      "market_segments": [],
+      "service_cities": [],
+      "project_types": [
+        "renovation_commercial"
+      ],
+      "delivery_types": [
+        "design",
+        "renovation"
+      ],
+      "project_clusters": [
+        {
+          "delivery": "renovation",
+          "sector": "commercial",
+          "geo": "Vancouver",
+          "count": 4,
+          "share": 1.0,
+          "avg_value": 170000.0
+        }
+      ],
+      "profile_completeness": 0.83,
+      "own_permit_count": 14,
+      "award_count": 0,
+      "growth_direction": []
+    },
+    "top_recommendations": [
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 94,
+        "reasons": [
+          "Geography Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 88,
+        "reasons": [
+          "Geography Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "FEDERAL_GEO_MISMATCH",
+        "rejection_detail": "Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 2,
+      "active": 0,
+      "pipeline": 2,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 370,
+    "category": "General Contractor",
+    "company_intelligence_profile": {
+      "primary_trade": "demolition",
+      "secondary_trades": [
+        "general_building",
+        "excavation",
+        "engineering"
+      ],
+      "trade_tags": [
+        "demolition",
+        "general_building",
+        "excavation",
+        "engineering"
+      ],
+      "trade_confidence": 0.85,
+      "specialization_confidence": 0.85,
+      "company_type": "Trade Contractor",
+      "entity_class": "contractor",
+      "dominant_sector": "residential",
+      "sector_focus": {
+        "residential": 1.0
+      },
+      "work_orientation": "construction",
+      "geographic_reach": "regional",
+      "avg_project_value": 120000.0,
+      "avg_award_value": 120000.0,
+      "value_range": {
+        "p25": 76587.0,
+        "median": 120000.0,
+        "p75": 120000.0,
+        "max": 250000.0
+      },
+      "market_segments": [
+        "municipal"
+      ],
+      "service_cities": [
+        "Vancouver",
+        "62 Fawcett Rd #19",
+        "Coquitlam",
+        "BC V3K 6V5"
+      ],
+      "project_types": [
+        "demolition_residential"
+      ],
+      "delivery_types": [
+        "demolition"
+      ],
+      "project_clusters": [
+        {
+          "delivery": "demolition",
+          "sector": "residential",
+          "geo": "Vancouver",
+          "count": 2,
+          "share": 1.0,
+          "avg_value": 185000.0
+        }
+      ],
+      "profile_completeness": 1.0,
+      "own_permit_count": 123,
+      "award_count": 1,
+      "growth_direction": []
+    },
+    "top_recommendations": [
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 96,
+        "reasons": [
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 96,
+        "reasons": [
+          "Project Type Fit",
+          "Geography Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "competitive_intelligence",
+        "title": "Building Deconstruction - 1696 West 5th Avenue",
+        "organization": "",
+        "bps": 80,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Geography Fit",
+          "Client Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "FEDERAL_GEO_MISMATCH",
+        "rejection_detail": "Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 45 \u2014 Regional company \u2014 weak BC match; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 3,
+      "active": 0,
+      "pipeline": 2,
+      "intel": 1
+    }
+  },
+  {
+    "company_id": 2,
+    "category": "Architecture Firm",
+    "company_intelligence_profile": {
+      "primary_trade": "architecture",
+      "secondary_trades": [],
+      "trade_tags": [
+        "architecture"
+      ],
+      "trade_confidence": 0.62,
+      "specialization_confidence": 0.62,
+      "company_type": "Architect",
+      "entity_class": "designer",
+      "dominant_sector": "commercial",
+      "sector_focus": {
+        "commercial": 0.5,
+        "institutional": 0.5
+      },
+      "work_orientation": "design",
+      "geographic_reach": "regional",
+      "avg_project_value": 0.0,
+      "avg_award_value": 0.0,
+      "value_range": {
+        "p25": 0.0,
+        "median": 0.0,
+        "p75": 0.0,
+        "max": 0.0
+      },
+      "market_segments": [
+        "commercial",
+        "institutional"
+      ],
+      "service_cities": [
+        "598 W Georgia St",
+        "BC V6B 0M3"
+      ],
+      "project_types": [],
+      "delivery_types": [
+        "design"
+      ],
+      "project_clusters": [],
+      "profile_completeness": 0.33,
+      "own_permit_count": 0,
+      "award_count": 0,
+      "growth_direction": [
+        "institutional_expansion"
+      ]
+    },
+    "top_recommendations": [
+      {
+        "section": "active_opportunities",
+        "title": "Project Delivery Support Services Fraser River Tunnel Project Request for Proposals.",
+        "organization": "Infrastructure BC Inc.",
+        "bps": 71,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Geography Fit"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Notice of Intent to Direct Award - Sumas Prairie Flood Risk Mitigation Program \u2013 Engineering Services Support for Consul",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history; sector_fit: 20 \u2014 Sector 'public' outside company focus (commercial)",
+        "bps": null
+      },
+      {
+        "title": "Notice of Intent # 2026-539 - NOTICE OF INTENT TO AWARD A PURCHASE ORDER FOR Mason Seating Expansion (Proprietary to Cen",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "2026-RFP-16 Streetlight Master Plan",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography",
+        "bps": null
+      },
+      {
+        "title": "RFP26 087 - 2026 Capital Utilities and Roads Projects",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "Engineering and Consulting Services for WorkSafeBC office locations and for WorkSafeBC Home Modification to Injured Work",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography",
+        "bps": null
+      },
+      {
+        "title": "2026 Open & Ongoing RFPQ",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history",
+        "bps": null
+      },
+      {
+        "title": "Professional Services Request for Building Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Housing Construction Program MDB CFHA RPCIP Comox & Esquimalt",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Outside core service geography; project_type_fit: 15 \u2014 No delivery type overlap with company project history; sector_fit: 20 \u2014 Sector 'residential' outside company focus (commercial)",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 1,
+      "active": 1,
+      "pipeline": 0,
+      "intel": 0
+    }
+  },
+  {
+    "company_id": 670,
+    "category": "General Contractor",
+    "company_intelligence_profile": {
+      "primary_trade": "general_building",
+      "secondary_trades": [
+        "electrical",
+        "plumbing",
+        "hvac",
+        "roofing"
+      ],
+      "trade_tags": [
+        "general_building",
+        "electrical",
+        "plumbing",
+        "hvac",
+        "roofing"
+      ],
+      "trade_confidence": 0.85,
+      "specialization_confidence": 0.85,
+      "company_type": "General Contractor",
+      "entity_class": "contractor",
+      "dominant_sector": "commercial",
+      "sector_focus": {
+        "commercial": 1.0
+      },
+      "work_orientation": "design",
+      "geographic_reach": "local",
+      "avg_project_value": 517233.69,
+      "avg_award_value": 517233.69,
+      "value_range": {
+        "p25": 100000.0,
+        "median": 517233.69,
+        "p75": 800000.0,
+        "max": 13000000.0
+      },
+      "market_segments": [],
+      "service_cities": [
+        "850 W Hastings St #800",
+        "BC V6C 1E1"
+      ],
+      "project_types": [
+        "renovation_commercial"
+      ],
+      "delivery_types": [
+        "design",
+        "renovation"
+      ],
+      "project_clusters": [
+        {
+          "delivery": "renovation",
+          "sector": "commercial",
+          "geo": "Vancouver",
+          "count": 13,
+          "share": 1.0,
+          "avg_value": 1456153.85
+        }
+      ],
+      "profile_completeness": 0.83,
+      "own_permit_count": 173,
+      "award_count": 0,
+      "growth_direction": []
+    },
+    "top_recommendations": [
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 94,
+        "reasons": [
+          "Geography Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 94,
+        "reasons": [
+          "Geography Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 94,
+        "reasons": [
+          "Geography Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "market_pipeline",
+        "title": "",
+        "organization": "",
+        "bps": 94,
+        "reasons": [
+          "Geography Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Business Fit"
+        ],
+        "fit_breakdown": {}
+      },
+      {
+        "section": "active_opportunities",
+        "title": "EZ108-260557 \u2013 Esquimalt Graving Dock Dock Walls and Seismic Upgrades",
+        "organization": "Department of Public Works and Government Services (PSPC)",
+        "bps": 90,
+        "reasons": [
+          "Business Fit",
+          "Project Type Fit",
+          "Sector Fit",
+          "Historical Pattern Match"
+        ],
+        "fit_breakdown": {}
+      }
+    ],
+    "sample_rejections": [
+      {
+        "title": "Repair, Maintenance, Installation or Decommissioning of Refrigeration, Heating, Ventilation, and Air Conditioning (HVAC)",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Phase 1 EZ899-270168 Penticton Airport Omni-Directional Approach Lighting System (ODALS) 16 Replacement",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270166 Catenary Lighting Upgrade to LED",
+        "rejection_code": "SPECIALIST_SCOPE_MISMATCH",
+        "rejection_detail": "Lighting/airport scope requires electrical trade specialization",
+        "bps": null
+      },
+      {
+        "title": "EZ899-270321 - Adsette Bridge Expansion Joint Replacement - Alaska Highway, BC",
+        "rejection_code": "GEOGRAPHY_FIT",
+        "rejection_detail": "geography_fit: 0 \u2014 Federal opportunity outside company service geography",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261706 - Transportation Engineering and Prime Consultant Services SOA",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ899-261170 RFSA \u2013 Bridge Engineering Services \u2013 Various Locations across BC and Yukon",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "EZ011-240153 Request for Information \u2013 Alaska Highway Maintenance Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      },
+      {
+        "title": "Steveston Paramount Maintenance Dredging Services",
+        "rejection_code": "ORIENTATION_MISMATCH",
+        "rejection_detail": "Maintenance/SOA procurement vs construction-oriented company",
+        "bps": null
+      }
+    ],
+    "totals": {
+      "shown": 9,
+      "active": 5,
+      "pipeline": 4,
+      "intel": 0
+    }
+  }
+]

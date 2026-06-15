@@ -1,0 +1,321 @@
+{
+  "branch": "master",
+  "last_commit_hash": "3c86a47bedb796d1dd8e346296908ceca06f52ad",
+  "last_commit": {
+    "hash": "3c86a47bedb796d1dd8e346296908ceca06f52ad",
+    "date": "2026-06-11 14:59:35 -0700",
+    "author": "paatasurf",
+    "subject": "Update dashboard submodule for paginated company intelligence UI."
+  },
+  "status_lines": [
+    " M .env.example",
+    " M api/internal.py",
+    " M api/main.py",
+    " M db/connection.py",
+    " M db/models.py",
+    " M pipeline/internal_steps.py",
+    " M pipeline/research_arch_websites.py",
+    " M pipeline/run.py",
+    " M pipeline/scheduler.py",
+    " M reddit_signals.csv",
+    " M scraper/main.py",
+    " M scraper/runners.py",
+    " M v0-construction-dashboard",
+    "?? _audit_git.py",
+    "?? _audit_git2.py",
+    "?? _audit_output.json",
+    "?? _audit_output2.json",
+    "?? active-company-classification.json",
+    "?? classifier-audit-output.json",
+    "?? db/import_contract_awards.py",
+    "?? db/migrations/002_company_award_columns.sql",
+    "?? news_signals.csv",
+    "?? pipeline/company_matching.py",
+    "?? pipeline/import_contract_awards.py",
+    "?? pipeline/populate_companies_from_awards.py",
+    "?? pipeline/refresh_company_award_stats.py",
+    "?? run_award_company_phase_c.py",
+    "?? run_contract_awards.py",
+    "?? run_populate_award_companies.py"
+  ],
+  "modified_files": [
+    ".env.example",
+    "api/internal.py",
+    "api/main.py",
+    "db/connection.py",
+    "db/models.py",
+    "pipeline/internal_steps.py",
+    "pipeline/research_arch_websites.py",
+    "pipeline/run.py",
+    "pipeline/scheduler.py",
+    "reddit_signals.csv",
+    "scraper/main.py",
+    "scraper/runners.py",
+    "v0-construction-dashboard"
+  ],
+  "new_untracked_files": [
+    "_audit_git.py",
+    "_audit_git2.py",
+    "_audit_output.json",
+    "_audit_output2.json",
+    "active-company-classification.json",
+    "classifier-audit-output.json",
+    "db/import_contract_awards.py",
+    "db/migrations/002_company_award_columns.sql",
+    "news_signals.csv",
+    "pipeline/company_matching.py",
+    "pipeline/import_contract_awards.py",
+    "pipeline/populate_companies_from_awards.py",
+    "pipeline/refresh_company_award_stats.py",
+    "run_award_company_phase_c.py",
+    "run_contract_awards.py",
+    "run_populate_award_companies.py"
+  ],
+  "deleted_files": [],
+  "renamed_files": [],
+  "other_status": [],
+  "diff_stat": " .env.example                       |    5 +-\n api/internal.py                    |   21 +-\n api/main.py                        |  136 ++-\n db/connection.py                   |   27 +\n db/models.py                       |   49 +-\n pipeline/internal_steps.py         |   10 +\n pipeline/research_arch_websites.py |    5 +-\n pipeline/run.py                    |   19 +-\n pipeline/scheduler.py              |   23 +\n reddit_signals.csv                 | 2248 ++++++++++++++++--------------------\n scraper/main.py                    |    2 -\n scraper/runners.py                 |   13 +-\n v0-construction-dashboard          |    0\n 13 files changed, 1279 insertions(+), 1279 deletions(-)\n",
+  "tracked_insertions": 1279,
+  "tracked_deletions": 1279,
+  "tracked_net_loc": 0,
+  "tracked_numstat": [
+    {
+      "file": ".env.example",
+      "insertions": 4,
+      "deletions": 1
+    },
+    {
+      "file": "api/internal.py",
+      "insertions": 18,
+      "deletions": 3
+    },
+    {
+      "file": "api/main.py",
+      "insertions": 117,
+      "deletions": 19
+    },
+    {
+      "file": "db/connection.py",
+      "insertions": 27,
+      "deletions": 0
+    },
+    {
+      "file": "db/models.py",
+      "insertions": 48,
+      "deletions": 1
+    },
+    {
+      "file": "pipeline/internal_steps.py",
+      "insertions": 10,
+      "deletions": 0
+    },
+    {
+      "file": "pipeline/research_arch_websites.py",
+      "insertions": 3,
+      "deletions": 2
+    },
+    {
+      "file": "pipeline/run.py",
+      "insertions": 17,
+      "deletions": 2
+    },
+    {
+      "file": "pipeline/scheduler.py",
+      "insertions": 23,
+      "deletions": 0
+    },
+    {
+      "file": "reddit_signals.csv",
+      "insertions": 1003,
+      "deletions": 1245
+    },
+    {
+      "file": "scraper/main.py",
+      "insertions": 0,
+      "deletions": 2
+    },
+    {
+      "file": "scraper/runners.py",
+      "insertions": 9,
+      "deletions": 4
+    },
+    {
+      "file": "v0-construction-dashboard",
+      "insertions": 0,
+      "deletions": 0
+    }
+  ],
+  "submodule_status": [
+    " M app/api/contract-awards/route.ts",
+    " M components/company-intelligence-dashboard.tsx",
+    " M lib/api.ts",
+    " M lib/types.ts",
+    " M next-env.d.ts",
+    "?? scripts/_probe-sources.mjs",
+    "?? scripts/audit-active-companies.mjs",
+    "?? scripts/audit-company-activity.mjs",
+    "?? scripts/audit-contractor-classification.mjs",
+    "?? scripts/audit-unknown-companies.mjs",
+    "?? scripts/classify-active-companies.mjs",
+    "?? scripts/classify-v1-snapshot.mjs",
+    "?? scripts/estimate-acquisition-sources.mjs",
+    "?? scripts/market-map-active-companies.mjs",
+    "?? scripts/rank-unknown-companies.mjs",
+    "?? scripts/reclassify-unknown-comparison.mjs",
+    "?? scripts/source-overlap-analysis.mjs",
+    "?? scripts/verify-construction-ai.mjs",
+    "?? tsconfig.tsbuildinfo"
+  ],
+  "submodule_head": "e68012f812a87f71b2ff14f9cdc8ec8cb9386f14",
+  "submodule_last_commit": "e68012f Add paginated company browse with company_type filter and badges.",
+  "phase_audit": {
+    "Phase A": {
+      "db/migrations/002_company_award_columns.sql": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      },
+      "db/connection.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      },
+      "db/models.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      }
+    },
+    "Phase B": {
+      "pipeline/populate_companies_from_awards.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      },
+      "run_populate_award_companies.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      }
+    },
+    "Phase C": {
+      "pipeline/refresh_company_award_stats.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      },
+      "run_award_company_phase_c.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      },
+      "pipeline/company_matching.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": false,
+        "committed": false,
+        "local_only": false
+      },
+      "db/import_contract_awards.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": true,
+        "committed": false,
+        "local_only": true
+      },
+      "pipeline/import_contract_awards.py": {
+        "in_last_commit": false,
+        "exists_worktree": true,
+        "in_worktree_with_phase_code": false,
+        "committed": false,
+        "local_only": false
+      }
+    }
+  },
+  "untracked_total_lines": 50149,
+  "untracked_file_stats": [
+    {
+      "file": "classifier-audit-output.json",
+      "lines": 38596
+    },
+    {
+      "file": "active-company-classification.json",
+      "lines": 10218
+    },
+    {
+      "file": "pipeline/import_contract_awards.py",
+      "lines": 307
+    },
+    {
+      "file": "pipeline/refresh_company_award_stats.py",
+      "lines": 178
+    },
+    {
+      "file": "_audit_output.json",
+      "lines": 155
+    },
+    {
+      "file": "pipeline/populate_companies_from_awards.py",
+      "lines": 150
+    },
+    {
+      "file": "db/import_contract_awards.py",
+      "lines": 109
+    },
+    {
+      "file": "run_award_company_phase_c.py",
+      "lines": 85
+    },
+    {
+      "file": "_audit_git.py",
+      "lines": 68
+    },
+    {
+      "file": "_audit_git2.py",
+      "lines": 66
+    },
+    {
+      "file": "_audit_output2.json",
+      "lines": 65
+    },
+    {
+      "file": "pipeline/company_matching.py",
+      "lines": 64
+    },
+    {
+      "file": "run_populate_award_companies.py",
+      "lines": 38
+    },
+    {
+      "file": "run_contract_awards.py",
+      "lines": 24
+    },
+    {
+      "file": "db/migrations/002_company_award_columns.sql",
+      "lines": 20
+    },
+    {
+      "file": "news_signals.csv",
+      "lines": 6
+    }
+  ],
+  "submodule_tracked_insertions": 341,
+  "submodule_tracked_deletions": 12,
+  "origin_master": "3c86a47bedb796d1dd8e346296908ceca06f52ad\n",
+  "commits_ahead_of_origin": "0",
+  "commits_behind_origin": "0"
+}

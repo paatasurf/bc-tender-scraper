@@ -1,0 +1,155 @@
+{
+  "local_head": "3c86a47bedb796d1dd8e346296908ceca06f52ad",
+  "local_log": [
+    {
+      "sha": "3c86a47bedb796d1dd8e346296908ceca06f52ad",
+      "date": "2026-06-11 14:59:35 -0700",
+      "subject": "Update dashboard submodule for paginated company intelligence UI."
+    },
+    {
+      "sha": "b9951b3330a3fb2ca30ec4ee9c6490366514d3de",
+      "date": "2026-06-11 14:50:55 -0700",
+      "subject": "Persist company intelligence fields in PostgreSQL and classify on every pipeline run."
+    },
+    {
+      "sha": "108fbe7bceaf17190496631429ded65dffb44ac4",
+      "date": "2026-06-11 02:01:40 -0700",
+      "subject": "Unify AI matching pipeline with structured breakdown for both kinds."
+    },
+    {
+      "sha": "fe107d94b3c299ce5ac0444bffeb6c6f7b009cd1",
+      "date": "2026-06-11 01:44:00 -0700",
+      "subject": "Add construction company support to AI matching pipeline."
+    },
+    {
+      "sha": "4ba67597fbab52551a1e8f99b08e2652e25f9353",
+      "date": "2026-06-11 01:29:38 -0700",
+      "subject": "Add synchronous AI matching for Find Matching Tenders flow."
+    },
+    {
+      "sha": "860efefcee19773e6359f5f135c1ed0fd6708a20",
+      "date": "2026-06-11 04:56:25 +0000",
+      "subject": "fix(db): reduce init retry defaults so lifespan yields within healthcheck window (#1)"
+    },
+    {
+      "sha": "926ef50bc97559d6d04ef367c3c9fb612c93dd7d",
+      "date": "2026-06-10 20:49:56 -0700",
+      "subject": "Add AI matching system with matcher and scorer agents for architecture firms."
+    },
+    {
+      "sha": "685ae607782ec775319c7d0e352618eb154f7a90",
+      "date": "2026-06-10 20:26:59 -0700",
+      "subject": "Add Postgres recovery-mode retries and graceful DB degradation."
+    },
+    {
+      "sha": "68131cd95712d32899e8deefda3a80a0c4b6646c",
+      "date": "2026-06-10 17:19:38 -0700",
+      "subject": "Fix Railway PostgreSQL connection URL handling on startup."
+    },
+    {
+      "sha": "fb7b4362fe3db7ed4ec7178dd8c531c30ab44fc5",
+      "date": "2026-06-10 17:14:30 -0700",
+      "subject": "Ensure pipeline_runs table exists on startup."
+    },
+    {
+      "sha": "d2df5b3445585d7d0e6204024f387005bf507558",
+      "date": "2026-06-10 17:06:17 -0700",
+      "subject": "Remove APScheduler wiring from FastAPI main.py."
+    },
+    {
+      "sha": "9a4b3136b431a3fd6b8fd80137f347e0a5a634e3",
+      "date": "2026-06-10 15:06:05 -0700",
+      "subject": "Add pipeline_runs table and internal module endpoints for n8n orchestration."
+    },
+    {
+      "sha": "04efddd56070dfe995df2d65aa56a98cecdccbeb",
+      "date": "2026-06-10 14:48:18 -0700",
+      "subject": "Add manual API endpoint to run tender AI scoring."
+    },
+    {
+      "sha": "45ff2e8acddaa44280ad5177850ce5ad68150454",
+      "date": "2026-06-10 14:30:18 -0700",
+      "subject": "Add manual API endpoint to run arch Google Places pipeline."
+    },
+    {
+      "sha": "503264fd05b29c3e62d4d51d4bd41209c9290f0f",
+      "date": "2026-06-10 14:27:09 -0700",
+      "subject": "Stop auto-running Google Places steps for arch companies in daily pipeline."
+    }
+  ],
+  "remotes": "origin\thttps://github.com/paatasurf/bc-tender-scraper.git (fetch)\norigin\thttps://github.com/paatasurf/bc-tender-scraper.git (push)",
+  "branches": "* master 3c86a47 [origin/master] Update dashboard submodule for paginated company intelligence UI.",
+  "file_db_migrations_002_company_award_columns.sql": "missing",
+  "file_pipeline_populate_companies_from_awards.py": "missing",
+  "file_pipeline_refresh_company_award_stats.py": "missing",
+  "file_run_populate_award_companies.py": "missing",
+  "file_run_award_company_phase_c.py": "missing",
+  "file_db_models.py": "exists",
+  "production": {
+    "health_keys": [
+      "anthropic_api_key_configured",
+      "database_connected",
+      "status"
+    ],
+    "stats_keys": [
+      "arch_tenders",
+      "commercial_tenders",
+      "jobs",
+      "linkedin",
+      "news",
+      "permits",
+      "reddit",
+      "tenders"
+    ],
+    "stats": {
+      "tenders": 13,
+      "permits": 50759,
+      "reddit": 1742,
+      "news": 11,
+      "linkedin": 0,
+      "jobs": 1762,
+      "arch_tenders": 38,
+      "commercial_tenders": 151
+    },
+    "company_keys_sample": [
+      "ai_reliability_score",
+      "ai_summary",
+      "avg_project_value",
+      "company_lifecycle",
+      "company_tier",
+      "company_type",
+      "confidence_score",
+      "created_at",
+      "enrichment_status",
+      "first_project_date",
+      "google_address",
+      "google_phone",
+      "google_rating",
+      "google_reviews_count",
+      "id",
+      "last_enriched_at",
+      "last_project_date",
+      "name",
+      "neighborhoods",
+      "project_types",
+      "total_projects",
+      "total_value",
+      "updated_at"
+    ],
+    "has_award_count": false,
+    "award_count": null,
+    "data_sources": null,
+    "contract_award_keys": [
+      "company",
+      "contract",
+      "date",
+      "value"
+    ],
+    "contract_award_sample": {
+      "company": "David Steer DBA: LMDG Building Code Consultants Ltd.",
+      "contract": "192 permits",
+      "value": 5111506874.0,
+      "date": ""
+    }
+  }
+}
