@@ -734,16 +734,18 @@ def _rule_tenders_to_opportunity_items(
     hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None = None,
     ai_rules_threshold: int | None = None,
     ai_stretch_threshold: int | None = None,
+    fresh_cache: dict[tuple[str, int], Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     matches: list[dict[str, Any]] = []
     stretch: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     ai_match_floor = ai_rules_threshold if ai_rules_threshold is not None else rules_threshold
     ai_stretch_floor = ai_stretch_threshold if ai_stretch_threshold is not None else stretch_threshold
-    fresh_cache = {
-        (row.tender_source, row.tender_id): row
-        for row in load_fresh_company_tender_matches(session, company_kind=kind, company_id=company_id)
-    }
+    if fresh_cache is None:
+        fresh_cache = {
+            (row.tender_source, row.tender_id): row
+            for row in load_fresh_company_tender_matches(session, company_kind=kind, company_id=company_id)
+        }
 
     for candidate in rule_candidates:
         key = (candidate.tender_source, candidate.tender_id)
@@ -857,14 +859,16 @@ def _attach_final_construction_tender_breakdowns(
     items: list[dict[str, Any]],
     *,
     hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None,
+    fresh_cache: dict[tuple[str, int], Any] | None = None,
 ) -> int:
     """Attach breakdowns only to final returned construction tender items."""
-    fresh_cache = {
-        (row.tender_source, row.tender_id): row
-        for row in load_fresh_company_tender_matches(
-            session, company_kind="construction", company_id=company.id
-        )
-    }
+    if fresh_cache is None:
+        fresh_cache = {
+            (row.tender_source, row.tender_id): row
+            for row in load_fresh_company_tender_matches(
+                session, company_kind="construction", company_id=company.id
+            )
+        }
     tender_items: list[dict[str, Any]] = []
     for item in items:
         if item.get("type") != "tender":
@@ -1408,6 +1412,12 @@ def _discover_construction_opportunities(
 
     items_started = time.perf_counter()
     hybrid_pairs = hybrid_scoring.get("pairs") or {}
+    fresh_cache = {
+        (row.tender_source, row.tender_id): row
+        for row in load_fresh_company_tender_matches(
+            session, company_kind="construction", company_id=company.id
+        )
+    }
     tender_matches, tender_stretch = _rule_tenders_to_opportunity_items(
         session,
         company.id,
@@ -1416,6 +1426,7 @@ def _discover_construction_opportunities(
         rules_threshold=tender_rules_threshold,
         stretch_threshold=tender_stretch_threshold,
         hybrid_pairs=hybrid_pairs,
+        fresh_cache=fresh_cache,
     )
     print(
         f"[OpportunityDiscovery] construction company={company.id} tender_items "
@@ -1487,6 +1498,7 @@ def _discover_construction_opportunities(
         company,
         top,
         hybrid_pairs=hybrid_pairs,
+        fresh_cache=fresh_cache,
     )
 
     for item in top:

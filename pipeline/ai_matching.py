@@ -446,6 +446,7 @@ def score_tender_pairs(
             max_age_hours=max_age_hours,
         )
     }
+    pending_commit = False
 
     for candidate in candidates:
         key = (candidate.tender_source, candidate.tender_id)
@@ -498,13 +499,16 @@ def score_tender_pairs(
                 reasoning=reasoning,
                 breakdown_json=scored.breakdown_json,
             )
-            session.commit()
+            pending_commit = True
         pairs[key] = {
             "score": scored.score,
             "reasoning": reasoning,
             "breakdown": scored.api_breakdown,
             "origin": "fresh",
         }
+
+    if persist and pending_commit:
+        session.commit()
 
     return {"pairs": pairs, **stats}
 
@@ -517,11 +521,14 @@ def load_fresh_company_tender_matches(
     max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
 ) -> list[TenderMatch]:
     """All tender_matches rows for a company that are still within the cache TTL."""
+    # SQL cutoff avoids loading the full per-company history on every discover request.
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours + 24)
     rows = session.scalars(
         select(TenderMatch)
         .where(
             TenderMatch.company_kind == company_kind,
             TenderMatch.company_id == company_id,
+            TenderMatch.created_at >= cutoff,
         )
         .order_by(TenderMatch.score.desc(), TenderMatch.id.desc())
     ).all()
