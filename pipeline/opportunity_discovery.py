@@ -763,13 +763,6 @@ def _rule_tenders_to_opportunity_items(
             cached_matches=fresh_cache,
         )
         item = _tender_opportunity_item(candidate.payload, key, score, reasons, source)
-        if kind == "construction":
-            _apply_construction_pair_breakdown(
-                item,
-                key,
-                hybrid_pairs=hybrid_pairs,
-                fresh_cache=fresh_cache,
-            )
         match_floor = ai_match_floor if source == "ai_match" else rules_threshold
         stretch_floor = ai_stretch_floor if source == "ai_match" else stretch_threshold
         if score >= match_floor:
@@ -856,6 +849,43 @@ def _batch_load_tender_rows(
         for row in session.scalars(select(ArchTender).where(ArchTender.id.in_(arch_ids))).all():
             loaded[("arch", row.id)] = row
     return loaded
+
+
+def _attach_final_construction_tender_breakdowns(
+    session: Session,
+    company: Company,
+    items: list[dict[str, Any]],
+    *,
+    hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None,
+) -> int:
+    """Attach breakdowns only to final returned construction tender items."""
+    fresh_cache = {
+        (row.tender_source, row.tender_id): row
+        for row in load_fresh_company_tender_matches(
+            session, company_kind="construction", company_id=company.id
+        )
+    }
+    tender_items: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("type") != "tender":
+            continue
+        key = item.get("_tender_key")
+        if not key:
+            payload = item.get("payload") or {}
+            source = str(payload.get("tender_source") or "federal")
+            tender_id = int(payload.get("id") or item.get("id") or 0)
+            key = (source, tender_id)
+            item["_tender_key"] = key
+        _apply_construction_pair_breakdown(
+            item,
+            key,
+            hybrid_pairs=hybrid_pairs,
+            fresh_cache=fresh_cache,
+        )
+        tender_items.append(item)
+
+    _fill_missing_construction_breakdowns(session, company, tender_items)
+    return sum(1 for item in tender_items if item.get("breakdown"))
 
 
 def _fill_missing_construction_breakdowns(
@@ -1387,13 +1417,9 @@ def _discover_construction_opportunities(
         stretch_threshold=tender_stretch_threshold,
         hybrid_pairs=hybrid_pairs,
     )
-    breakdown_started = time.perf_counter()
-    _fill_missing_construction_breakdowns(session, company, tender_matches)
-    _fill_missing_construction_breakdowns(session, company, tender_stretch)
     print(
         f"[OpportunityDiscovery] construction company={company.id} tender_items "
         f"{time.perf_counter() - items_started:.2f}s "
-        f"breakdown_fill={time.perf_counter() - breakdown_started:.2f}s "
         f"matches={len(tender_matches)} stretch={len(tender_stretch)}"
     )
 
@@ -1455,12 +1481,23 @@ def _discover_construction_opportunities(
         permit_stretch=permit_stretch,
     )
 
+    breakdown_started = time.perf_counter()
+    breakdown_count = _attach_final_construction_tender_breakdowns(
+        session,
+        company,
+        top,
+        hybrid_pairs=hybrid_pairs,
+    )
+
     for item in top:
         item.pop("_tender_key", None)
 
+    total_elapsed = time.perf_counter() - started
     print(
         f"[OpportunityDiscovery] construction company={company.id} total "
-        f"{time.perf_counter() - started:.2f}s matches={len(top)}"
+        f"{total_elapsed:.2f}s candidates_before_reduction={total_candidates} "
+        f"final_matches={len(top)} breakdown_items={breakdown_count} "
+        f"breakdown_fill={time.perf_counter() - breakdown_started:.2f}s"
     )
 
     return {
