@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/health — Health Response",
+  "description": "Contract for health endpoint. Feature 003 adds optional db_init_* fields; all prior fields unchanged.",
+  "type": "object",
+  "required": [
+    "status",
+    "database_connected",
+    "anthropic_api_key_configured",
+    "scheduler_enabled",
+    "scheduler_running"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "degraded"],
+      "description": "Overall service health. degraded when database_connected is false."
+    },
+    "database_connected": {
+      "type": "boolean",
+      "description": "Result of live SELECT 1 ping with bounded connect timeout."
+    },
+    "anthropic_api_key_configured": {
+      "type": "boolean"
+    },
+    "scheduler_enabled": {
+      "type": "boolean"
+    },
+    "scheduler_running": {
+      "type": "boolean"
+    },
+    "db_init_status": {
+      "type": "string",
+      "enum": ["pending", "running", "complete", "failed"],
+      "description": "Background schema initialization state (additive, feature 003)."
+    },
+    "db_init_error": {
+      "type": ["string", "null"],
+      "description": "Truncated error when db_init_status is failed; null or omitted otherwise."
+    }
+  },
+  "examples": [
+    {
+      "status": "ok",
+      "database_connected": true,
+      "anthropic_api_key_configured": true,
+      "scheduler_enabled": true,
+      "scheduler_running": true,
+      "db_init_status": "complete",
+      "db_init_error": null
+    },
+    {
+      "status": "degraded",
+      "database_connected": false,
+      "anthropic_api_key_configured": true,
+      "scheduler_enabled": true,
+      "scheduler_running": true,
+      "db_init_status": "running",
+      "db_init_error": null
+    },
+    {
+      "status": "degraded",
+      "database_connected": false,
+      "anthropic_api_key_configured": false,
+      "scheduler_enabled": true,
+      "scheduler_running": true,
+      "db_init_status": "failed",
+      "db_init_error": "connection timeout expired"
+    }
+  ]
+}

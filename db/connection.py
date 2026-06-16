@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, inspect, text
@@ -16,6 +18,16 @@ from config.env import get_env, load_app_env
 from db.models import Base
 
 T = TypeVar("T")
+
+DbInitStatus = Literal["pending", "running", "complete", "failed"]
+
+_db_init_lock = threading.Lock()
+_db_init_status: DbInitStatus = "pending"
+_db_init_error: str | None = None
+_db_init_started_at: datetime | None = None
+_db_init_completed_at: datetime | None = None
+_last_init_db_error: str | None = None
+_MAX_DB_INIT_ERROR_LEN = 500
 
 # PostgreSQL recovery / startup / capacity errors that clear after a short wait.
 TRANSIENT_DB_ERROR_MARKERS = (
@@ -103,14 +115,79 @@ def _database_url() -> str:
     )
 
 
-def _engine_connect_args(url: str) -> dict[str, str]:
+def _db_connect_timeout_seconds() -> int:
+    raw = get_env("DB_CONNECT_TIMEOUT", "10")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
+
+
+def _truncate_init_error(message: str) -> str:
+    if len(message) <= _MAX_DB_INIT_ERROR_LEN:
+        return message
+    return message[: _MAX_DB_INIT_ERROR_LEN - 3] + "..."
+
+
+def _engine_connect_args(url: str) -> dict[str, Any]:
+    args: dict[str, Any] = {"connect_timeout": _db_connect_timeout_seconds()}
     try:
         host = (make_url(url).host or "").lower()
     except Exception:
-        return {}
+        return args
     if _is_railway_host(host):
-        return {"sslmode": "require"}
-    return {}
+        args["sslmode"] = "require"
+    return args
+
+
+def get_db_init_status() -> dict[str, str | None]:
+    with _db_init_lock:
+        return {
+            "status": _db_init_status,
+            "error": _db_init_error,
+            "started_at": _db_init_started_at.isoformat() if _db_init_started_at else None,
+            "completed_at": _db_init_completed_at.isoformat() if _db_init_completed_at else None,
+        }
+
+
+def _run_init_db_background() -> None:
+    global _db_init_status, _db_init_error, _db_init_completed_at, _last_init_db_error
+
+    ok = False
+    error_msg: str | None = None
+    try:
+        ok = init_db(raise_on_failure=False)
+        if not ok:
+            error_msg = _last_init_db_error or "init_db failed after retries"
+    except Exception as exc:
+        error_msg = str(exc)
+        ok = False
+
+    with _db_init_lock:
+        _db_init_completed_at = datetime.now(timezone.utc)
+        if ok:
+            _db_init_status = "complete"
+            _db_init_error = None
+        else:
+            _db_init_status = "failed"
+            _db_init_error = _truncate_init_error(error_msg or "init_db failed")
+            print(f"[DB] background init_db failed: {_db_init_error}")
+
+
+def start_init_db_background() -> None:
+    global _db_init_status, _db_init_started_at
+
+    with _db_init_lock:
+        if _db_init_status in ("running", "complete"):
+            return
+        _db_init_status = "running"
+        _db_init_started_at = datetime.now(timezone.utc)
+        thread = threading.Thread(
+            target=_run_init_db_background,
+            name="db-init",
+            daemon=True,
+        )
+        thread.start()
 
 
 def is_transient_db_error(exc: Exception) -> bool:
@@ -509,6 +586,8 @@ def _run_migrations(engine: Engine) -> None:
 
 def init_db(*, raise_on_failure: bool = False) -> bool:
     """Initialize schema. Retries through Postgres recovery; app may start degraded."""
+    global _last_init_db_error
+
     import db.models  # noqa: F401  # register all ORM models before create_all
 
     engine = get_engine()
@@ -522,9 +601,11 @@ def init_db(*, raise_on_failure: bool = False) -> bool:
             base_delay=base_delay,
             max_delay=max_delay,
         )
+        _last_init_db_error = None
         print("[DB] init_db complete")
         return True
     except Exception as exc:
+        _last_init_db_error = str(exc)
         print(f"[DB] init_db failed after retries: {exc}")
         if raise_on_failure:
             raise

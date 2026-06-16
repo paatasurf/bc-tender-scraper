@@ -13,7 +13,13 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from datetime import datetime
 
-from db.connection import check_db_connection, get_session, init_db, is_transient_db_error
+from db.connection import (
+    check_db_connection,
+    get_db_init_status,
+    get_session,
+    is_transient_db_error,
+    start_init_db_background,
+)
 from pipeline.opportunity_discovery import ARCHITECTURE_DEFAULT_MIN_SCORE, CONSTRUCTION_DEFAULT_MIN_SCORE
 from db.models import (
     ArchCompany,
@@ -44,9 +50,9 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Start the API even if Postgres is temporarily in recovery after disk pressure.
-    init_db(raise_on_failure=False)
+    # Bind HTTP port immediately; schema init runs in a background thread.
     start_scheduler()
+    start_init_db_background()
     yield
     stop_scheduler()
 
@@ -84,15 +90,18 @@ def database_unavailable_handler(_request: Request, exc: Exception) -> JSONRespo
 
 
 @app.get("/api/health")
-def health() -> dict[str, str | bool]:
+def health() -> dict[str, str | bool | None]:
     db_ok = check_db_connection()
     scheduler = scheduler_status()
+    init_status = get_db_init_status()
     return {
         "status": "ok" if db_ok else "degraded",
         "database_connected": db_ok,
         "anthropic_api_key_configured": bool(get_anthropic_api_key()),
         "scheduler_enabled": bool(scheduler.get("enabled")),
         "scheduler_running": bool(scheduler.get("running")),
+        "db_init_status": init_status["status"],
+        "db_init_error": init_status["error"],
     }
 
 
