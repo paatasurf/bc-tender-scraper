@@ -472,6 +472,8 @@ def _migrate_tender_matches_company_kind(engine) -> None:
         "DROP INDEX IF EXISTS ix_tender_matches_company_tender",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_kind_tender "
         "ON tender_matches (company_kind, company_id, tender_source, tender_id)",
+        "CREATE INDEX IF NOT EXISTS ix_tender_matches_company_created "
+        "ON tender_matches (company_kind, company_id, created_at DESC)",
     )
     with engine.begin() as conn:
         for statement in statements:

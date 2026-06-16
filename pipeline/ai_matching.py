@@ -423,6 +423,7 @@ def score_tender_pairs(
     persist: bool = True,
     max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
     inline_cap: int | None = None,
+    cached_matches: dict[tuple[str, int], TenderMatch] | None = None,
 ) -> dict[str, Any]:
     """Hybrid discover path: use fresh cache when available; otherwise deterministic Python scoring."""
     pairs: dict[tuple[str, int], dict[str, Any]] = {}
@@ -437,15 +438,18 @@ def score_tender_pairs(
     fresh_scored = 0
 
     company_id = company.id
-    fresh_cache = {
-        (row.tender_source, row.tender_id): row
-        for row in load_fresh_company_tender_matches(
-            session,
-            company_kind=kind,
-            company_id=company_id,
-            max_age_hours=max_age_hours,
-        )
-    }
+    if cached_matches is not None:
+        fresh_cache = cached_matches
+    else:
+        fresh_cache = {
+            (row.tender_source, row.tender_id): row
+            for row in load_fresh_company_tender_matches(
+                session,
+                company_kind=kind,
+                company_id=company_id,
+                max_age_hours=max_age_hours,
+            )
+        }
     pending_commit = False
 
     for candidate in candidates:
@@ -467,7 +471,7 @@ def score_tender_pairs(
             pairs[key] = pair_data
             continue
 
-        if inline_cap is not None and fresh_scored >= inline_cap and kind != "construction":
+        if inline_cap is not None and fresh_scored >= inline_cap:
             stats["skipped_cap"] += 1
             continue
 
@@ -521,8 +525,7 @@ def load_fresh_company_tender_matches(
     max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
 ) -> list[TenderMatch]:
     """All tender_matches rows for a company that are still within the cache TTL."""
-    # SQL cutoff avoids loading the full per-company history on every discover request.
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours + 24)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     rows = session.scalars(
         select(TenderMatch)
         .where(

@@ -117,6 +117,30 @@ class SessionPhaseMetrics:
         )
 
 
+def _log_discover_step(
+    step: str,
+    company_id: int,
+    kind: Kind,
+    started: float,
+    *,
+    extra: str = "",
+) -> None:
+    elapsed = time.perf_counter() - started
+    suffix = f" {extra}" if extra else ""
+    print(
+        f"[OpportunityDiscovery] step={step} company={company_id} kind={kind} "
+        f"{elapsed:.3f}s{suffix}"
+    )
+
+
+def _applicant_search_tokens(name: str) -> list[str]:
+    tokens: list[str] = []
+    for part in re.split(r"\W+", name.lower()):
+        if len(part) > 3 and part not in STOP_WORDS:
+            tokens.append(part)
+    return tokens[:4]
+
+
 CONSTRUCTION_TITLE_RE = re.compile(
     r"\bconstruction\b|\brenovation\b|\bretrofit\b|\bbuilding\b|\bcivil\b|\binfrastructure\b"
     r"|\broof\b|\bpaving\b|\bhvac\b|\belectrical\b|\bmechanical\b|\btenant\b|\bdemolition\b"
@@ -665,19 +689,49 @@ def _load_construction_read_bundle(
     company_id: int,
     max_candidates: int,
 ) -> DiscoveryReadBundle:
+    kind: Kind = "construction"
+    started = time.perf_counter()
     company = session.get(Company, company_id)
     if company is None:
         raise ValueError(f"Company {company_id} not found")
+    _log_discover_step("read.company", company_id, kind, started)
+
+    signals_started = time.perf_counter()
     signals = CompanySignals.from_company(company)
+    _log_discover_step("read.signals", company_id, kind, signals_started)
+
+    tender_started = time.perf_counter()
     tender_rows = _load_tender_candidates(session, "construction", max_candidates)
+    _log_discover_step(
+        "read.tenders", company_id, kind, tender_started, extra=f"rows={len(tender_rows)}"
+    )
+
+    permit_started = time.perf_counter()
     permit_rows = _load_permit_candidates(session, signals, max_candidates // 2)
+    _log_discover_step(
+        "read.permits", company_id, kind, permit_started, extra=f"rows={len(permit_rows)}"
+    )
+
+    award_started = time.perf_counter()
     award_rows = _load_award_candidates(session, company, max_candidates // 2)
+    _log_discover_step(
+        "read.awards", company_id, kind, award_started, extra=f"rows={len(award_rows)}"
+    )
+
+    matches_started = time.perf_counter()
     fresh_cache = {
         (row.tender_source, row.tender_id): row
         for row in load_fresh_company_tender_matches(
             session, company_kind="construction", company_id=company_id
         )
     }
+    _log_discover_step(
+        "read.tender_matches",
+        company_id,
+        kind,
+        matches_started,
+        extra=f"rows={len(fresh_cache)}",
+    )
     return DiscoveryReadBundle(
         company=company,
         signals=signals,
@@ -693,20 +747,54 @@ def _load_architecture_read_bundle(
     company_id: int,
     max_candidates: int,
 ) -> DiscoveryReadBundle:
+    kind: Kind = "architecture"
+    started = time.perf_counter()
     company = session.get(ArchCompany, company_id)
     if company is None:
         raise ValueError(f"Architecture company {company_id} not found")
+    _log_discover_step("read.company", company_id, kind, started)
+
+    signals_started = time.perf_counter()
     signals = CompanySignals.from_arch_company(company)
+    _log_discover_step("read.signals", company_id, kind, signals_started)
+
+    tender_started = time.perf_counter()
     tender_rows = _load_tender_candidates(session, "architecture", max_candidates)
+    _log_discover_step(
+        "read.tenders", company_id, kind, tender_started, extra=f"rows={len(tender_rows)}"
+    )
+
+    permit_started = time.perf_counter()
     permit_rows = _load_permit_candidates(session, signals, max_candidates // 2)
+    _log_discover_step(
+        "read.permits", company_id, kind, permit_started, extra=f"rows={len(permit_rows)}"
+    )
+
+    matches_started = time.perf_counter()
     fresh_cache = {
         (row.tender_source, row.tender_id): row
         for row in load_fresh_company_tender_matches(
             session, company_kind="architecture", company_id=company_id
         )
     }
+    _log_discover_step(
+        "read.tender_matches",
+        company_id,
+        kind,
+        matches_started,
+        extra=f"rows={len(fresh_cache)}",
+    )
+
+    batch_started = time.perf_counter()
     cache_keys = list(fresh_cache.keys())
     cached_tender_rows = _batch_load_tender_rows(session, cache_keys) if cache_keys else {}
+    _log_discover_step(
+        "read.cached_tenders",
+        company_id,
+        kind,
+        batch_started,
+        extra=f"rows={len(cached_tender_rows)}",
+    )
     return DiscoveryReadBundle(
         company=company,
         signals=signals,
@@ -801,6 +889,7 @@ def _run_hybrid_tender_scoring(
     rule_candidates: list[RuleTenderCandidate],
     *,
     inline_cap: int = HYBRID_INLINE_SCORE_CAP,
+    cached_matches: dict[tuple[str, int], Any] | None = None,
 ) -> dict[str, Any]:
     """Send rule top-N to Haiku scorer (cache-aware, capped). Never raises — rules remain fallback."""
     if not rule_candidates:
@@ -831,6 +920,7 @@ def _run_hybrid_tender_scoring(
             pair_candidates,
             persist=True,
             inline_cap=inline_cap,
+            cached_matches=cached_matches,
         )
     except Exception as exc:
         print(f"[Hybrid Matching] Scoring skipped for company={company.id} kind={kind}: {exc}")
@@ -1124,13 +1214,14 @@ def _load_permit_candidates(session: Session, signals: CompanySignals, limit: in
     seen: set[int] = set()
 
     if signals.normalized_name:
-        own_rows = session.scalars(
-            select(Permit)
-            .where(Permit.applicant != "")
-            .order_by(Permit.id.desc())
-            .limit(limit * 3)
-        ).all()
-        for permit in own_rows:
+        tokens = _applicant_search_tokens(signals.name)
+        own_query = select(Permit).where(Permit.applicant != "")
+        if tokens:
+            own_query = own_query.where(
+                or_(*[func.lower(Permit.applicant).contains(token) for token in tokens])
+            )
+        own_query = own_query.order_by(Permit.id.desc()).limit(limit)
+        for permit in session.scalars(own_query).all():
             if permit.id in seen:
                 continue
             if normalize_vendor_name(permit.applicant) == signals.normalized_name:
@@ -1138,13 +1229,17 @@ def _load_permit_candidates(session: Session, signals: CompanySignals, limit: in
                 seen.add(permit.id)
 
     type_terms = [t.lower() for t in signals.project_types if t]
-    market_query = select(Permit).order_by(Permit.id.desc()).limit(limit * 4)
-    if type_terms:
-        clauses = [func.lower(Permit.permit_type).contains(term) for term in type_terms[:6]]
-        market_query = market_query.where(or_(*clauses))
+    # Use PK-ordered scan + Python filter — OR of LOWER(permit_type) LIKE '%term%'
+    # cannot use btree indexes and can scan the full permits table.
+    scan_limit = limit * 4 if not type_terms else limit * 8
+    market_query = select(Permit).order_by(Permit.id.desc()).limit(scan_limit)
     for permit in session.scalars(market_query).all():
         if permit.id in seen:
             continue
+        if type_terms:
+            permit_type = (permit.permit_type or "").lower()
+            if not any(term in permit_type for term in type_terms[:6]):
+                continue
         own = (
             signals.normalized_name != ""
             and normalize_vendor_name(permit.applicant) == signals.normalized_name
@@ -1198,16 +1293,17 @@ def _load_award_candidates(session: Session, company: Company, limit: int) -> li
 
     clients = [c.strip().lower() for c in (company.award_clients or []) if c.strip()]
     if clients:
-        client_rows = session.scalars(
+        client_clauses = [
+            func.lower(ContractAward.buyer_organization).contains(client)
+            for client in clients[:8]
+        ]
+        for award in session.scalars(
             select(ContractAward)
-            .where(ContractAward.buyer_organization != "")
+            .where(or_(*client_clauses))
             .order_by(ContractAward.award_date.desc(), ContractAward.id.desc())
-            .limit(limit * 4)
-        ).all()
-        for award in client_rows:
-            buyer = (award.buyer_organization or "").lower()
-            if any(client in buyer or buyer in client for client in clients):
-                add(award, "client_history")
+            .limit(limit)
+        ).all():
+            add(award, "client_history")
             if len(results) >= limit * 2:
                 break
 
@@ -1551,16 +1647,16 @@ def _discover_construction_opportunities(
     )
 
     hybrid_started = time.perf_counter()
+    fresh_cache = dict(bundle.fresh_cache)
     with session_scope() as session:
         hybrid_scoring = _run_hybrid_tender_scoring(
-            session, company, "construction", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
+            session,
+            company,
+            "construction",
+            rule_candidates,
+            inline_cap=HYBRID_INLINE_SCORE_CAP,
+            cached_matches=fresh_cache,
         )
-        fresh_cache = {
-            (row.tender_source, row.tender_id): row
-            for row in load_fresh_company_tender_matches(
-                session, company_kind="construction", company_id=company.id
-            )
-        }
     phase_metrics.hybrid_write_ms = (time.perf_counter() - hybrid_started) * 1000
     print(
         f"[OpportunityDiscovery] construction company={company.id} hybrid_scoring "
@@ -1722,18 +1818,24 @@ def _discover_architecture_opportunities(
     )
 
     hybrid_started = time.perf_counter()
+    fresh_cache = dict(bundle.fresh_cache)
+    cached_tender_rows = dict(bundle.cached_tender_rows)
     with session_scope() as session:
         hybrid_scoring = _run_hybrid_tender_scoring(
-            session, company, "architecture", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
+            session,
+            company,
+            "architecture",
+            rule_candidates,
+            inline_cap=HYBRID_INLINE_SCORE_CAP,
+            cached_matches=fresh_cache,
         )
-        fresh_cache = {
-            (row.tender_source, row.tender_id): row
-            for row in load_fresh_company_tender_matches(
-                session, company_kind="architecture", company_id=company.id
-            )
-        }
-        cache_keys = list(fresh_cache.keys())
-        cached_tender_rows = _batch_load_tender_rows(session, cache_keys) if cache_keys else {}
+        new_keys = [
+            key
+            for key in (hybrid_scoring.get("pairs") or {})
+            if key not in cached_tender_rows
+        ]
+        if new_keys:
+            cached_tender_rows.update(_batch_load_tender_rows(session, new_keys))
     phase_metrics.hybrid_write_ms = (time.perf_counter() - hybrid_started) * 1000
     print(
         f"[OpportunityDiscovery] arch company={company.id} hybrid_scoring "
