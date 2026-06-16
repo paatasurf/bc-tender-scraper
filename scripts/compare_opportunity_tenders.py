@@ -27,7 +27,6 @@ def main() -> None:
             if not company:
                 continue
             result = discover_opportunities(
-                session,
                 company_id=cid,
                 kind="construction",
                 min_score=65,

@@ -460,26 +460,21 @@ def company_opportunities(
 ) -> dict[str, Any]:
     from pipeline.opportunity_discovery import discover_opportunities
 
-    session = get_session()
     started = time.perf_counter()
     try:
-        try:
-            result = discover_opportunities(
-                session,
-                company_id=company_id,
-                kind=kind,
-                min_score=min_score,
-                limit=limit,
-            )
-            print(
-                f"[API] company_opportunities company_id={company_id} kind={kind} "
-                f"total={time.perf_counter() - started:.2f}s"
-            )
-            return result
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    finally:
-        session.close()
+        result = discover_opportunities(
+            company_id=company_id,
+            kind=kind,
+            min_score=min_score,
+            limit=limit,
+        )
+        print(
+            f"[API] company_opportunities company_id={company_id} kind={kind} "
+            f"total={time.perf_counter() - started:.2f}s"
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def _tender_response_fields(tender: Any) -> dict[str, Any]:
@@ -580,26 +575,21 @@ def arch_company_opportunities(
 ) -> dict[str, Any]:
     from pipeline.opportunity_discovery import discover_opportunities
 
-    session = get_session()
     started = time.perf_counter()
     try:
-        try:
-            result = discover_opportunities(
-                session,
-                company_id=company_id,
-                kind="architecture",
-                min_score=min_score,
-                limit=limit,
-            )
-            print(
-                f"[API] arch_company_opportunities company_id={company_id} "
-                f"total={time.perf_counter() - started:.2f}s"
-            )
-            return result
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    finally:
-        session.close()
+        result = discover_opportunities(
+            company_id=company_id,
+            kind="architecture",
+            min_score=min_score,
+            limit=limit,
+        )
+        print(
+            f"[API] arch_company_opportunities company_id={company_id} "
+            f"total={time.perf_counter() - started:.2f}s"
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/companies/{company_id}/bd-intelligence")

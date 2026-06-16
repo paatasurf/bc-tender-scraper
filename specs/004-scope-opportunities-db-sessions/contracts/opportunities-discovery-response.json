@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Opportunities Discovery Response — Unchanged Contract (Feature 004)",
+  "description": "Session-scoping refactor MUST NOT alter this response shape or scoring semantics. Construction tender breakdown extension defined in specs/002-construction-deterministic-score/contracts/company-opportunities-construction.json remains in force.",
+  "type": "object",
+  "required": ["company_id", "kind", "min_score", "limit", "total_candidates", "matches", "ranking_model", "hybrid_scoring", "thresholds"],
+  "properties": {
+    "company_id": { "type": "integer" },
+    "kind": { "enum": ["construction", "architecture"] },
+    "min_score": { "type": "integer" },
+    "limit": { "type": "integer" },
+    "total_candidates": { "type": "integer" },
+    "matches": {
+      "type": "array",
+      "description": "Ordered list of opportunity items; parity tests compare type, id, score, order across refactor"
+    },
+    "ranking_model": { "type": "string" },
+    "hybrid_scoring": {
+      "type": "object",
+      "description": "Hybrid stats object; keys unchanged from pre-refactor"
+    },
+    "thresholds": {
+      "type": "object",
+      "description": "Threshold constants exposed for UI; unchanged"
+    }
+  },
+  "additionalProperties": false,
+  "$comment": "No new fields added by feature 004. Operational metrics (db_phases_total) belong in logs only, not response body."
+}

@@ -49,6 +49,11 @@ def main() -> int:
     print(f"total_candidates={data.get('total_candidates')}")
     print(f"final_matches={len(matches)}")
     print(f"tender_breakdowns={tender_with_breakdown}")
+    hybrid = data.get("hybrid_scoring") or {}
+    print(f"hybrid_cache_hits={hybrid.get('cache_hits')}")
+    print(f"hybrid_freshly_scored={hybrid.get('freshly_scored')}")
+    if elapsed > 60:
+        print(f"WARN: response_time exceeds 60s target ({elapsed:.1f}s)")
     return 0
 
 

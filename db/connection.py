@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Literal, TypeVar
@@ -285,6 +286,16 @@ def get_session_factory() -> sessionmaker[Session]:
 
 def _ping_session(session: Session) -> None:
     session.execute(text("SELECT 1"))
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Yield a short-lived session; always returns the connection to the pool."""
+    session = get_session_factory()()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def get_session() -> Session:

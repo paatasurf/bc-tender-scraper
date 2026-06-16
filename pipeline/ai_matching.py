@@ -540,7 +540,7 @@ def load_fresh_company_tender_matches(
 
 
 def resolve_hybrid_tender_score(
-    session: Session,
+    session: Session | None,
     *,
     company_kind: CompanyKind,
     company_id: int,
@@ -562,7 +562,7 @@ def resolve_hybrid_tender_score(
 
     if cached_matches is not None:
         cached = cached_matches.get(key)
-    else:
+    elif session is not None:
         cached = get_fresh_cached_match(
             session,
             company_kind=company_kind,
@@ -571,6 +571,8 @@ def resolve_hybrid_tender_score(
             tender_id=tender_id,
             max_age_hours=max_age_hours,
         )
+    else:
+        cached = None
     if cached is not None:
         reasoning = (cached.reasoning or "").strip()
         reasons = [reasoning[:240]] if reasoning else list(rule_reasons)

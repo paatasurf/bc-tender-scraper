@@ -108,3 +108,24 @@ def test_start_init_db_background_is_single_flight() -> None:
             time.sleep(0.05)
 
     assert connection.get_db_init_status()["status"] == "complete"
+
+
+def test_session_scope_closes_on_success_and_error() -> None:
+    from unittest.mock import MagicMock
+
+    from db.connection import session_scope
+
+    factory = MagicMock()
+    session = MagicMock()
+    factory.return_value = session
+
+    with patch.object(connection, "get_session_factory", return_value=factory):
+        with session_scope() as s:
+            assert s is session
+        session.close.assert_called_once()
+
+        session.reset_mock()
+        with pytest.raises(RuntimeError, match="boom"):
+            with session_scope():
+                raise RuntimeError("boom")
+        session.close.assert_called_once()
