@@ -437,17 +437,19 @@ def score_tender_pairs(
     fresh_scored = 0
 
     company_id = company.id
-
-    for candidate in candidates:
-        key = (candidate.tender_source, candidate.tender_id)
-        cached = get_fresh_cached_match(
+    fresh_cache = {
+        (row.tender_source, row.tender_id): row
+        for row in load_fresh_company_tender_matches(
             session,
             company_kind=kind,
             company_id=company_id,
-            tender_source=candidate.tender_source,
-            tender_id=candidate.tender_id,
             max_age_hours=max_age_hours,
         )
+    }
+
+    for candidate in candidates:
+        key = (candidate.tender_source, candidate.tender_id)
+        cached = fresh_cache.get(key)
         if cached is not None and cached.breakdown_json:
             stats["cache_hits"] += 1
             pair_data: dict[str, Any] = {
@@ -464,7 +466,7 @@ def score_tender_pairs(
             pairs[key] = pair_data
             continue
 
-        if inline_cap is not None and fresh_scored >= inline_cap:
+        if inline_cap is not None and fresh_scored >= inline_cap and kind != "construction":
             stats["skipped_cap"] += 1
             continue
 

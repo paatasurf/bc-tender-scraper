@@ -27,6 +27,7 @@ from pipeline.ai_matching import (
     HYBRID_INLINE_SCORE_CAP,
     TenderPairCandidate,
     _load_tender_row,
+    breakdown_json_to_construction_api_breakdown,
     build_match_reason_from_rules,
     load_fresh_company_tender_matches,
     resolve_hybrid_tender_score,
@@ -762,6 +763,13 @@ def _rule_tenders_to_opportunity_items(
             cached_matches=fresh_cache,
         )
         item = _tender_opportunity_item(candidate.payload, key, score, reasons, source)
+        if kind == "construction":
+            _apply_construction_pair_breakdown(
+                item,
+                key,
+                hybrid_pairs=hybrid_pairs,
+                fresh_cache=fresh_cache,
+            )
         match_floor = ai_match_floor if source == "ai_match" else rules_threshold
         stretch_floor = ai_stretch_floor if source == "ai_match" else stretch_threshold
         if score >= match_floor:
@@ -793,43 +801,101 @@ def _tender_opportunity_item(
     return item
 
 
-def _attach_construction_tender_breakdown(
+def _apply_construction_pair_breakdown(
+    item: dict[str, Any],
+    key: tuple[str, int],
+    *,
+    hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None,
+    fresh_cache: dict[tuple[str, int], Any] | None,
+) -> None:
+    """Copy hybrid or cached breakdown onto an item; skip if already present."""
+    if item.get("breakdown"):
+        return
+    if hybrid_pairs and key in hybrid_pairs:
+        pair = hybrid_pairs[key]
+        breakdown = pair.get("breakdown")
+        if breakdown:
+            item["score"] = int(pair["score"])
+            item["breakdown"] = breakdown
+            reasoning = (pair.get("reasoning") or "").strip()
+            if reasoning:
+                item["reasons"] = [reasoning[:240]]
+            return
+    if fresh_cache and key in fresh_cache:
+        row = fresh_cache[key]
+        if row.breakdown_json:
+            item["score"] = row.score
+            item["breakdown"] = breakdown_json_to_construction_api_breakdown(row.breakdown_json)
+            reasoning = (row.reasoning or "").strip()
+            if reasoning:
+                item["reasons"] = [reasoning[:240]]
+
+
+def _batch_load_tender_rows(
+    session: Session,
+    keys: list[tuple[str, int]],
+) -> dict[tuple[str, int], Tender | CommercialTender | ArchTender]:
+    """Load tender rows for many (source, id) pairs in one query per source table."""
+    by_source: dict[str, set[int]] = {}
+    for source, tender_id in keys:
+        by_source.setdefault(source, set()).add(tender_id)
+
+    loaded: dict[tuple[str, int], Tender | CommercialTender | ArchTender] = {}
+    federal_ids = by_source.get("federal") or set()
+    if federal_ids:
+        for row in session.scalars(select(Tender).where(Tender.id.in_(federal_ids))).all():
+            loaded[("federal", row.id)] = row
+    commercial_ids = by_source.get("commercial") or set()
+    if commercial_ids:
+        for row in session.scalars(
+            select(CommercialTender).where(CommercialTender.id.in_(commercial_ids))
+        ).all():
+            loaded[("commercial", row.id)] = row
+    arch_ids = by_source.get("arch") or set()
+    if arch_ids:
+        for row in session.scalars(select(ArchTender).where(ArchTender.id.in_(arch_ids))).all():
+            loaded[("arch", row.id)] = row
+    return loaded
+
+
+def _fill_missing_construction_breakdowns(
     session: Session,
     company: Company,
     items: list[dict[str, Any]],
-    hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None = None,
 ) -> None:
-    """Attach deterministic score + 7-key breakdown to construction tender opportunity items."""
-    for item in items:
-        if item.get("type") != "tender":
-            continue
+    """Score only tender items still missing breakdown after hybrid/cache enrichment."""
+    missing_keys: list[tuple[str, int]] = []
+    items_by_key: dict[tuple[str, int], list[dict[str, Any]]] = {}
 
+    for item in items:
+        if item.get("type") != "tender" or item.get("breakdown"):
+            continue
         key = item.get("_tender_key")
         if not key:
             payload = item.get("payload") or {}
             source = str(payload.get("tender_source") or "federal")
             tender_id = int(payload.get("id") or item.get("id") or 0)
             key = (source, tender_id)
+            item["_tender_key"] = key
+        if key not in items_by_key:
+            missing_keys.append(key)
+            items_by_key[key] = []
+        items_by_key[key].append(item)
 
-        if hybrid_pairs and key in hybrid_pairs:
-            pair = hybrid_pairs[key]
-            breakdown = pair.get("breakdown")
-            if breakdown:
-                item["score"] = int(pair["score"])
-                item["breakdown"] = breakdown
-                reasoning = (pair.get("reasoning") or "").strip()
-                if reasoning:
-                    item["reasons"] = [reasoning[:240]]
-                continue
+    if not missing_keys:
+        return
 
-        tender = _load_tender_row(session, key[0], key[1])
+    tenders = _batch_load_tender_rows(session, missing_keys)
+    for key, group in items_by_key.items():
+        tender = tenders.get(key)
         if tender is None:
             continue
         scored = score_construction_match(company, tender, key[0])
-        item["score"] = scored.score
-        item["breakdown"] = scored.api_breakdown
-        if scored.match_reason:
-            item["reasons"] = [scored.match_reason[:240]]
+        for item in group:
+            item["score"] = scored.score
+            item["breakdown"] = scored.api_breakdown
+            if scored.match_reason:
+                item["reasons"] = [scored.match_reason[:240]]
 
 
 def _cached_ai_tenders_to_opportunity_items(
@@ -1288,14 +1354,30 @@ def _discover_construction_opportunities(
     min_score: int = CONSTRUCTION_TENDER_RULES_THRESHOLD,
 ) -> dict[str, Any]:
     """Construction Intelligence ranking with hybrid tender scoring and slot assembly."""
+    started = time.perf_counter()
     tender_rules_threshold = min_score
     tender_stretch_threshold = max(0, min_score - 10)
     signals = CompanySignals.from_company(company)
 
     rule_candidates = _scan_construction_rule_tenders(session, signals, max_candidates)
+    print(
+        f"[OpportunityDiscovery] construction company={company.id} rule_scan "
+        f"{time.perf_counter() - started:.2f}s candidates={len(rule_candidates)}"
+    )
+
+    hybrid_started = time.perf_counter()
     hybrid_scoring = _run_hybrid_tender_scoring(
         session, company, "construction", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
     )
+    print(
+        f"[OpportunityDiscovery] construction company={company.id} hybrid_scoring "
+        f"{time.perf_counter() - hybrid_started:.2f}s "
+        f"cache_hits={hybrid_scoring.get('cache_hits', 0)} "
+        f"freshly_scored={hybrid_scoring.get('freshly_scored', 0)}"
+    )
+
+    items_started = time.perf_counter()
+    hybrid_pairs = hybrid_scoring.get("pairs") or {}
     tender_matches, tender_stretch = _rule_tenders_to_opportunity_items(
         session,
         company.id,
@@ -1303,12 +1385,19 @@ def _discover_construction_opportunities(
         rule_candidates,
         rules_threshold=tender_rules_threshold,
         stretch_threshold=tender_stretch_threshold,
-        hybrid_pairs=hybrid_scoring.get("pairs") or {},
+        hybrid_pairs=hybrid_pairs,
     )
-    hybrid_pairs = hybrid_scoring.get("pairs") or {}
-    _attach_construction_tender_breakdown(session, company, tender_matches, hybrid_pairs)
-    _attach_construction_tender_breakdown(session, company, tender_stretch, hybrid_pairs)
+    breakdown_started = time.perf_counter()
+    _fill_missing_construction_breakdowns(session, company, tender_matches)
+    _fill_missing_construction_breakdowns(session, company, tender_stretch)
+    print(
+        f"[OpportunityDiscovery] construction company={company.id} tender_items "
+        f"{time.perf_counter() - items_started:.2f}s "
+        f"breakdown_fill={time.perf_counter() - breakdown_started:.2f}s "
+        f"matches={len(tender_matches)} stretch={len(tender_stretch)}"
+    )
 
+    permit_started = time.perf_counter()
     permit_matches: list[dict[str, Any]] = []
     permit_stretch: list[dict[str, Any]] = []
     for permit, own in _load_permit_candidates(session, signals, max_candidates // 2):
@@ -1328,7 +1417,13 @@ def _discover_construction_opportunities(
             permit_matches.append(item)
         elif score >= stretch_threshold:
             permit_stretch.append(item)
+    print(
+        f"[OpportunityDiscovery] construction company={company.id} permit_scan "
+        f"{time.perf_counter() - permit_started:.2f}s "
+        f"matches={len(permit_matches)} stretch={len(permit_stretch)}"
+    )
 
+    award_started = time.perf_counter()
     award_matches: list[dict[str, Any]] = []
     for award, context in _load_award_candidates(session, company, max_candidates // 2):
         score, reasons = _score_contract_award(signals, award, context=context)
@@ -1345,6 +1440,10 @@ def _discover_construction_opportunities(
                 "payload": _award_payload(award),
             }
         )
+    print(
+        f"[OpportunityDiscovery] construction company={company.id} award_scan "
+        f"{time.perf_counter() - award_started:.2f}s matches={len(award_matches)}"
+    )
 
     total_candidates = len(tender_matches) + len(tender_stretch) + len(permit_matches) + len(permit_stretch) + len(award_matches)
     top = _assemble_construction_opportunities(
@@ -1358,6 +1457,11 @@ def _discover_construction_opportunities(
 
     for item in top:
         item.pop("_tender_key", None)
+
+    print(
+        f"[OpportunityDiscovery] construction company={company.id} total "
+        f"{time.perf_counter() - started:.2f}s matches={len(top)}"
+    )
 
     return {
         "company_id": company.id,
