@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, inspect as sa_inspect, or_, select
 from sqlalchemy.orm import Session
 
 from db.connection import session_scope
@@ -669,19 +669,25 @@ def _load_tender_candidates(session: Session, kind: Kind, limit: int) -> list[tu
     return rows
 
 
+def _safe_expunge(session: Session, instance: Any) -> None:
+    """Expunge only if instance is still bound to this session (avoids double-expunge)."""
+    if sa_inspect(instance).session is session:
+        session.expunge(instance)
+
+
 def _finalize_read_bundle(session: Session, bundle: DiscoveryReadBundle) -> None:
     """Detach ORM entities so CPU phases can run without a checked-out connection."""
-    session.expunge(bundle.company)
+    _safe_expunge(session, bundle.company)
     for row, _ in bundle.tender_rows:
-        session.expunge(row)
+        _safe_expunge(session, row)
     for permit, _ in bundle.permit_rows:
-        session.expunge(permit)
+        _safe_expunge(session, permit)
     for award, _ in bundle.award_rows:
-        session.expunge(award)
+        _safe_expunge(session, award)
     for row in bundle.fresh_cache.values():
-        session.expunge(row)
+        _safe_expunge(session, row)
     for row in bundle.cached_tender_rows.values():
-        session.expunge(row)
+        _safe_expunge(session, row)
 
 
 def _load_construction_read_bundle(

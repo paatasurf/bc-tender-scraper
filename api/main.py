@@ -1,5 +1,6 @@
 import config.env  # noqa: F401  # load env before pipeline imports
 
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -39,6 +40,8 @@ from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
 from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
+
+logger = logging.getLogger(__name__)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -590,6 +593,14 @@ def arch_company_opportunities(
         return result
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception:
+        logger.exception(
+            "arch_company_opportunities failed company_id=%s min_score=%s limit=%s",
+            company_id,
+            min_score,
+            limit,
+        )
+        raise
 
 
 @app.get("/api/companies/{company_id}/bd-intelligence")
