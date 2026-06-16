@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal
@@ -738,6 +739,10 @@ def _rule_tenders_to_opportunity_items(
     seen: set[tuple[str, int]] = set()
     ai_match_floor = ai_rules_threshold if ai_rules_threshold is not None else rules_threshold
     ai_stretch_floor = ai_stretch_threshold if ai_stretch_threshold is not None else stretch_threshold
+    fresh_cache = {
+        (row.tender_source, row.tender_id): row
+        for row in load_fresh_company_tender_matches(session, company_kind=kind, company_id=company_id)
+    }
 
     for candidate in rule_candidates:
         key = (candidate.tender_source, candidate.tender_id)
@@ -754,6 +759,7 @@ def _rule_tenders_to_opportunity_items(
             rule_score=candidate.rule_score,
             rule_reasons=candidate.reasons,
             hybrid_pairs=hybrid_pairs,
+            cached_matches=fresh_cache,
         )
         item = _tender_opportunity_item(candidate.payload, key, score, reasons, source)
         match_floor = ai_match_floor if source == "ai_match" else rules_threshold
@@ -1382,6 +1388,7 @@ def _discover_architecture_opportunities(
     min_score: int = ARCHITECTURE_DEFAULT_MIN_SCORE,
 ) -> dict[str, Any]:
     """Architecture discovery with tender and permit thresholds kept independent."""
+    started = time.perf_counter()
     tender_rules_threshold = min_score
     tender_stretch_threshold = max(20, min_score - 15)
     ai_tender_threshold = ARCHITECTURE_TENDER_AI_THRESHOLD
@@ -1389,9 +1396,23 @@ def _discover_architecture_opportunities(
     signals = CompanySignals.from_arch_company(company)
 
     rule_candidates = _scan_architecture_rule_tenders(session, signals, max_candidates)
+    print(
+        f"[OpportunityDiscovery] arch company={company.id} rule_scan "
+        f"{time.perf_counter() - started:.2f}s candidates={len(rule_candidates)}"
+    )
+
+    hybrid_started = time.perf_counter()
     hybrid_scoring = _run_hybrid_tender_scoring(
         session, company, "architecture", rule_candidates, inline_cap=HYBRID_INLINE_SCORE_CAP
     )
+    print(
+        f"[OpportunityDiscovery] arch company={company.id} hybrid_scoring "
+        f"{time.perf_counter() - hybrid_started:.2f}s "
+        f"cache_hits={hybrid_scoring.get('cache_hits', 0)} "
+        f"freshly_scored={hybrid_scoring.get('freshly_scored', 0)}"
+    )
+
+    items_started = time.perf_counter()
     hybrid_pairs = hybrid_scoring.get("pairs") or {}
     tender_matches, tender_stretch = _rule_tenders_to_opportunity_items(
         session,
@@ -1417,7 +1438,13 @@ def _discover_architecture_opportunities(
     )
     tender_matches.extend(cached_matches)
     tender_stretch.extend(cached_stretch)
+    print(
+        f"[OpportunityDiscovery] arch company={company.id} tender_items "
+        f"{time.perf_counter() - items_started:.2f}s "
+        f"matches={len(tender_matches)} stretch={len(tender_stretch)}"
+    )
 
+    permit_started = time.perf_counter()
     permit_matches: list[dict[str, Any]] = []
     permit_stretch: list[dict[str, Any]] = []
     for permit, own in _load_permit_candidates(session, signals, max_candidates // 2):
@@ -1437,6 +1464,11 @@ def _discover_architecture_opportunities(
             permit_matches.append(item)
         elif score >= stretch_threshold:
             permit_stretch.append(item)
+    print(
+        f"[OpportunityDiscovery] arch company={company.id} permit_scan "
+        f"{time.perf_counter() - permit_started:.2f}s "
+        f"matches={len(permit_matches)} stretch={len(permit_stretch)}"
+    )
 
     matches = tender_matches + permit_matches
     total_candidates = len(matches) + len(tender_stretch) + len(permit_stretch)
@@ -1459,6 +1491,11 @@ def _discover_architecture_opportunities(
 
     for item in top:
         item.pop("_tender_key", None)
+
+    print(
+        f"[OpportunityDiscovery] arch company={company.id} total "
+        f"{time.perf_counter() - started:.2f}s matches={len(top)}"
+    )
 
     return {
         "company_id": company.id,

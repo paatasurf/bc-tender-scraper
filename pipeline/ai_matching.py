@@ -77,6 +77,18 @@ def _request_delay() -> float:
         return DEFAULT_DELAY_SECONDS
 
 
+def _anthropic_timeout_seconds() -> float:
+    raw = get_env("ANTHROPIC_TIMEOUT_SECONDS", "30")
+    try:
+        return max(5.0, float(raw))
+    except ValueError:
+        return 30.0
+
+
+def _anthropic_client(api_key: str) -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=api_key, timeout=_anthropic_timeout_seconds())
+
+
 def _tender_catalog_json(tenders: list[ArchTender]) -> str:
     payload = [
         {
@@ -412,7 +424,7 @@ def score_tender_pairs(
     max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
     inline_cap: int | None = None,
 ) -> dict[str, Any]:
-    """Scorer-only hybrid path: skip Haiku when cache is fresh; cap new API calls per run."""
+    """Hybrid discover path: use fresh cache when available; otherwise deterministic Python scoring."""
     pairs: dict[tuple[str, int], dict[str, Any]] = {}
     stats = {
         "cache_hits": 0,
@@ -422,12 +434,9 @@ def score_tender_pairs(
         "api_errors": 0,
         "api_key_missing": False,
     }
-    api_calls = 0
+    fresh_scored = 0
 
     company_id = company.id
-    api_key = get_anthropic_api_key()
-    client: anthropic.Anthropic | None = None
-    delay = _request_delay()
 
     for candidate in candidates:
         key = (candidate.tender_source, candidate.tender_id)
@@ -439,23 +448,23 @@ def score_tender_pairs(
             tender_id=candidate.tender_id,
             max_age_hours=max_age_hours,
         )
-        if cached is not None and not (kind == "construction" and not cached.breakdown_json):
+        if cached is not None and cached.breakdown_json:
             stats["cache_hits"] += 1
             pair_data: dict[str, Any] = {
                 "score": cached.score,
                 "reasoning": (cached.reasoning or "").strip(),
                 "origin": "cache",
             }
-            if kind == "construction" and cached.breakdown_json:
+            if kind == "construction":
                 pair_data["breakdown"] = breakdown_json_to_construction_api_breakdown(
                     cached.breakdown_json
                 )
-            elif kind == "architecture" and cached.breakdown_json:
+            elif kind == "architecture":
                 pair_data["breakdown"] = breakdown_json_to_api_breakdown(cached.breakdown_json)
             pairs[key] = pair_data
             continue
 
-        if inline_cap is not None and api_calls >= inline_cap and kind != "construction":
+        if inline_cap is not None and fresh_scored >= inline_cap:
             stats["skipped_cap"] += 1
             continue
 
@@ -467,60 +476,15 @@ def score_tender_pairs(
         if kind == "construction" and isinstance(company, Company):
             scored = score_construction_match(company, tender, candidate.tender_source)
             reasoning = build_construction_fallback_explanation(scored.breakdown)
-            stats["freshly_scored"] += 1
-            if persist:
-                _upsert_tender_match(
-                    session,
-                    company_kind=kind,
-                    company_id=company_id,
-                    tender_source=candidate.tender_source,
-                    tender_id=candidate.tender_id,
-                    score=scored.score,
-                    reasoning=reasoning,
-                    breakdown_json=scored.breakdown_json,
-                )
-                session.commit()
-            pairs[key] = {
-                "score": scored.score,
-                "reasoning": reasoning,
-                "breakdown": scored.api_breakdown,
-                "origin": "fresh",
-            }
+        elif kind == "architecture" and isinstance(company, ArchCompany) and isinstance(tender, ArchTender):
+            scored = score_architecture_match(company, tender)
+            reasoning = build_arch_match_fallback_explanation(scored.breakdown)
+        else:
+            stats["skipped_no_key"] += 1
             continue
 
-        if client is None:
-            if not api_key:
-                stats["api_key_missing"] = True
-                continue
-            client = anthropic.Anthropic(api_key=api_key)
-
-        if api_calls > 0 and delay > 0:
-            time.sleep(delay)
-
-        try:
-            if kind == "architecture" and isinstance(company, ArchCompany):
-                scored = run_company_scorer(
-                    client,
-                    company,
-                    tender,
-                    candidate.match_reason,
-                )
-            else:
-                stats["skipped_no_key"] += 1
-                continue
-        except Exception as exc:
-            stats["api_errors"] += 1
-            print(
-                f"[AI Matching] Hybrid scorer failed for company={company_id} "
-                f"tender={candidate.tender_source}:{candidate.tender_id}: {exc}"
-            )
-            continue
-
-        api_calls += 1
+        fresh_scored += 1
         stats["freshly_scored"] += 1
-        reasoning = scored["reasoning"]
-        score = int(scored["score"])
-
         if persist:
             _upsert_tender_match(
                 session,
@@ -528,14 +492,15 @@ def score_tender_pairs(
                 company_id=company_id,
                 tender_source=candidate.tender_source,
                 tender_id=candidate.tender_id,
-                score=score,
+                score=scored.score,
                 reasoning=reasoning,
+                breakdown_json=scored.breakdown_json,
             )
             session.commit()
-
         pairs[key] = {
-            "score": score,
+            "score": scored.score,
             "reasoning": reasoning,
+            "breakdown": scored.api_breakdown,
             "origin": "fresh",
         }
 
@@ -576,6 +541,7 @@ def resolve_hybrid_tender_score(
     rule_reasons: list[str],
     max_age_hours: int = TENDER_MATCH_CACHE_MAX_AGE_HOURS,
     hybrid_pairs: dict[tuple[str, int], dict[str, Any]] | None = None,
+    cached_matches: dict[tuple[str, int], TenderMatch] | None = None,
 ) -> tuple[int, list[str], str]:
     """Use in-run hybrid pairs, then fresh AI cache; otherwise fall back to rule score."""
     key = (tender_source, tender_id)
@@ -585,14 +551,17 @@ def resolve_hybrid_tender_score(
         reasons = [reasoning[:240]] if reasoning else list(rule_reasons)
         return int(pair["score"]), reasons, "ai_match"
 
-    cached = get_fresh_cached_match(
-        session,
-        company_kind=company_kind,
-        company_id=company_id,
-        tender_source=tender_source,
-        tender_id=tender_id,
-        max_age_hours=max_age_hours,
-    )
+    if cached_matches is not None:
+        cached = cached_matches.get(key)
+    else:
+        cached = get_fresh_cached_match(
+            session,
+            company_kind=company_kind,
+            company_id=company_id,
+            tender_source=tender_source,
+            tender_id=tender_id,
+            max_age_hours=max_age_hours,
+        )
     if cached is not None:
         reasoning = (cached.reasoning or "").strip()
         reasons = [reasoning[:240]] if reasoning else list(rule_reasons)
@@ -1215,7 +1184,7 @@ def run_ai_matching_sync(
     api_key = get_anthropic_api_key()
     client: anthropic.Anthropic | None = None
     if api_key:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = _anthropic_client(api_key)
 
     tender_limit = max_tenders or _batch_limit("AI_MATCHING_MAX_TENDERS", DEFAULT_MAX_TENDERS)
     delay = _request_delay()
@@ -1320,7 +1289,7 @@ def run_ai_matching(
     if company_id is not None and not companies:
         raise ValueError(f"Architecture company {company_id} not found")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _anthropic_client(api_key)
     matches_found = 0
     matches_scored = 0
 
