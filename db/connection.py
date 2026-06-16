@@ -288,10 +288,22 @@ def _ping_session(session: Session) -> None:
     session.execute(text("SELECT 1"))
 
 
+def _opportunities_debug_enabled() -> bool:
+    return os.getenv("OPPORTUNITIES_DEBUG", "").lower() in {"1", "true", "yes"}
+
+
 @contextmanager
 def session_scope() -> Iterator[Session]:
     """Yield a short-lived session; always returns the connection to the pool."""
+    checkout_started = time.perf_counter()
     session = get_session_factory()()
+    if _opportunities_debug_enabled():
+        checkout_ms = (time.perf_counter() - checkout_started) * 1000
+        pool = get_engine().pool
+        print(
+            f"[DB:pool] checkout_ms={checkout_ms:.1f} "
+            f"checked_out={pool.checkedout()} overflow={pool.overflow()} size={pool.size()}"
+        )
     try:
         yield session
     finally:
