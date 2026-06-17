@@ -163,7 +163,12 @@ _NON_CONSTRUCTION_PROCUREMENT_RE = re.compile(
     r"|\btimber\s+sale\b|\btimber\s+license\b|\bcutting\s+permit\b"
     r"|\bnetwork\s+drive\b|\bdrive\s+migration\b|\bit\s+services\b|\bdata\s+migration\b"
     r"|\bnatural\s+resources\s+assessment\b|\benvironmental\s+assessment\s+services\b"
-    r"|\blow\s+voltage\b|\bsource\s+list\b",
+    r"|\blow\s+voltage\b|\bsource\s+list\b"
+    r"|\bemployee\s+benefits\b|\bbenefits\s+plan\b"
+    r"|\brestaurant\s+operator\b|\bfood\s+operator\b"
+    r"|\bproperty\s+management\s+services?\b"
+    r"|\bfeasibility\s+study\b|\bfeasibility\s+assessment\b"
+    r"|\bjanitorial\b|\bcleaning\s+services?\b",
     re.I,
 )
 ADDRESS_NOISE_RE = re.compile(
