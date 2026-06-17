@@ -149,7 +149,17 @@ GEO_NAME_NOISE_TOKENS = frozenset(
     {"british", "columbia", "canada", "canadian", "province", "provincial", "federal", "national"}
 )
 GENERIC_NOISE_TOKENS = frozenset({"new", "old", "major", "minor", "main"})
-POISON_TOKENS = STREET_SUFFIX_TOKENS | GEO_NAME_NOISE_TOKENS | GENERIC_NOISE_TOKENS
+# Geographic place-noun tokens that appear in BC tender titles (e.g. "Cache Creek
+# Channel") but carry no trade-skill meaning.  Without this guard they leak from
+# company neighborhood/address strings into the keyword set and produce false
+# positive matches.
+PLACE_NAME_TOKENS = frozenset({
+    "creek", "lake", "river", "mountain", "valley", "park", "heights",
+    "ridge", "glen", "bay", "cove", "point", "island", "inlet", "harbour",
+    "harbor", "forest", "meadow", "hill", "hills", "beach", "shore", "delta",
+    "canyon", "bluff", "grove", "hollow", "crossing", "junction", "landing",
+})
+POISON_TOKENS = STREET_SUFFIX_TOKENS | GEO_NAME_NOISE_TOKENS | GENERIC_NOISE_TOKENS | PLACE_NAME_TOKENS
 
 # --- F005 Phase 2: BC city -> region gazetteer -------------------------------
 # Ambiguous common-word place names (hope, chase, golden, mission, trail, midway)
@@ -299,12 +309,18 @@ def _detect_geo(*texts: str) -> tuple[set[str], set[str]]:
 
 
 def _company_geo(company: Company) -> tuple[set[str], set[str]]:
-    """City/region signal for a company — ignores street-level neighborhoods."""
+    """City/region signal for a company — ignores street-level addresses/neighborhoods."""
     safe_neighborhoods = [
         n for n in (company.neighborhoods or []) if n and not _is_street_address(str(n))
     ]
+    # google_address is a full street address ("123 Main Street, Victoria, BC").
+    # Passing it raw extracts the city token ("victoria") which then matches every
+    # tender in that city regardless of trade relevance.  Filter it the same way
+    # we filter neighborhoods: skip it entirely if it looks like a street address.
+    google_addr = company.google_address or ""
+    safe_google = "" if _is_street_address(google_addr) else google_addr
     return _detect_geo(
-        company.google_address or "",
+        safe_google,
         company.primary_city or "",
         company.geographic_reach or "",
         *safe_neighborhoods,
@@ -356,16 +372,14 @@ def _tender_deadline(tender: ConstructionTender, tender_source: str) -> str:
 
 
 def _company_keyword_sources(company: Company) -> list[str]:
-    # Street-address neighborhoods are excluded — they inject street names that
-    # match nothing meaningful (and would re-introduce poison tokens).
-    safe_neighborhoods = [
-        n for n in (company.neighborhoods or []) if n and not _is_street_address(str(n))
-    ]
+    # Only trade-relevant profile fields feed the keyword set.  Addresses and
+    # neighborhood strings are deliberately excluded: they inject place-name and
+    # street tokens that match geographic text in tender titles, producing false
+    # trade-skill matches.  Location signal is handled exclusively by
+    # score_location() via _company_geo().
     sources = [
         company.name,
         *(company.project_types or []),
-        *safe_neighborhoods,
-        company.google_address or "",
         *(company.trade_tags or []),
         company.dominant_sector or "",
         company.primary_trade or "",
