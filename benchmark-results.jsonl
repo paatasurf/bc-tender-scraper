@@ -1,4 +1,0 @@
-{"event": "start", "company_id": 1735, "kind": "construction", "timestamp": "2026-06-16T07:54:43.662371+00:00"}
-{"event": "build_complete", "company_id": 1735, "kind": "construction", "build_ms": 32695.575, "timestamp": "2026-06-16T07:55:16.361824+00:00"}
-{"event": "hybrid_complete", "company_id": 1735, "kind": "construction", "hybrid_ms": 1650.703, "timestamp": "2026-06-16T07:55:18.013407+00:00"}
-{"company_id": 1735, "build_ms": 32695.575, "hybrid_ms": 1650.703, "total_ms": 34398.565, "timestamp": "2026-06-16T07:55:18.060952+00:00"}
