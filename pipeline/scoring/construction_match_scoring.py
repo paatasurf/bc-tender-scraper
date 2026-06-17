@@ -8,17 +8,16 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from db.models import CommercialTender, Company, Tender
-from pipeline.company_intelligence import _parse_value
 from pipeline.scoring.explain import BreakdownFactor, build_reasons
 from pipeline.scoring.match_scoring_common import (
     STOP_WORDS,
     _factor_to_json,
+    _normalize_text,
     _parse_date,
     _token_set,
     assert_score_equals_breakdown,
     breakdown_json_to_api_breakdown_generic,
     tokenize,
-    tokenize_geo,
     to_api_breakdown_seven_key,
 )
 
@@ -31,6 +30,10 @@ MAX_LOCATION = 15
 MAX_VALUE = 15
 MAX_RELIABILITY = 5
 MAX_FRESHNESS = 10
+
+# F005 Phase 2 region-fit sub-scores (folded into the "location" factor).
+REGION_SAME_REGION = 8
+REGION_OUT_OF_REGION_PENALTY = 12
 
 CANONICAL_KEYS = (
     "keywords",
@@ -57,6 +60,33 @@ KEYWORD_EXPANSIONS: dict[str, list[str]] = {
     "consultants": ["consulting", "advisory", "engineering", "professional"],
 }
 
+# Work-type gate (F005 Phase 2): region and value bonuses are withheld unless
+# the tender title/category contains a real construction-scope signal.
+_CONSTRUCTION_SCOPE_RE = re.compile(
+    r"\b("
+    r"building|construction|renovation|addition|alteration"
+    r"|tenant.?improvement|fit.?out"
+    r"|civil.?construction|infrastructure.?construction"
+    r"|mechanical.?construction|electrical.?construction"
+    r"|structural|roofing|excavation|concrete"
+    r"|watermain|storm.?sewer|sanitary.?sewer"
+    r"|utility.?construction|substation.?construction"
+    r")\b",
+    re.I,
+)
+
+
+def _has_construction_scope(tender: ConstructionTender, tender_source: str) -> bool:
+    """True when the tender TITLE contains a construction-scope keyword.
+
+    Deliberately excludes the category field: federal portal category is
+    'Construction' for nearly every tender regardless of actual work type, so
+    checking it would make the gate a no-op.  For commercial tenders the
+    company/source name is also excluded for the same reason.
+    """
+    return bool(_CONSTRUCTION_SCOPE_RE.search(tender.title or ""))
+
+
 GENERIC_TENDER_TOKENS = frozenset(
     {
         "construction",
@@ -80,6 +110,199 @@ _STREET_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- F005 Phase 2: poison-token denylist -------------------------------------
+# Tokens that pollute keyword/region matching when derived from a company's
+# street-level neighborhood list or address. Street-suffix words, the province
+# and country names, and low-signal generic words all match nearly every tender
+# (e.g. "columbia" matches "British Columbia" on every federal tender).
+STREET_SUFFIX_TOKENS = frozenset(
+    {
+        "street", "st", "road", "rd", "avenue", "ave", "drive", "dr",
+        "boulevard", "blvd", "place", "pl", "lane", "ln", "way", "court", "ct",
+        "crescent", "cres", "trail", "terrace", "close", "grove", "row", "walk",
+        "mews", "quay", "wynd", "highway", "hwy", "diversion", "connector",
+    }
+)
+GEO_NAME_NOISE_TOKENS = frozenset(
+    {"british", "columbia", "canada", "canadian", "province", "provincial", "federal", "national"}
+)
+GENERIC_NOISE_TOKENS = frozenset({"new", "old", "major", "minor", "main"})
+POISON_TOKENS = STREET_SUFFIX_TOKENS | GEO_NAME_NOISE_TOKENS | GENERIC_NOISE_TOKENS
+
+# --- F005 Phase 2: BC city -> region gazetteer -------------------------------
+# Ambiguous common-word place names (hope, chase, golden, mission, trail, midway)
+# are intentionally excluded to avoid false region hits in tender titles.
+_REGION_LOWER_MAINLAND = "Lower Mainland"
+_REGION_VANCOUVER_ISLAND = "Vancouver Island"
+_REGION_INTERIOR = "Interior / Okanagan"
+_REGION_KOOTENAY = "Kootenay"
+_REGION_NORTHERN = "Northern BC"
+
+_CITY_TO_REGION: dict[str, str] = {}
+
+
+def _register_cities(region: str, cities: tuple[str, ...]) -> None:
+    for city in cities:
+        _CITY_TO_REGION[city] = region
+
+
+_register_cities(
+    _REGION_LOWER_MAINLAND,
+    (
+        "vancouver", "burnaby", "surrey", "richmond", "coquitlam", "port coquitlam",
+        "port moody", "new westminster", "delta", "langley", "maple ridge",
+        "pitt meadows", "north vancouver", "west vancouver", "abbotsford",
+        "chilliwack", "white rock", "squamish", "whistler", "pemberton",
+        "bowen island", "tsawwassen", "ladner", "fort langley",
+    ),
+)
+_register_cities(
+    _REGION_VANCOUVER_ISLAND,
+    (
+        "victoria", "saanich", "langford", "colwood", "esquimalt", "sidney",
+        "nanaimo", "ladysmith", "duncan", "lake cowichan", "parksville",
+        "qualicum", "port alberni", "courtenay", "comox", "campbell river",
+        "powell river", "tofino", "ucluelet", "sooke", "port hardy", "cumberland",
+    ),
+)
+_register_cities(
+    _REGION_INTERIOR,
+    (
+        "kelowna", "west kelowna", "vernon", "penticton", "kamloops",
+        "salmon arm", "summerland", "peachland", "lake country", "oliver",
+        "osoyoos", "merritt", "princeton", "logan lake", "sicamous", "armstrong",
+        "enderby", "keremeos", "okanagan",
+    ),
+)
+_register_cities(
+    _REGION_KOOTENAY,
+    (
+        "nelson", "castlegar", "new denver", "kaslo", "nakusp", "rossland",
+        "fernie", "cranbrook", "kimberley", "creston", "invermere",
+        "revelstoke", "sparwood", "elkford", "grand forks", "slocan", "salmo",
+    ),
+)
+_register_cities(
+    _REGION_NORTHERN,
+    (
+        "prince george", "quesnel", "williams lake", "100 mile house",
+        "prince rupert", "terrace", "kitimat", "smithers", "fort st john",
+        "dawson creek", "fort nelson", "mackenzie", "vanderhoof", "burns lake",
+        "houston", "hazelton", "valemount", "fraser lake",
+    ),
+)
+
+_REGION_ALIASES: dict[str, str] = {
+    "lower mainland": _REGION_LOWER_MAINLAND,
+    "metro vancouver": _REGION_LOWER_MAINLAND,
+    "greater vancouver": _REGION_LOWER_MAINLAND,
+    "fraser valley": _REGION_LOWER_MAINLAND,
+    "sea to sky": _REGION_LOWER_MAINLAND,
+    "vancouver island": _REGION_VANCOUVER_ISLAND,
+    "okanagan": _REGION_INTERIOR,
+    "thompson": _REGION_INTERIOR,
+    "interior": _REGION_INTERIOR,
+    "kootenay": _REGION_KOOTENAY,
+    "kootenays": _REGION_KOOTENAY,
+    "cariboo": _REGION_NORTHERN,
+    "northern bc": _REGION_NORTHERN,
+    "north coast": _REGION_NORTHERN,
+}
+
+# Multiword keys must be probed via substring; single-word via token membership.
+_MULTIWORD_CITIES = tuple(sorted((c for c in _CITY_TO_REGION if " " in c), key=len, reverse=True))
+_SINGLEWORD_CITIES = frozenset(c for c in _CITY_TO_REGION if " " not in c)
+
+# --- F005 Phase 2: value range parsing ---------------------------------------
+_VALUE_NUM_RE = re.compile(r"\$?\s*([\d,]+(?:\.\d+)?)\s*([kKmMbB]?)")
+_VALUE_SCALE = {"k": 1_000.0, "m": 1_000_000.0, "b": 1_000_000_000.0}
+
+
+def _parse_value_string(raw: str) -> float:
+    """Parse a value/range string to a numeric midpoint.
+
+    Handles '$200K-$800K', '$800K–$2.5M', '$15M-$40M', '$250,000', '2.5M'.
+    A range returns its midpoint; a single figure returns itself.
+    """
+    if not raw:
+        return 0.0
+    values: list[float] = []
+    for num, suffix in _VALUE_NUM_RE.findall(raw):
+        try:
+            magnitude = float(num.replace(",", ""))
+        except ValueError:
+            continue
+        scaled = magnitude * _VALUE_SCALE.get(suffix.lower(), 1.0)
+        if scaled > 0:
+            values.append(scaled)
+    if not values:
+        return 0.0
+    if len(values) >= 2:
+        return (min(values) + max(values)) / 2.0
+    return values[0]
+
+
+def _is_street_address(text: str) -> bool:
+    """True when a neighborhood entry is a street address (contains a street suffix)."""
+    return bool(_STREET_TOKEN_RE.search(text or ""))
+
+
+def _detect_geo(*texts: str) -> tuple[set[str], set[str]]:
+    """Return (cities, regions) detected from free text using the BC gazetteer.
+
+    Multiword matches (e.g. "vancouver island", "new denver") consume their
+    constituent tokens so a single-word city ("vancouver") can't also fire from
+    the same phrase — otherwise "Vancouver Island" would read as Lower Mainland.
+    """
+    blob = " ".join(_normalize_text(t) for t in texts if t)
+    if not blob:
+        return set(), set()
+    cities: set[str] = set()
+    regions: set[str] = set()
+    consumed: set[str] = set()
+    for city in _MULTIWORD_CITIES:
+        if city in blob:
+            cities.add(city)
+            regions.add(_CITY_TO_REGION[city])
+            consumed.update(city.split())
+    for alias, region in _REGION_ALIASES.items():
+        if alias in blob:
+            regions.add(region)
+            consumed.update(alias.split())
+    tokens = set(blob.split()) - consumed
+    for city in _SINGLEWORD_CITIES & tokens:
+        cities.add(city)
+        regions.add(_CITY_TO_REGION[city])
+    return cities, regions
+
+
+def _company_geo(company: Company) -> tuple[set[str], set[str]]:
+    """City/region signal for a company — ignores street-level neighborhoods."""
+    safe_neighborhoods = [
+        n for n in (company.neighborhoods or []) if n and not _is_street_address(str(n))
+    ]
+    return _detect_geo(
+        company.google_address or "",
+        company.primary_city or "",
+        company.geographic_reach or "",
+        *safe_neighborhoods,
+    )
+
+
+def _tender_geo(tender: ConstructionTender, tender_source: str) -> tuple[set[str], set[str]]:
+    if tender_source == "federal":
+        return _detect_geo(
+            tender.title or "",
+            getattr(tender, "organization", "") or "",
+            getattr(tender, "location", "") or "",
+        )
+    return _detect_geo(tender.title or "", getattr(tender, "company", "") or "")
+
+
+def _clean_tokens(tokens: list[str]) -> list[str]:
+    """Drop poison tokens (street suffixes, province/country, generic words)."""
+    return [t for t in tokens if t not in POISON_TOKENS]
+
 
 def _tender_haystack(tender: ConstructionTender, tender_source: str) -> str:
     if tender_source == "federal":
@@ -94,9 +317,14 @@ def _tender_value(tender: ConstructionTender, tender_source: str) -> float:
     numeric = getattr(tender, "estimated_value_numeric", None)
     if numeric is not None and float(numeric) > 0:
         return float(numeric)
+    # AI-estimated budget range is the richest signal on both tender tables
+    # (e.g. "$15M–$40M"); the raw value/estimated_value columns are usually empty.
+    budget = _parse_value_string(getattr(tender, "ai_budget_estimate", "") or "")
+    if budget > 0:
+        return budget
     if tender_source == "federal":
-        return _parse_value(getattr(tender, "estimated_value", "") or "")
-    return _parse_value(getattr(tender, "value", "") or "")
+        return _parse_value_string(getattr(tender, "estimated_value", "") or "")
+    return _parse_value_string(getattr(tender, "value", "") or "")
 
 
 def _tender_deadline(tender: ConstructionTender, tender_source: str) -> str:
@@ -106,10 +334,15 @@ def _tender_deadline(tender: ConstructionTender, tender_source: str) -> str:
 
 
 def _company_keyword_sources(company: Company) -> list[str]:
+    # Street-address neighborhoods are excluded — they inject street names that
+    # match nothing meaningful (and would re-introduce poison tokens).
+    safe_neighborhoods = [
+        n for n in (company.neighborhoods or []) if n and not _is_street_address(str(n))
+    ]
     sources = [
         company.name,
         *(company.project_types or []),
-        *(company.neighborhoods or []),
+        *safe_neighborhoods,
         company.google_address or "",
         *(company.trade_tags or []),
         company.dominant_sector or "",
@@ -133,35 +366,13 @@ def _company_specialization_sources(company: Company) -> list[str]:
     return sources
 
 
-def _company_location_sources(company: Company) -> list[str]:
-    """City/region tokens only — excludes street addresses per constitution III."""
-    areas: list[str] = []
-    for source in (
-        company.neighborhoods or [],
-        [company.primary_city] if company.primary_city else [],
-        [company.primary_province] if company.primary_province else [],
-        [company.geographic_reach] if company.geographic_reach else [],
-    ):
-        for item in source:
-            text = str(item).strip()
-            if text and text not in areas:
-                areas.append(text)
-    return areas
-
-
-def _is_street_level_token(token: str) -> bool:
-    if len(token) < 4:
-        return True
-    if token.isdigit():
-        return True
-    return bool(_STREET_TOKEN_RE.search(token))
 
 
 def _build_keyword_sets(company: Company) -> tuple[set[str], set[str]]:
     root: set[str] = set()
     expanded: set[str] = set()
     for source in _company_keyword_sources(company):
-        for token in tokenize(source):
+        for token in _clean_tokens(tokenize(source)):
             root.add(token)
             expanded.add(token)
     for token in list(root):
@@ -215,7 +426,7 @@ def score_category(company: Company, tender: ConstructionTender, tender_source: 
     haystack_tokens = set(tokenize(_tender_haystack(tender, tender_source)))
     matched: list[str] = []
     for project_type in company.project_types or []:
-        type_tokens = tokenize(project_type)
+        type_tokens = _clean_tokens(tokenize(project_type))
         if any(token in haystack_tokens for token in type_tokens):
             matched.append(project_type)
 
@@ -243,7 +454,7 @@ def score_specialization(company: Company, tender: ConstructionTender, tender_so
     haystack = _tender_haystack(tender, tender_source).lower()
     matched: list[str] = []
     for specialization in sources:
-        spec_tokens = tokenize(specialization)
+        spec_tokens = _clean_tokens(tokenize(specialization))
         if any(token in haystack for token in spec_tokens):
             matched.append(specialization)
 
@@ -263,35 +474,41 @@ def score_specialization(company: Company, tender: ConstructionTender, tender_so
 
 
 def score_location(company: Company, tender: ConstructionTender, tender_source: str) -> BreakdownFactor:
-    location_tokens: set[str] = set()
-    for source in _company_location_sources(company):
-        for token in tokenize_geo(source):
-            if not _is_street_level_token(token):
-                location_tokens.add(token)
+    """City/region-aware region fit (F005 Phase 2).
 
-    if not location_tokens:
+    Same city > same region > out-of-region (penalty). Neutral (0) when either
+    side's region is undetermined, so a missing signal never fabricates a hit.
+    """
+    company_cities, company_regions = _company_geo(company)
+    tender_cities, tender_regions = _tender_geo(tender, tender_source)
+
+    def factor(points: int, detail: str) -> BreakdownFactor:
         return BreakdownFactor(
             factor="location",
-            label="Service area / geography",
-            points=0,
+            label="Region / service area",
+            points=points,
             max_points=MAX_LOCATION,
-            detail="No city or region service-area data on company profile",
+            detail=detail,
         )
 
-    haystack = _tender_haystack(tender, tender_source).lower()
-    matched = [loc for loc in sorted(location_tokens) if loc in haystack]
-    points = min(MAX_LOCATION, len(matched) * 5)
-    if matched:
-        detail = f"Overlap with {', '.join(matched[:4])} in tender text"
-    else:
-        detail = "No city or regional overlap between service areas and tender location"
+    if not company_regions:
+        return factor(0, "Company operating region undetermined — region neutral")
+    if not tender_regions:
+        return factor(0, "Tender region undetermined — region neutral")
 
-    return BreakdownFactor(
-        factor="location",
-        label="Service area / geography",
-        points=points,
-        max_points=MAX_LOCATION,
-        detail=detail,
+    shared_cities = company_cities & tender_cities
+    if shared_cities:
+        return factor(
+            MAX_LOCATION,
+            f"Same city as company operating area: {', '.join(sorted(shared_cities)[:2]).title()}",
+        )
+    if company_regions & tender_regions:
+        shared_region = sorted(company_regions & tender_regions)[0]
+        return factor(REGION_SAME_REGION, f"Same region as company: {shared_region}")
+
+    return factor(
+        -REGION_OUT_OF_REGION_PENALTY,
+        f"Out of region — company {sorted(company_regions)[0]} vs tender {sorted(tender_regions)[0]}",
     )
 
 
@@ -487,8 +704,36 @@ def score_construction_match(
     partial.append(score_reliability(company, partial))
     partial.append(score_freshness(tender, tender_source))
 
-    total = sum(f.points for f in partial)
-    total = max(0, min(100, total))
+    # Work-type gate: zero out region and value boosts for tenders that lack any
+    # construction-scope signal in title/category (prevents IT/benefits/vehicles
+    # from surfacing purely on value and geography).
+    factors_by_key = {f.factor: f for f in partial}
+    cat_f = factors_by_key.get("category")
+    spec_f = factors_by_key.get("specialization")
+    work_type_ok = (
+        (cat_f is not None and cat_f.points > 0)
+        or (spec_f is not None and spec_f.points > 0)
+        or _has_construction_scope(tender, tender_source)
+    )
+    if not work_type_ok:
+        loc_f = factors_by_key.get("location")
+        val_f = factors_by_key.get("value")
+        if loc_f is not None and loc_f.points > 0:
+            loc_f.points = 0
+            loc_f.detail += " [gated: no construction-scope signal]"
+        if val_f is not None and val_f.points > 0:
+            val_f.points = 0
+            val_f.detail += " [gated: no construction-scope signal]"
+
+    raw_total = sum(f.points for f in partial)
+    total = max(0, min(100, raw_total))
+    if total != raw_total:
+        # Preserve the breakdown invariant (sum of factor points == total) by
+        # absorbing the clamp delta into the region/location factor.
+        factors_by_key = {f.factor: f for f in partial}
+        location = factors_by_key.get("location")
+        if location is not None:
+            location.points += total - raw_total
 
     factors_by_key = {f.factor: f for f in partial}
     breakdown_json = {f.factor: _factor_to_json(f) for f in partial}
