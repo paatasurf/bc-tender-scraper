@@ -283,6 +283,34 @@ def _is_street_address(text: str) -> bool:
     return bool(_STREET_TOKEN_RE.search(text or ""))
 
 
+_PROVINCE_SEGMENT_RE = re.compile(r"\b(BC|British Columbia)\b", re.I)
+
+
+def _parse_city_from_address(address: str) -> str | None:
+    """Extract city from a Canadian address when primary_city is empty.
+
+    e.g. "1827 W 5th Ave, Vancouver, BC V6J 1P5" → "vancouver"
+    """
+    if not address or not address.strip():
+        return None
+    parts = [part.strip() for part in address.split(",") if part.strip()]
+    if not parts:
+        return None
+
+    for index, part in enumerate(parts):
+        if _PROVINCE_SEGMENT_RE.search(part) and index > 0:
+            candidate = parts[index - 1].strip().lower()
+            if candidate and not _is_street_address(candidate):
+                return candidate
+
+    if len(parts) >= 3:
+        candidate = parts[-2].strip().lower()
+        if candidate and not _is_street_address(candidate):
+            return candidate
+
+    return None
+
+
 def _detect_geo(*texts: str) -> tuple[set[str], set[str]]:
     """Return (cities, regions) detected from free text using the BC gazetteer.
 
@@ -314,21 +342,26 @@ def _detect_geo(*texts: str) -> tuple[set[str], set[str]]:
 
 def _company_geo(company: Company) -> tuple[set[str], set[str]]:
     """City/region signal for a company — ignores street-level addresses/neighborhoods."""
+    geo_texts: list[str] = []
+
+    if company.primary_city and company.primary_city.strip():
+        geo_texts.append(company.primary_city)
+    else:
+        for address in (company.primary_address or "", company.google_address or ""):
+            if not address:
+                continue
+            parsed_city = _parse_city_from_address(address)
+            if parsed_city:
+                geo_texts.append(parsed_city)
+                break
+
+    if company.geographic_reach and company.geographic_reach.strip():
+        geo_texts.append(company.geographic_reach)
+
     safe_neighborhoods = [
         n for n in (company.neighborhoods or []) if n and not _is_street_address(str(n))
     ]
-    # google_address is a full street address ("123 Main Street, Victoria, BC").
-    # Passing it raw extracts the city token ("victoria") which then matches every
-    # tender in that city regardless of trade relevance.  Filter it the same way
-    # we filter neighborhoods: skip it entirely if it looks like a street address.
-    google_addr = company.google_address or ""
-    safe_google = "" if _is_street_address(google_addr) else google_addr
-    return _detect_geo(
-        safe_google,
-        company.primary_city or "",
-        company.geographic_reach or "",
-        *safe_neighborhoods,
-    )
+    return _detect_geo(*geo_texts, *safe_neighborhoods)
 
 
 def _tender_geo(tender: ConstructionTender, tender_source: str) -> tuple[set[str], set[str]]:
