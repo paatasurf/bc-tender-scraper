@@ -37,7 +37,7 @@ from pipeline.ai_matching import (
     score_tender_pairs,
 )
 
-from pipeline.scoring.construction_match_scoring import score_construction_match
+from pipeline.scoring.construction_match_scoring import _detect_geo, score_construction_match
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +193,9 @@ class CompanySignals:
     project_types: list[str]
     neighborhoods: list[str]
     google_address: str
+    primary_city: str
+    primary_address: str
+    geographic_reach: str
     avg_project_value: float
     avg_award_value: float
     award_categories: list[str]
@@ -212,6 +215,9 @@ class CompanySignals:
             project_types=list(company.project_types or []),
             neighborhoods=list(company.neighborhoods or []),
             google_address=company.google_address or "",
+            primary_city=company.primary_city or "",
+            primary_address=company.primary_address or "",
+            geographic_reach=company.geographic_reach or "",
             avg_project_value=avg_project,
             avg_award_value=avg_award if avg_award > 0 else avg_project,
             award_categories=list(company.award_categories or []),
@@ -228,6 +234,9 @@ class CompanySignals:
             project_types=list(company.project_types or []),
             neighborhoods=list(company.neighborhoods or []),
             google_address=company.google_address or "",
+            primary_city="",
+            primary_address="",
+            geographic_reach=getattr(company, "geographic_reach", "") or "",
             avg_project_value=float(company.avg_project_value or 0),
             avg_award_value=float(company.avg_project_value or 0),
             award_categories=list(company.website_specializations or []),
@@ -404,6 +413,99 @@ def _location_overlaps_neighborhoods(location: str, neighborhoods: list[str]) ->
     return False
 
 
+# F005 Phase 2: city-level region matching for construction rule scorer.
+_REGION_STREET_SUFFIX_RE = re.compile(
+    r"\b(street|st|avenue|ave|road|rd|drive|dr|boulevard|blvd|lane|ln|way|court|ct|crescent|cres)\b",
+    re.I,
+)
+_REGION_CITY_MISMATCH_PENALTY = 15
+_PROVINCE_SEGMENT_RE = re.compile(r"\b(BC|British Columbia)\b", re.I)
+
+
+def _is_street_level_text(text: str) -> bool:
+    """True when text is a street address/neighborhood, not a city name."""
+    return bool(_REGION_STREET_SUFFIX_RE.search(text or ""))
+
+
+def _parse_city_from_address(address: str) -> str | None:
+    """Extract city from a Canadian address when primary_city is empty.
+
+    e.g. "1827 W 5th Ave, Vancouver, BC V6J 1P5" → "vancouver"
+    """
+    if not address or not address.strip():
+        return None
+    parts = [part.strip() for part in address.split(",") if part.strip()]
+    if not parts:
+        return None
+
+    for index, part in enumerate(parts):
+        if _PROVINCE_SEGMENT_RE.search(part) and index > 0:
+            candidate = parts[index - 1].strip().lower()
+            if candidate and not _is_street_level_text(candidate):
+                return candidate
+
+    if len(parts) >= 3:
+        candidate = parts[-2].strip().lower()
+        if candidate and not _is_street_level_text(candidate):
+            return candidate
+
+    return None
+
+
+def _company_operating_geo(signals: CompanySignals) -> tuple[set[str], set[str]]:
+    """City/region signal for a company — never uses street-level neighborhood tokens."""
+    geo_texts: list[str] = []
+
+    if signals.primary_city and signals.primary_city.strip():
+        geo_texts.append(signals.primary_city)
+    else:
+        for address in (signals.primary_address, signals.google_address):
+            if not address:
+                continue
+            parsed_city = _parse_city_from_address(address)
+            if parsed_city:
+                geo_texts.append(parsed_city)
+                break
+
+    if signals.geographic_reach and signals.geographic_reach.strip():
+        geo_texts.append(signals.geographic_reach)
+
+    safe_neighborhoods = [
+        neighborhood
+        for neighborhood in signals.neighborhoods
+        if neighborhood and not _is_street_level_text(str(neighborhood))
+    ]
+
+    return _detect_geo(*geo_texts, *safe_neighborhoods)
+
+
+def _tender_operating_geo(payload: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """City/region signal from tender title, buyer/org name, and federal location field."""
+    return _detect_geo(
+        payload.get("title") or "",
+        payload.get("company") or "",
+        payload.get("location") or "",
+    )
+
+
+def _region_mismatch_penalty(signals: CompanySignals, payload: dict[str, Any]) -> int:
+    """-15 when company and tender are both geo-resolvable but in different areas."""
+    company_cities, company_regions = _company_operating_geo(signals)
+    tender_cities, tender_regions = _tender_operating_geo(payload)
+
+    if not (company_cities or company_regions):
+        return 0
+    if not (tender_cities or tender_regions):
+        return 0
+
+    if company_cities & tender_cities:
+        return 0
+    if company_regions & tender_regions:
+        return 0
+
+    return _REGION_CITY_MISMATCH_PENALTY
+
+
 def _score_construction_tender_rules(
     signals: CompanySignals,
     payload: dict[str, Any],
@@ -450,13 +552,7 @@ def _score_construction_tender_rules(
 
     region_penalty = 0
     if _construction_tender_relevance_v1_enabled():
-        neighborhoods = [n for n in signals.neighborhoods if n and str(n).strip()]
-        if (
-            payload.get("tender_source") == "federal"
-            and neighborhoods
-            and not _location_overlaps_neighborhoods(payload.get("location") or "", neighborhoods)
-        ):
-            region_penalty = 10
+        region_penalty = _region_mismatch_penalty(signals, payload)
 
     score = min(
         100,
@@ -483,6 +579,8 @@ def _score_construction_tender_rules(
         reasons.append(val_reason)
     if fresh_reason:
         reasons.append(fresh_reason)
+    if region_penalty > 0:
+        reasons.append("Out of company operating area")
     return score, reasons or ["Open construction tender"]
 
 
