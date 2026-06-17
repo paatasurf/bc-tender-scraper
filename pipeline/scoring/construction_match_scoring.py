@@ -76,6 +76,28 @@ _CONSTRUCTION_SCOPE_RE = re.compile(
 )
 
 
+# Maintenance / non-build contract denylist.
+# Tenders whose primary activity is operating, cleaning, or tending existing
+# assets — not building or renovating — are suppressed: category, specialisation,
+# region, and value bonuses are all zeroed so they cannot surface for a GC.
+_MAINTENANCE_CONTRACT_RE = re.compile(
+    r"\b("
+    r"maintenance\s+services?|facilities?\s+maintenance|grounds?\s+maintenance"
+    r"|building\s+maintenance|preventive\s+maintenance|preventative\s+maintenance"
+    r"|property\s+maintenance|fleet\s+maintenance"
+    r"|janitorial|custodial|cleaning\s+services?|housekeeping"
+    r"|landscaping\s+services?|grounds?\s+keeping|lawn\s+(care|maintenance)"
+    r"|snow\s+removal|pest\s+control"
+    r")\b",
+    re.I,
+)
+
+
+def _is_maintenance_contract(tender: ConstructionTender) -> bool:
+    """True when the tender title describes an operating/cleaning/maintenance contract."""
+    return bool(_MAINTENANCE_CONTRACT_RE.search(tender.title or ""))
+
+
 def _has_construction_scope(tender: ConstructionTender, tender_source: str) -> bool:
     """True when the tender TITLE contains a construction-scope keyword.
 
@@ -704,26 +726,32 @@ def score_construction_match(
     partial.append(score_reliability(company, partial))
     partial.append(score_freshness(tender, tender_source))
 
-    # Work-type gate: zero out region and value boosts for tenders that lack any
-    # construction-scope signal in title/category (prevents IT/benefits/vehicles
-    # from surfacing purely on value and geography).
     factors_by_key = {f.factor: f for f in partial}
-    cat_f = factors_by_key.get("category")
-    spec_f = factors_by_key.get("specialization")
-    work_type_ok = (
-        (cat_f is not None and cat_f.points > 0)
-        or (spec_f is not None and spec_f.points > 0)
-        or _has_construction_scope(tender, tender_source)
-    )
-    if not work_type_ok:
-        loc_f = factors_by_key.get("location")
-        val_f = factors_by_key.get("value")
-        if loc_f is not None and loc_f.points > 0:
-            loc_f.points = 0
-            loc_f.detail += " [gated: no construction-scope signal]"
-        if val_f is not None and val_f.points > 0:
-            val_f.points = 0
-            val_f.detail += " [gated: no construction-scope signal]"
+
+    # Maintenance denylist: operating/cleaning/tending contracts suppress all
+    # variable-component scores so they cannot rank above real construction work.
+    if _is_maintenance_contract(tender):
+        for key in ("category", "specialization", "location", "value"):
+            f = factors_by_key.get(key)
+            if f is not None and f.points != 0:
+                f.points = 0
+                f.detail += " [suppressed: maintenance contract]"
+    else:
+        # Work-type gate: zero out region and value boosts for tenders that lack
+        # any construction-scope signal in the title.
+        cat_f = factors_by_key.get("category")
+        spec_f = factors_by_key.get("specialization")
+        work_type_ok = (
+            (cat_f is not None and cat_f.points > 0)
+            or (spec_f is not None and spec_f.points > 0)
+            or _has_construction_scope(tender, tender_source)
+        )
+        if not work_type_ok:
+            for key in ("location", "value"):
+                f = factors_by_key.get(key)
+                if f is not None and f.points > 0:
+                    f.points = 0
+                    f.detail += " [gated: no construction-scope signal]"
 
     raw_total = sum(f.points for f in partial)
     total = max(0, min(100, raw_total))
