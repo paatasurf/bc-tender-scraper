@@ -130,14 +130,16 @@ def test_location_uses_neighborhood_tokens():
     assert factor.points > 0
 
 
-def test_api_breakdown_seven_keys():
+def test_api_breakdown_nine_keys():
     scored = score_construction_match(_company(), _federal_tender(), "federal")
     assert set(scored.api_breakdown.keys()) == {
         "keywords",
         "category",
         "specialization",
+        "scope",
         "location",
         "value",
+        "buyer",
         "reliability",
         "freshness",
     }

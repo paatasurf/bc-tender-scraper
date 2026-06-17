@@ -26,8 +26,10 @@ ConstructionTender = Tender | CommercialTender
 MAX_KEYWORDS = 35
 MAX_CATEGORY = 20
 MAX_SPECIALIZATION = 15
+MAX_SCOPE = 14
 MAX_LOCATION = 15
 MAX_VALUE = 15
+MAX_BUYER = 15
 MAX_RELIABILITY = 5
 MAX_FRESHNESS = 10
 
@@ -39,8 +41,10 @@ CANONICAL_KEYS = (
     "keywords",
     "category",
     "specialization",
+    "scope",
     "location",
     "value",
+    "buyer",
     "reliability",
     "freshness",
 )
@@ -595,16 +599,110 @@ def score_value_fit(company: Company, tender: ConstructionTender, tender_source:
     )
 
 
+def score_scope_alignment(company: Company, tender: ConstructionTender, tender_source: str) -> BreakdownFactor:
+    """Construction-scope signal: does the tender title/category align with GC work types?
+
+    Mirrors the scope_pts logic in _score_construction_tender_rules (opportunity_discovery)
+    so the deterministic breakdown agrees with the rule-scanner's candidate ranking.
+    """
+    haystack = _tender_haystack(tender, tender_source).lower()
+    category = (tender.category or "").lower()
+
+    trade_hit = _has_construction_scope(tender, tender_source)
+    cat_hit = any(
+        (pt or "").lower() in haystack or (pt or "").lower() in category
+        for pt in (company.project_types or [])
+        if pt
+    )
+
+    if category == "construction" and (trade_hit or cat_hit):
+        points = MAX_SCOPE
+        detail = (
+            "Category=Construction + title keyword overlap"
+            if trade_hit
+            else "Category=Construction + project type overlap"
+        )
+    elif trade_hit and cat_hit:
+        points = 12
+        detail = "Title keyword + project type both signal construction scope"
+    elif trade_hit:
+        points = 8
+        detail = "Title contains construction-scope keyword"
+    else:
+        points = 0
+        detail = "No construction-scope signal in title or category"
+
+    return BreakdownFactor(
+        factor="scope",
+        label="Construction scope",
+        points=points,
+        max_points=MAX_SCOPE,
+        detail=detail,
+    )
+
+
+def score_buyer_relevance(company: Company, tender: ConstructionTender, tender_source: str) -> BreakdownFactor:
+    """Prior buyer relationship or buyer-type fit.
+
+    Mirrors _buyer_relevance_points in opportunity_discovery so the deterministic
+    breakdown agrees with the rule-scanner's candidate ranking.
+    """
+    if tender_source == "federal":
+        org = (getattr(tender, "organization", "") or "").strip().lower()
+    else:
+        org = (getattr(tender, "company", "") or "").strip().lower()
+
+    if not org:
+        return BreakdownFactor(
+            factor="buyer",
+            label="Buyer relevance",
+            points=0,
+            max_points=MAX_BUYER,
+            detail="No issuing organisation listed",
+        )
+
+    for client in (company.award_clients or []):
+        c = (client or "").strip().lower()
+        if c and (c in org or org in c):
+            return BreakdownFactor(
+                factor="buyer",
+                label="Buyer relevance",
+                points=MAX_BUYER,
+                max_points=MAX_BUYER,
+                detail=f"Known buyer: {client[:60]}",
+            )
+
+    for level in (company.buyer_levels or []):
+        if level and level.lower() in org:
+            return BreakdownFactor(
+                factor="buyer",
+                label="Buyer relevance",
+                points=10,
+                max_points=MAX_BUYER,
+                detail=f"Buyer type match: {level}",
+            )
+
+    return BreakdownFactor(
+        factor="buyer",
+        label="Buyer relevance",
+        points=0,
+        max_points=MAX_BUYER,
+        detail="No prior buyer relationship detected",
+    )
+
+
 def _has_relevance_signal(factors: list[BreakdownFactor]) -> bool:
     by_id = {f.factor: f for f in factors}
     keywords = by_id.get("keywords")
     category = by_id.get("category")
     specialization = by_id.get("specialization")
+    scope = by_id.get("scope")
     location = by_id.get("location")
     return bool(
         (keywords and keywords.points > 0)
         or (category and category.points > 0)
         or (specialization and specialization.points > 0)
+        or (scope and scope.points > 0)
         or (location and location.points >= 5)
     )
 
@@ -734,8 +832,10 @@ def score_construction_match(
         score_keywords(company, tender, tender_source),
         score_category(company, tender, tender_source),
         score_specialization(company, tender, tender_source),
+        score_scope_alignment(company, tender, tender_source),
         score_location(company, tender, tender_source),
         score_value_fit(company, tender, tender_source),
+        score_buyer_relevance(company, tender, tender_source),
     ]
     partial.append(score_reliability(company, partial))
     partial.append(score_freshness(tender, tender_source))
@@ -745,7 +845,7 @@ def score_construction_match(
     # Maintenance denylist: operating/cleaning/tending contracts suppress all
     # variable-component scores so they cannot rank above real construction work.
     if _is_maintenance_contract(tender):
-        for key in ("category", "specialization", "location", "value"):
+        for key in ("category", "specialization", "scope", "location", "value", "buyer"):
             f = factors_by_key.get(key)
             if f is not None and f.points != 0:
                 f.points = 0
