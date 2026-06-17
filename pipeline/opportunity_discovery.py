@@ -160,7 +160,10 @@ _NON_CONSTRUCTION_PROCUREMENT_RE = re.compile(
     r"|\bvending\b|\bfood\s+service\b|\bbeverage\b|\bcatering\b|\bmeal\b"
     r"|\bfurniture\b|\buniform\b|\bgenerator\b"
     r"|\bsoftware\s+license\b|\bsaas\b"
-    r"|\btimber\s+sale\b|\btimber\s+license\b|\bcutting\s+permit\b",
+    r"|\btimber\s+sale\b|\btimber\s+license\b|\bcutting\s+permit\b"
+    r"|\bnetwork\s+drive\b|\bdrive\s+migration\b|\bit\s+services\b|\bdata\s+migration\b"
+    r"|\bnatural\s+resources\s+assessment\b|\benvironmental\s+assessment\s+services\b"
+    r"|\blow\s+voltage\b|\bsource\s+list\b",
     re.I,
 )
 ADDRESS_NOISE_RE = re.compile(
@@ -419,6 +422,7 @@ _REGION_STREET_SUFFIX_RE = re.compile(
     re.I,
 )
 _REGION_CITY_MISMATCH_PENALTY = 15
+_REGION_UNDETERMINED_TENDER_PENALTY = 8
 _PROVINCE_SEGMENT_RE = re.compile(r"\b(BC|British Columbia)\b", re.I)
 
 
@@ -489,14 +493,14 @@ def _tender_operating_geo(payload: dict[str, Any]) -> tuple[set[str], set[str]]:
 
 
 def _region_mismatch_penalty(signals: CompanySignals, payload: dict[str, Any]) -> int:
-    """-15 when company and tender are both geo-resolvable but in different areas."""
+    """Penalty when company geo resolves but tender is distant or geo-unknown."""
     company_cities, company_regions = _company_operating_geo(signals)
     tender_cities, tender_regions = _tender_operating_geo(payload)
 
     if not (company_cities or company_regions):
         return 0
     if not (tender_cities or tender_regions):
-        return 0
+        return _REGION_UNDETERMINED_TENDER_PENALTY
 
     if company_cities & tender_cities:
         return 0

@@ -83,6 +83,12 @@ Anything that is non-construction procurement, clearly out-of-region for a regio
 - **Permit results unchanged** (parity) and construction companies that already work don’t regress.
 - Every surfaced item shows a human-readable reason; if fewer than N qualify, the UI says “no strong matches” rather than padding with low-relevance items.
 
+### After Phase 1 (measured 2026-06-16)
+
+- Vending / police vehicles / tilt wrecker / fleet-tires removed from top results ✅
+- precision@7 improved from ~2/10 → ~4/7
+- Region penalty partially working but Carpenter Creek Bridge (New Denver, ~600 km) still at score 69 — root cause: `primary_city` is empty for Naki Ocran, and `neighborhoods` contains street names (e.g. “Davie Street”), not city names, so city-level token matching fails and no penalty is applied.
+
 ## 6. Architecture — the matching funnel
 
 > Principle: **filter hard early → score precisely → AI last → always explain.** Junk is removed by gates before scoring, not scored at 64 and shown.
@@ -105,7 +111,9 @@ Anything that is non-construction procurement, clearly out-of-region for a regio
 
 **Phase 2 — rebalance + UX**
 
-- Cap keyword dominance; let value & region penalize; tighten category-overlap so portal label isn’t a positive signal.
+- Fix region matching: add city-level extraction from company address / Google data, not just neighborhood street tokens.
+- Add trade-type filter: exclude pure consulting, maintenance-only, and road-consulting from GC candidate pool.
+- Cap keyword score dominance (currently ~27/100, fires on almost everything).
 - Threshold + “no strong matches” empty state.
 
 **Phase 3 — durability + tuning**

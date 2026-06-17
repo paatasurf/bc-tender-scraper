@@ -36,6 +36,7 @@ MAX_FRESHNESS = 10
 # F005 Phase 2 region-fit sub-scores (folded into the "location" factor).
 REGION_SAME_REGION = 8
 REGION_OUT_OF_REGION_PENALTY = 12
+REGION_UNDETERMINED_TENDER_SOFT_PENALTY = 5
 
 CANONICAL_KEYS = (
     "keywords",
@@ -75,6 +76,10 @@ _CONSTRUCTION_SCOPE_RE = re.compile(
     r"|structural|roofing|excavation|concrete"
     r"|watermain|storm.?sewer|sanitary.?sewer"
     r"|utility.?construction|substation.?construction"
+    r"|roadway|road\s+rehabilitation|road\s+improvement|paving|resurfacing"
+    r"|wastewater|water\s+treatment|treatment\s+plant|water\s+system"
+    r"|bridge|culvert|trail\s+construction|transit\s+exchange"
+    r"|demolition|channel\s+reconstruction|site\s+servicing"
     r")\b",
     re.I,
 )
@@ -166,7 +171,7 @@ PLACE_NAME_TOKENS = frozenset({
 POISON_TOKENS = STREET_SUFFIX_TOKENS | GEO_NAME_NOISE_TOKENS | GENERIC_NOISE_TOKENS | PLACE_NAME_TOKENS
 
 # --- F005 Phase 2: BC city -> region gazetteer -------------------------------
-# Ambiguous common-word place names (hope, chase, golden, mission, trail, midway)
+# Ambiguous common-word place names (hope, golden, mission, trail, midway)
 # are intentionally excluded to avoid false region hits in tender titles.
 _REGION_LOWER_MAINLAND = "Lower Mainland"
 _REGION_VANCOUVER_ISLAND = "Vancouver Island"
@@ -197,8 +202,9 @@ _register_cities(
     (
         "victoria", "saanich", "langford", "colwood", "esquimalt", "sidney",
         "nanaimo", "ladysmith", "duncan", "lake cowichan", "parksville",
-        "qualicum", "port alberni", "courtenay", "comox", "campbell river",
+        "qualicum", "port alberni", "alberni", "courtenay", "comox", "campbell river",
         "powell river", "tofino", "ucluelet", "sooke", "port hardy", "cumberland",
+        "sproat lake",
     ),
 )
 _register_cities(
@@ -207,7 +213,7 @@ _register_cities(
         "kelowna", "west kelowna", "vernon", "penticton", "kamloops",
         "salmon arm", "summerland", "peachland", "lake country", "oliver",
         "osoyoos", "merritt", "princeton", "logan lake", "sicamous", "armstrong",
-        "enderby", "keremeos", "okanagan",
+        "enderby", "keremeos", "okanagan", "cache creek", "chase",
     ),
 )
 _register_cities(
@@ -549,8 +555,8 @@ def score_specialization(company: Company, tender: ConstructionTender, tender_so
 def score_location(company: Company, tender: ConstructionTender, tender_source: str) -> BreakdownFactor:
     """City/region-aware region fit (F005 Phase 2).
 
-    Same city > same region > out-of-region (penalty). Neutral (0) when either
-    side's region is undetermined, so a missing signal never fabricates a hit.
+    Same city > same region > out-of-region (penalty). Soft penalty when company
+    region is known but tender region cannot be resolved.
     """
     company_cities, company_regions = _company_geo(company)
     tender_cities, tender_regions = _tender_geo(tender, tender_source)
@@ -567,7 +573,10 @@ def score_location(company: Company, tender: ConstructionTender, tender_source: 
     if not company_regions:
         return factor(0, "Company operating region undetermined — region neutral")
     if not tender_regions:
-        return factor(0, "Tender region undetermined — region neutral")
+        return factor(
+            -REGION_UNDETERMINED_TENDER_SOFT_PENALTY,
+            "Tender region undetermined — applying soft penalty",
+        )
 
     shared_cities = company_cities & tender_cities
     if shared_cities:
@@ -856,11 +865,66 @@ def breakdown_json_to_api_breakdown(stored: dict[str, Any] | None) -> dict[str, 
     return breakdown_json_to_api_breakdown_generic(stored, key_order=CANONICAL_KEYS)
 
 
+_EXCLUDED_PROCUREMENT_DETAIL = "Excluded: non-construction procurement"
+
+
+def _excluded_procurement_match() -> ScoredConstructionMatch:
+    """Zero-score result for L1 non-construction procurement titles."""
+    labels = {
+        "keywords": "Trade keywords",
+        "category": "Project type",
+        "specialization": "Domain specialization",
+        "scope": "Construction scope",
+        "location": "Region / service area",
+        "value": "Project value range",
+        "buyer": "Buyer relevance",
+        "reliability": "Profile reliability",
+        "freshness": "Tender deadline",
+    }
+    max_points = {
+        "keywords": MAX_KEYWORDS,
+        "category": MAX_CATEGORY,
+        "specialization": MAX_SPECIALIZATION,
+        "scope": MAX_SCOPE,
+        "location": MAX_LOCATION,
+        "value": MAX_VALUE,
+        "buyer": MAX_BUYER,
+        "reliability": MAX_RELIABILITY,
+        "freshness": MAX_FRESHNESS,
+    }
+    partial = [
+        BreakdownFactor(
+            factor=key,
+            label=labels[key],
+            points=0,
+            max_points=max_points[key],
+            detail=_EXCLUDED_PROCUREMENT_DETAIL,
+        )
+        for key in CANONICAL_KEYS
+    ]
+    factors_by_key = {f.factor: f for f in partial}
+    breakdown_json = {f.factor: _factor_to_json(f) for f in partial}
+    api_breakdown = to_api_breakdown(factors_by_key, key_order=CANONICAL_KEYS)
+    assert_score_equals_breakdown(0, api_breakdown)
+    return ScoredConstructionMatch(
+        score=0,
+        breakdown=partial,
+        breakdown_json=breakdown_json,
+        api_breakdown=api_breakdown,
+        match_reason=_EXCLUDED_PROCUREMENT_DETAIL,
+    )
+
+
 def score_construction_match(
     company: Company,
     tender: ConstructionTender,
     tender_source: str,
 ) -> ScoredConstructionMatch:
+    from pipeline.opportunity_discovery import _is_non_construction_procurement
+
+    if _is_non_construction_procurement(tender.title or ""):
+        return _excluded_procurement_match()
+
     partial = [
         score_keywords(company, tender, tender_source),
         score_category(company, tender, tender_source),
