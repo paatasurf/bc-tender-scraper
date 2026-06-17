@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import time
@@ -12,6 +13,7 @@ from typing import Any, Literal
 from sqlalchemy import func, inspect as sa_inspect, or_, select
 from sqlalchemy.orm import Session
 
+from config.env import env_flag
 from db.connection import session_scope
 from db.models import (
     ArchCompany,
@@ -36,6 +38,8 @@ from pipeline.ai_matching import (
 )
 
 from pipeline.scoring.construction_match_scoring import score_construction_match
+
+logger = logging.getLogger(__name__)
 
 Kind = Literal["construction", "architecture"]
 OpportunityType = Literal["tender", "permit", "contract_award"]
@@ -149,6 +153,14 @@ CONSTRUCTION_TITLE_RE = re.compile(
 )
 CONSULTING_ONLY_RE = re.compile(
     r"\bconsultant\b|\bprofessional services\b|\bengineering services\b",
+    re.I,
+)
+_NON_CONSTRUCTION_PROCUREMENT_RE = re.compile(
+    r"\btruck\b|\bvehicle\b|\bfleet\b|\bwrecker\b|\bbus\b|\bautomobile\b|\bpolice\b|\bambulance\b"
+    r"|\bvending\b|\bfood\s+service\b|\bbeverage\b|\bcatering\b|\bmeal\b"
+    r"|\bfurniture\b|\buniform\b|\bgenerator\b"
+    r"|\bsoftware\s+license\b|\bsaas\b"
+    r"|\btimber\s+sale\b|\btimber\s+license\b|\bcutting\s+permit\b",
     re.I,
 )
 ADDRESS_NOISE_RE = re.compile(
@@ -362,6 +374,36 @@ def _buyer_relevance_points(signals: CompanySignals, organization: str) -> tuple
     return 0, None
 
 
+def _construction_tender_relevance_v1_enabled() -> bool:
+    return env_flag("CONSTRUCTION_TENDER_RELEVANCE_V1", default=False)
+
+
+def _is_non_construction_procurement(title: str) -> bool:
+    """True when title clearly indicates goods/vehicles/food/IT/forestry procurement."""
+    return bool(_NON_CONSTRUCTION_PROCUREMENT_RE.search(title or ""))
+
+
+def _tender_row_parsed_value(row: Any, source: str) -> float:
+    numeric = getattr(row, "estimated_value_numeric", None)
+    if numeric is not None and float(numeric) > 0:
+        return float(numeric)
+    if source == "federal":
+        return _parse_value(getattr(row, "estimated_value", "") or "")
+    return _parse_value(getattr(row, "value", "") or "")
+
+
+def _location_overlaps_neighborhoods(location: str, neighborhoods: list[str]) -> bool:
+    loc_tokens = _tokenize(location)
+    if not loc_tokens:
+        return False
+    for neighborhood in neighborhoods:
+        if not neighborhood:
+            continue
+        if loc_tokens & _tokenize(str(neighborhood)):
+            return True
+    return False
+
+
 def _score_construction_tender_rules(
     signals: CompanySignals,
     payload: dict[str, Any],
@@ -406,9 +448,24 @@ def _score_construction_tender_rules(
     if CONSULTING_ONLY_RE.search(hay_l) and not trade_hit:
         penalty = 10
 
+    region_penalty = 0
+    if _construction_tender_relevance_v1_enabled():
+        neighborhoods = [n for n in signals.neighborhoods if n and str(n).strip()]
+        if (
+            payload.get("tender_source") == "federal"
+            and neighborhoods
+            and not _location_overlaps_neighborhoods(payload.get("location") or "", neighborhoods)
+        ):
+            region_penalty = 10
+
     score = min(
         100,
-        max(0, kw_pts + cat_pts + loc_pts + val_pts + buyer_pts + scope_pts + rel_pts + fresh_pts - penalty),
+        max(
+            0,
+            kw_pts + cat_pts + loc_pts + val_pts + buyer_pts + scope_pts + rel_pts + fresh_pts
+            - penalty
+            - region_penalty,
+        ),
     )
 
     reasons: list[str] = []
@@ -596,15 +653,24 @@ def _score_contract_award(
 
 
 def _tender_payload(row: Any, source: str) -> dict[str, Any]:
+    relevance_v1 = _construction_tender_relevance_v1_enabled()
     if source == "federal":
         org = row.organization
         deadline = row.closing_date
-        value = _parse_value(row.estimated_value)
+        value = (
+            _tender_row_parsed_value(row, source)
+            if relevance_v1
+            else _parse_value(row.estimated_value)
+        )
         budget = (row.ai_budget_estimate or "").strip() or None
     elif source == "commercial":
         org = row.company
         deadline = row.deadline
-        value = _parse_value(row.value)
+        value = (
+            _tender_row_parsed_value(row, source)
+            if relevance_v1
+            else _parse_value(row.value)
+        )
         budget = (row.ai_budget_estimate or "").strip() or None
     else:
         org = row.company
@@ -612,7 +678,7 @@ def _tender_payload(row: Any, source: str) -> dict[str, Any]:
         value = _parse_value(row.value)
         budget = (row.ai_budget_estimate or "").strip() or None
 
-    return {
+    payload: dict[str, Any] = {
         "id": row.id,
         "title": row.title,
         "company": org or "",
@@ -623,6 +689,9 @@ def _tender_payload(row: Any, source: str) -> dict[str, Any]:
         "url": getattr(row, "url", "") or "",
         "tender_source": source,
     }
+    if relevance_v1 and source == "federal":
+        payload["location"] = getattr(row, "location", "") or ""
+    return payload
 
 
 def _permit_payload(permit: Permit) -> dict[str, Any]:
@@ -657,12 +726,21 @@ def _award_payload(award: ContractAward) -> dict[str, Any]:
 def _load_tender_candidates(session: Session, kind: Kind, limit: int) -> list[tuple[Any, str]]:
     rows: list[tuple[Any, str]] = []
     if kind == "construction":
+        relevance_v1 = _construction_tender_relevance_v1_enabled()
         federal = session.scalars(select(Tender).order_by(Tender.id.desc()).limit(limit)).all()
         commercial = session.scalars(
             select(CommercialTender).order_by(CommercialTender.id.desc()).limit(limit)
         ).all()
         rows.extend((row, "federal") for row in federal)
         rows.extend((row, "commercial") for row in commercial)
+        if relevance_v1:
+            before = len(rows)
+            rows = [
+                (row, source)
+                for row, source in rows
+                if not _is_non_construction_procurement(row.title or "")
+            ]
+            logger.info("F005 pool: %d → %d after exclusion filter", before, len(rows))
     else:
         arch = session.scalars(select(ArchTender).order_by(ArchTender.id.desc()).limit(limit)).all()
         rows.extend((row, "arch") for row in arch)
