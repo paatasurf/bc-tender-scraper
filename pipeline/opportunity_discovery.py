@@ -1097,6 +1097,13 @@ def _tender_opportunity_item(
     return item
 
 
+def _construction_breakdown_total(breakdown: dict[str, dict[str, Any]] | None) -> int:
+    """Sum breakdown component points — displayed total must match this invariant."""
+    if not breakdown:
+        return 0
+    return sum(int(entry.get("points", 0)) for entry in breakdown.values())
+
+
 def _apply_construction_pair_breakdown(
     item: dict[str, Any],
     key: tuple[str, int],
@@ -1111,8 +1118,8 @@ def _apply_construction_pair_breakdown(
         pair = hybrid_pairs[key]
         breakdown = pair.get("breakdown")
         if breakdown:
-            item["score"] = int(pair["score"])
             item["breakdown"] = breakdown
+            item["score"] = _construction_breakdown_total(breakdown)
             reasoning = (pair.get("reasoning") or "").strip()
             if reasoning:
                 item["reasons"] = [reasoning[:240]]
@@ -1120,8 +1127,9 @@ def _apply_construction_pair_breakdown(
     if fresh_cache and key in fresh_cache:
         row = fresh_cache[key]
         if row.breakdown_json:
-            item["score"] = row.score
-            item["breakdown"] = breakdown_json_to_construction_api_breakdown(row.breakdown_json)
+            breakdown = breakdown_json_to_construction_api_breakdown(row.breakdown_json)
+            item["breakdown"] = breakdown
+            item["score"] = _construction_breakdown_total(breakdown)
             reasoning = (row.reasoning or "").strip()
             if reasoning:
                 item["reasons"] = [reasoning[:240]]
@@ -1227,8 +1235,8 @@ def _fill_missing_construction_breakdowns(
             continue
         scored = score_construction_match(company, tender, key[0])
         for item in group:
-            item["score"] = scored.score
             item["breakdown"] = scored.api_breakdown
+            item["score"] = _construction_breakdown_total(scored.api_breakdown)
             if scored.match_reason:
                 item["reasons"] = [scored.match_reason[:240]]
 
