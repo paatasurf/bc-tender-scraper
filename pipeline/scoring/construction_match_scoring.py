@@ -18,7 +18,7 @@ from pipeline.scoring.match_scoring_common import (
     assert_score_equals_breakdown,
     breakdown_json_to_api_breakdown_generic,
     tokenize,
-    to_api_breakdown_seven_key,
+    to_api_breakdown,
 )
 
 ConstructionTender = Tender | CommercialTender
@@ -879,7 +879,7 @@ def score_construction_match(
 
     factors_by_key = {f.factor: f for f in partial}
     breakdown_json = {f.factor: _factor_to_json(f) for f in partial}
-    api_breakdown = to_api_breakdown_seven_key(factors_by_key, key_order=CANONICAL_KEYS)
+    api_breakdown = to_api_breakdown(factors_by_key, key_order=CANONICAL_KEYS)
     assert_score_equals_breakdown(total, api_breakdown)
 
     return ScoredConstructionMatch(

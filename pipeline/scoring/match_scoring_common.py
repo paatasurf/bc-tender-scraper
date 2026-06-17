@@ -97,12 +97,18 @@ def assert_score_equals_breakdown(total: int, api_breakdown: dict[str, dict[str,
         raise ValueError(f"API breakdown sum {api_sum} != total {total}")
 
 
-def to_api_breakdown_seven_key(
+def to_api_breakdown(
     factors: dict[str, BreakdownFactor],
     *,
     key_order: tuple[str, ...],
     default_detail: str = "No significant signal",
 ) -> dict[str, dict[str, Any]]:
+    """Build an API-facing breakdown dict from a factors map, using key_order as the schema.
+
+    Returns one entry per key in key_order.  Keys absent from factors get points=0.
+    Works for any number of canonical keys — currently 9 for construction (keywords,
+    category, specialization, scope, location, value, buyer, reliability, freshness).
+    """
     result: dict[str, dict[str, Any]] = {}
     for key in key_order:
         factor = factors.get(key)
@@ -111,6 +117,10 @@ def to_api_breakdown_seven_key(
         else:
             result[key] = {"points": factor.points, "detail": factor.detail}
     return result
+
+
+# Backward-compat alias kept so any external references survive until they are cleaned up.
+to_api_breakdown_seven_key = to_api_breakdown
 
 
 def breakdown_json_to_api_breakdown_generic(
