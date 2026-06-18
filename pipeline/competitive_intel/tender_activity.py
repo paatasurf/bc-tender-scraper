@@ -85,6 +85,10 @@ def _peer_maps(peers: list[TopCompetitor]) -> tuple[dict[int, int], dict[int, st
     )
 
 
+def _exclude_subject_peer(peers: list[TopCompetitor], company_id: int) -> list[TopCompetitor]:
+    return [peer for peer in peers if peer.company_id != company_id]
+
+
 def _subject_match_keys(
     session: Session,
     *,
@@ -188,6 +192,7 @@ def get_competitor_tender_activity(
     peers = get_top_competitors_for_company(
         session, company_id=company_id, kind=kind, peer_limit=peer_limit
     )
+    peers = _exclude_subject_peer(peers, company_id)
     if not peers:
         return {"company_id": company_id, "lookback_days": LOOKBACK_DAYS, "competitors": []}
 

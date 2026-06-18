@@ -135,3 +135,28 @@ def test_competitor_activity_sorted_by_match_count():
     assert competitors[0]["match_count"] == 2
     assert competitors[1]["name"] == "Beta"
     assert competitors[1]["match_count"] == 1
+
+
+def test_competitor_activity_excludes_profile_company():
+    session = MagicMock()
+    peers = [_peer(1, "Self Co", 80), _peer(2, "Rival", 70)]
+    rival_matches = [_match(company_id=2, tender_id=5)]
+    tender = MagicMock()
+    tender.id = 5
+    tender.title = "Bridge Repair"
+    tender.estimated_value_numeric = 250_000
+    tender.ai_budget_estimate = ""
+    tender.estimated_value = ""
+
+    session.scalars.return_value.all.side_effect = [rival_matches, [tender]]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitors = result["competitors"]
+    assert len(competitors) == 1
+    assert competitors[0]["company_id"] == 2
+    assert competitors[0]["name"] == "Rival"
