@@ -1,0 +1,214 @@
+"""Surrey issued building permits — ArcGIS Open Data (Feature 010)."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from datetime import datetime, timedelta, timezone
+from typing import Any, Iterator
+
+from scraper.config import (
+    SURREY_CITY,
+    SURREY_PERMITS_API,
+    SURREY_PERMITS_CSV,
+    SURREY_SOURCE,
+)
+from scraper.utils import clean_text, create_session, polite_api_get
+
+PAGE_SIZE = 1000
+OUT_FIELDS = (
+    "PermitNumber,Address,PermitType,WorkType,SubType,IssuedDate,ValueOfConstruction"
+)
+FIELDNAMES = [
+    "external_id",
+    "address",
+    "permit_type",
+    "project_value",
+    "applicant",
+    "issue_date",
+    "description",
+    "source",
+    "city",
+]
+
+
+def _parse_issue_date(raw: str | None) -> str:
+    value = clean_text(raw)
+    if not value:
+        return ""
+    if len(value) == 8 and value.isdigit():
+        return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
+    if len(value) >= 10 and value[4] == "-":
+        return value[:10]
+    return value
+
+
+def _format_record(attrs: dict[str, Any]) -> dict[str, str]:
+    permit_type = clean_text(attrs.get("PermitType")) or clean_text(attrs.get("WorkType"))
+    work_type = clean_text(attrs.get("WorkType"))
+    sub_type = clean_text(attrs.get("SubType"))
+    description_parts = [part for part in (work_type, sub_type) if part]
+    value = attrs.get("ValueOfConstruction")
+    project_value = "" if value is None else str(value)
+
+    return {
+        "external_id": clean_text(attrs.get("PermitNumber")),
+        "address": clean_text(attrs.get("Address")),
+        "permit_type": permit_type,
+        "project_value": project_value,
+        "applicant": "",
+        "issue_date": _parse_issue_date(attrs.get("IssuedDate")),
+        "description": " / ".join(description_parts),
+        "source": SURREY_SOURCE,
+        "city": SURREY_CITY,
+    }
+
+
+def _issued_date_cutoff(days: int) -> str:
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+    return cutoff.strftime("%Y%m%d")
+
+
+def _build_where_clause(*, days: int | None) -> str:
+    if days is None or days <= 0:
+        return "1=1"
+    return f"IssuedDate >= '{_issued_date_cutoff(days)}'"
+
+
+def _query_page(
+    session,
+    *,
+    where: str,
+    offset: int,
+    page_size: int = PAGE_SIZE,
+) -> tuple[list[dict[str, str]], bool]:
+    response = polite_api_get(
+        session,
+        f"{SURREY_PERMITS_API}/query",
+        params={
+            "where": where,
+            "outFields": OUT_FIELDS,
+            "returnGeometry": "false",
+            "resultOffset": offset,
+            "resultRecordCount": page_size,
+            "orderByFields": "IssuedDate,PermitNumber",
+            "f": "json",
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+
+    exceeded = bool(payload.get("exceededTransferLimit"))
+    features = payload.get("features") or []
+    records = [
+        _format_record(feature.get("attributes") or {})
+        for feature in features
+        if clean_text((feature.get("attributes") or {}).get("Address"))
+    ]
+    return records, exceeded
+
+
+def _count_matches(session, *, where: str) -> int:
+    response = polite_api_get(
+        session,
+        f"{SURREY_PERMITS_API}/query",
+        params={"where": where, "returnCountOnly": "true", "f": "json"},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+    return int(payload.get("count") or 0)
+
+
+def iter_surrey_permits(*, days: int | None = None) -> Iterator[dict[str, str]]:
+    session = create_session()
+    where = _build_where_clause(days=days)
+    total = _count_matches(session, where=where)
+    mode = f"last {days} days" if days else "full history"
+    print(f"[Surrey Permits] Fetching {mode}: {total} records")
+
+    offset = 0
+    while True:
+        page, exceeded = _query_page(session, where=where, offset=offset)
+        if not page:
+            break
+        yield from page
+        offset += len(page)
+        if not exceeded and len(page) < PAGE_SIZE:
+            break
+
+
+def _write_csv(records: list[dict[str, str]], *, append: bool) -> None:
+    if not records:
+        return
+    mode = "a" if append else "w"
+    write_header = not append
+    with open(SURREY_PERMITS_CSV, mode, encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
+        if write_header:
+            writer.writeheader()
+        writer.writerows(records)
+
+
+def scrape_surrey_permits(*, days: int | None = None, persist: bool = True) -> dict[str, Any]:
+    """Scrape Surrey permits. Full history when days is None; incremental when days > 0."""
+    records = list(iter_surrey_permits(days=days))
+    incremental = days is not None and days > 0
+    _write_csv(records, append=incremental)
+
+    result: dict[str, Any] = {
+        "source": SURREY_SOURCE,
+        "city": SURREY_CITY,
+        "mode": "incremental" if incremental else "full",
+        "days": days,
+        "permits_scraped": len(records),
+        "csv_path": SURREY_PERMITS_CSV,
+    }
+
+    if persist and records:
+        from db.connection import get_session, init_db
+        from db.permit_import import upsert_city_permits
+
+        init_db()
+        session = get_session()
+        try:
+            result["permits_persisted"] = upsert_city_permits(
+                session,
+                records,
+                source=SURREY_SOURCE,
+                full_refresh=not incremental,
+            )
+        finally:
+            session.close()
+    else:
+        result["permits_persisted"] = 0
+
+    print(
+        f"[Surrey Permits] Saved {len(records)} permits to {SURREY_PERMITS_CSV}"
+        f" ({result.get('permits_persisted', 0)} persisted)"
+    )
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Scrape Surrey issued building permits")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Incremental window in days (omit for full historical load)",
+    )
+    parser.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="Write CSV only; do not upsert into PostgreSQL",
+    )
+    args = parser.parse_args()
+    scrape_surrey_permits(days=args.days, persist=not args.no_persist)
+
+
+if __name__ == "__main__":
+    main()

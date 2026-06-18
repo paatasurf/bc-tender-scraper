@@ -38,6 +38,14 @@ VANCOUVER_PERMITS_API = (
 )
 BUILDING_PERMITS_CSV = "building_permits.csv"
 
+SURREY_PERMITS_API = (
+    "https://services5.arcgis.com/YRpe0VKTJytZSSIB/arcgis/rest/services/"
+    "IssuedBuildingPermits/FeatureServer/0"
+)
+SURREY_PERMITS_CSV = "surrey_permits.csv"
+SURREY_SOURCE = "surrey"
+SURREY_CITY = "Surrey"
+
 # Subreddit -> keyword filters (empty tuple = include all posts from that subreddit).
 REDDIT_SOURCES: dict[str, tuple[str, ...]] = {
     "britishcolumbia": ("construction", "permit", "building", "contractor", "development"),

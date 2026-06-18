@@ -389,6 +389,13 @@ def _ensure_ai_columns(engine) -> None:
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_summary TEXT",
         "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS ai_budget_estimate TEXT",
         "ALTER TABLE permits ADD COLUMN IF NOT EXISTS architect VARCHAR(300) DEFAULT ''",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'vancouver'",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS city VARCHAR(100) DEFAULT 'Vancouver'",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS external_id VARCHAR(100) DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_permits_source ON permits (source)",
+        "CREATE INDEX IF NOT EXISTS ix_permits_city ON permits (city)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_permits_source_external_id "
+        "ON permits (source, external_id) WHERE external_id <> ''",
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS google_place_id VARCHAR(200)",
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS website VARCHAR(500) DEFAULT ''",
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS lat FLOAT",

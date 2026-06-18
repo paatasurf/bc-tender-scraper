@@ -44,6 +44,9 @@ class Permit(Base):
     architect: Mapped[str] = mapped_column(String(300), default="")
     issue_date: Mapped[str] = mapped_column(String(20), default="")
     description: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(50), default="vancouver", index=True)
+    city: Mapped[str] = mapped_column(String(100), default="Vancouver", index=True)
+    external_id: Mapped[str] = mapped_column(String(100), default="", index=True)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

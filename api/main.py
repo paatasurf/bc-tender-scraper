@@ -839,6 +839,23 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
         session.close()
 
 
+@app.get("/api/scrape/surrey-permits")
+def scrape_surrey_permits_route(
+    days: int | None = Query(
+        None,
+        ge=1,
+        le=365,
+        description="Incremental window in days; omit for full historical load",
+    ),
+) -> dict[str, Any]:
+    from scraper.surrey_permits import scrape_surrey_permits
+
+    try:
+        return scrape_surrey_permits(days=days, persist=True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Surrey permits scrape failed: {exc}") from exc
+
+
 @app.get("/api/pipeline/status")
 def pipeline_status() -> dict[str, Any]:
     runtime = get_pipeline_runtime_status()

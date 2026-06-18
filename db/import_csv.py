@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -93,7 +94,7 @@ def import_permits(session: Session, path: Path | None = None) -> int:
         print(f"[Import] Skipping missing file: {csv_path}")
         return 0
 
-    session.execute(Permit.__table__.delete())
+    session.execute(delete(Permit).where(Permit.source == "vancouver"))
     session.commit()
 
     imported = 0
@@ -111,6 +112,9 @@ def import_permits(session: Session, path: Path | None = None) -> int:
                     "applicant": row.get("applicant", ""),
                     "issue_date": row.get("issue_date", ""),
                     "description": row.get("description", ""),
+                    "source": "vancouver",
+                    "city": "Vancouver",
+                    "external_id": "",
                 }
             )
             if len(batch) >= BATCH_SIZE:
