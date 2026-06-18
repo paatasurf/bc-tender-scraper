@@ -15,7 +15,7 @@ from pipeline.competitive_intel.cohort import build_market_cohort
 from pipeline.competitive_intel.peers import select_top_competitors
 from pipeline.competitive_intel.types import Kind
 
-ENGINE_VERSION = "competitive_intel_v1.2"
+ENGINE_VERSION = "competitive_intel_v1.3"
 WARN_INSUFFICIENT = "insufficient_market_data"
 
 

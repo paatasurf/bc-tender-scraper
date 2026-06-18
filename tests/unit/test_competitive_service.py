@@ -75,7 +75,7 @@ def test_service_response_shape():
         )
         result = get_competitive_intelligence(session, company_id=100, kind="construction")
 
-    assert result["engine_version"] == "competitive_intel_v1.2"
+    assert result["engine_version"] == "competitive_intel_v1.3"
     assert result["company_id"] == 100
     assert "benchmark" in result
     assert "top_competitors" in result
