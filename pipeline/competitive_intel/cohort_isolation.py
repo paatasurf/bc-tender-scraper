@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from sqlalchemy.orm import Session
+
+from db.models import Company
 from pipeline.cip_schema import CompanyIntelligenceProfile
 from pipeline.competitive_intel.types import CompanyRow, Kind
 
@@ -66,6 +69,23 @@ NON_GC_COMPANY_TYPES = frozenset(
 
 GC_COMPANY_TYPES = frozenset({"general contractor", "trade contractor"})
 
+CONSULTANT_CATEGORY_TERMS = ("consultant", "consulting")
+
+
+def _member_company_category(session: Session | None, member: CompanyRow) -> str:
+    """Market category from companies.company_type (authoritative when session provided)."""
+    company_id = getattr(member, "id", None)
+    if session is not None and company_id is not None:
+        row = session.get(Company, company_id)
+        if row is not None:
+            return (row.company_type or "").strip().lower()
+    return (getattr(member, "company_type", "") or "").strip().lower()
+
+
+def _is_consultant_category(session: Session | None, member: CompanyRow) -> bool:
+    category = _member_company_category(session, member)
+    return any(term in category for term in CONSULTANT_CATEGORY_TERMS)
+
 
 def _member_classification_text(company: CompanyRow) -> str:
     parts = [
@@ -118,13 +138,20 @@ def is_gc_builder_profile(
     return False
 
 
-def is_allowed_gc_cohort_member(member: CompanyRow) -> bool:
+def is_allowed_gc_cohort_member(
+    member: CompanyRow,
+    *,
+    session: Session | None = None,
+) -> bool:
     """True when a companies-table row may appear in a GC/builder cohort."""
+    if _is_consultant_category(session, member):
+        return False
+
     text = _member_classification_text(member)
     if any(term in text for term in GC_NAME_DENY_TERMS):
         return False
 
-    company_type = (getattr(member, "company_type", "") or "").strip().lower()
+    company_type = _member_company_category(session, member)
     if company_type in NON_GC_COMPANY_TYPES:
         return False
     if company_type in GC_COMPANY_TYPES:
@@ -139,10 +166,15 @@ def apply_cohort_type_isolation(
     *,
     kind: Kind,
     subject_cip: CompanyIntelligenceProfile | None = None,
+    session: Session | None = None,
 ) -> list[CompanyRow]:
     """Pre-filter cohort rows before quality gates and peer scoring."""
     if kind != "construction":
         return members
     if not is_gc_builder_profile(subject, subject_cip):
         return members
-    return [member for member in members if is_allowed_gc_cohort_member(member)]
+    return [
+        member
+        for member in members
+        if is_allowed_gc_cohort_member(member, session=session)
+    ]

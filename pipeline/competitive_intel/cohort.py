@@ -156,7 +156,7 @@ def build_market_cohort(
     if kind == "architecture" and city:
         members = _filter_arch_city(members, subject, subject_cip, city)
     members = apply_cohort_type_isolation(
-        members, subject, kind=kind, subject_cip=subject_cip
+        members, subject, kind=kind, subject_cip=subject_cip, session=session
     )
     members = _apply_cohort_quality_gate(members, subject, kind=kind)
 
@@ -169,7 +169,7 @@ def build_market_cohort(
     if len(members) < 8:
         members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=False, city=city)
         members = apply_cohort_type_isolation(
-            members, subject, kind=kind, subject_cip=subject_cip
+            members, subject, kind=kind, subject_cip=subject_cip, session=session
         )
         members = _apply_cohort_quality_gate(members, subject, kind=kind)
         definition_key = "sector_only_widened"

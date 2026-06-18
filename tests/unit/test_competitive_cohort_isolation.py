@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from tests.unit.competitive_fixtures import make_cip, make_company
 
 from pipeline.competitive_intel.cohort_isolation import (
@@ -43,6 +45,37 @@ def test_lmdg_excluded_by_company_type():
         total_projects=194,
     )
     assert is_allowed_gc_cohort_member(lmdg) is False
+
+
+def test_lmdg_excluded_by_consultant_category_despite_building_allowlist():
+    """Building in name must not bypass consultant category on companies.company_type."""
+    lmdg = make_company(
+        id=1921,
+        name="David Steer DBA: LMDG Building Code Consultants Ltd.",
+        company_type="Building Code Consultants",
+        primary_trade="general_building",
+        total_projects=194,
+    )
+    assert is_allowed_gc_cohort_member(lmdg) is False
+
+
+def test_lmdg_excluded_when_db_category_is_consultant():
+    lmdg = make_company(
+        id=1921,
+        name="David Steer DBA: LMDG Building Code Consultants Ltd.",
+        company_type="General Contractor",
+        primary_trade="general_building",
+        total_projects=194,
+    )
+    db_row = make_company(
+        id=1921,
+        name=lmdg.name,
+        company_type="Building Code Consultant",
+        primary_trade="consulting",
+    )
+    session = MagicMock()
+    session.get.return_value = db_row
+    assert is_allowed_gc_cohort_member(lmdg, session=session) is False
 
 
 def test_office_environments_excluded():

@@ -122,7 +122,7 @@ def select_award_market_members(
             query = query.where(Company.primary_city.ilike(city))
         rows = list(session.scalars(query.limit(AWARD_MARKET_QUERY_LIMIT)).all())
         rows = apply_cohort_type_isolation(
-            rows, subject, kind=kind, subject_cip=subject_cip
+            rows, subject, kind=kind, subject_cip=subject_cip, session=session
         )
         return [row for row in rows if resolver.count_for(row) > 0]
 
