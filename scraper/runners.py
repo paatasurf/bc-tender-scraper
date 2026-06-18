@@ -93,6 +93,12 @@ def run_surrey_permits_scraper(*, days: int | None = None) -> dict[str, Any]:
     return scrape_surrey_permits(days=days, persist=True)
 
 
+def run_burnaby_permits_scraper(*, days: int | None = None) -> dict[str, Any]:
+    from scraper.burnaby_permits import scrape_burnaby_permits
+
+    return scrape_burnaby_permits(days=days, persist=True)
+
+
 def run_building_permits_scraper() -> dict[str, Any]:
     if env_flag("PIPELINE_SKIP_BUILDING_PERMITS"):
         return {"skipped": True, "reason": "PIPELINE_SKIP_BUILDING_PERMITS=true"}

@@ -46,6 +46,14 @@ SURREY_PERMITS_CSV = "surrey_permits.csv"
 SURREY_SOURCE = "surrey"
 SURREY_CITY = "Surrey"
 
+BURNABY_PERMITS_INDEX_URL = (
+    "https://www.burnaby.ca/services-and-payments/permits-and-applications/"
+    "building-permits-issued-and-tabulation-reports"
+)
+BURNABY_PERMITS_CSV = "burnaby_permits.csv"
+BURNABY_SOURCE = "burnaby"
+BURNABY_CITY = "Burnaby"
+
 # Subreddit -> keyword filters (empty tuple = include all posts from that subreddit).
 REDDIT_SOURCES: dict[str, tuple[str, ...]] = {
     "britishcolumbia": ("construction", "permit", "building", "contractor", "development"),

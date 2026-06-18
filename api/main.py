@@ -856,6 +856,23 @@ def scrape_surrey_permits_route(
         raise HTTPException(status_code=502, detail=f"Surrey permits scrape failed: {exc}") from exc
 
 
+@app.get("/api/scrape/burnaby-permits")
+def scrape_burnaby_permits_route(
+    days: int | None = Query(
+        None,
+        ge=1,
+        le=365,
+        description="Incremental window in days; omit for full historical load",
+    ),
+) -> dict[str, Any]:
+    from scraper.burnaby_permits import scrape_burnaby_permits
+
+    try:
+        return scrape_burnaby_permits(days=days, persist=True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Burnaby permits scrape failed: {exc}") from exc
+
+
 @app.get("/api/pipeline/status")
 def pipeline_status() -> dict[str, Any]:
     runtime = get_pipeline_runtime_status()
