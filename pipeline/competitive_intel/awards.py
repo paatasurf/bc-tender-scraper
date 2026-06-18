@@ -101,12 +101,12 @@ def select_award_market_members(
     *,
     kind: Kind,
 ) -> list[CompanyRow]:
-    """Cohort for award medians — widens to sector award holders when permit cohort lacks awards."""
+    """Peers used for Awards market median — permit cohort when rich, else sector award holders."""
     if kind != "construction":
         return cohort_members
 
-    awarded_in_cohort = sum(1 for member in cohort_members if resolver.count_for(member) > 0)
-    if awarded_in_cohort >= AWARD_MARKET_MIN_AWARDED:
+    awarded_in_cohort = [member for member in cohort_members if resolver.count_for(member) > 0]
+    if len(awarded_in_cohort) >= AWARD_MARKET_MIN_AWARDED:
         return cohort_members
 
     city = (getattr(subject, "primary_city", "") or "").strip()
@@ -125,7 +125,22 @@ def select_award_market_members(
     if len(awarded) < AWARD_MARKET_MIN_AWARDED:
         awarded = _awarded_candidates(use_city=False)
 
-    by_id = {int(member.id): member for member in cohort_members}
-    for row in awarded:
-        by_id[int(row.id)] = row
-    return list(by_id.values())
+    if len(awarded) >= AWARD_MARKET_MIN_AWARDED:
+        return awarded
+
+    return cohort_members
+
+
+def top_award_rival_counts(
+    award_market_members: list[CompanyRow],
+    award_counts: dict[int, int],
+    *,
+    limit: int = 5,
+) -> list[int]:
+    """Top award counts in the award market set — fallback when threat peers lack awards."""
+    values = sorted(
+        (int(award_counts.get(int(member.id), 0)) for member in award_market_members),
+        reverse=True,
+    )
+    positive = [value for value in values if value > 0]
+    return positive[:limit]

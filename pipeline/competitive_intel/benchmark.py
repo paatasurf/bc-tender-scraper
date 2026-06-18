@@ -5,6 +5,7 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
+from pipeline.competitive_intel.awards import top_award_rival_counts
 from pipeline.competitive_intel.types import CompanyRow, Kind, MarketCohort, TopCompetitor
 
 BENCHMARK_METRICS: list[tuple[str, str, str]] = [
@@ -82,6 +83,8 @@ def compute_benchmark_strip(
         if key == "award_count" and award_counts is not None:
             for peer in peers:
                 peer_vals.append(int(award_counts.get(peer.company_id, 0)))
+            if peer_vals and all(value == 0 for value in peer_vals) and award_market_members:
+                peer_vals = top_award_rival_counts(award_market_members, award_counts)
         else:
             peer_ids = {p.company_id for p in peers}
             peer_rows = [m for m in cohort.members if m.id in peer_ids]
