@@ -107,7 +107,7 @@ def select_award_market_members(
 
     awarded_in_cohort = [member for member in cohort_members if resolver.count_for(member) > 0]
     if len(awarded_in_cohort) >= AWARD_MARKET_MIN_AWARDED:
-        return cohort_members
+        return awarded_in_cohort
 
     city = (getattr(subject, "primary_city", "") or "").strip()
     sector_filter = _sector_clause(Company, subject)
