@@ -15,7 +15,7 @@ from pipeline.competitive_intel.cohort import build_market_cohort
 from pipeline.competitive_intel.peers import select_top_competitors
 from pipeline.competitive_intel.types import Kind
 
-ENGINE_VERSION = "competitive_intel_v1.1"
+ENGINE_VERSION = "competitive_intel_v1.2"
 WARN_INSUFFICIENT = "insufficient_market_data"
 
 
@@ -83,6 +83,7 @@ def get_competitive_intelligence(
         cohort.members,
         award_resolver,
         kind=kind,
+        subject_cip=subject_cip,
     )
     for member in award_market_members:
         scoped_companies[int(member.id)] = member

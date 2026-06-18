@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from db.models import Company, ContractAward
 from pipeline.company_classification import parse_name
 from pipeline.company_matching import normalize_vendor_name
+from pipeline.competitive_intel.cohort_isolation import apply_cohort_type_isolation
 from pipeline.competitive_intel.types import CompanyRow, Kind
 
 MIN_VENDOR_KEY_LEN = 4
@@ -100,6 +101,7 @@ def select_award_market_members(
     resolver: AwardCountResolver,
     *,
     kind: Kind,
+    subject_cip=None,
 ) -> list[CompanyRow]:
     """Peers used for Awards market median — permit cohort when rich, else sector award holders."""
     if kind != "construction":
@@ -119,6 +121,9 @@ def select_award_market_members(
         if use_city and city:
             query = query.where(Company.primary_city.ilike(city))
         rows = list(session.scalars(query.limit(AWARD_MARKET_QUERY_LIMIT)).all())
+        rows = apply_cohort_type_isolation(
+            rows, subject, kind=kind, subject_cip=subject_cip
+        )
         return [row for row in rows if resolver.count_for(row) > 0]
 
     awarded = _awarded_candidates(use_city=True)

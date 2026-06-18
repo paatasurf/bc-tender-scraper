@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from db.models import ArchCompany, Company
 from pipeline.cip_schema import CompanyIntelligenceProfile
+from pipeline.competitive_intel.cohort_isolation import apply_cohort_type_isolation
 from pipeline.competitive_intel.overlap import city_set, shares_geography
 from pipeline.competitive_intel.types import CompanyRow, Kind, MarketCohort
 
@@ -154,6 +155,9 @@ def build_market_cohort(
     members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=True, city=city)
     if kind == "architecture" and city:
         members = _filter_arch_city(members, subject, subject_cip, city)
+    members = apply_cohort_type_isolation(
+        members, subject, kind=kind, subject_cip=subject_cip
+    )
     members = _apply_cohort_quality_gate(members, subject, kind=kind)
 
     definition_key = "sector_and_city"
@@ -164,6 +168,9 @@ def build_market_cohort(
 
     if len(members) < 8:
         members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=False, city=city)
+        members = apply_cohort_type_isolation(
+            members, subject, kind=kind, subject_cip=subject_cip
+        )
         members = _apply_cohort_quality_gate(members, subject, kind=kind)
         definition_key = "sector_only_widened"
         definition = f"dominant_sector={sector} (widened — cohort < 8 with city gate)"
