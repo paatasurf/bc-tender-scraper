@@ -640,6 +640,56 @@ def company_bd_intelligence(
         session.close()
 
 
+@app.get("/api/companies/{company_id}/competitive-intelligence")
+@app.get("/api/companies/id/{company_id}/competitive-intelligence")
+def company_competitive_intelligence(
+    company_id: int,
+    peer_limit: int = Query(5, ge=1, le=10),
+    refresh_cip: bool = Query(False),
+) -> dict[str, Any]:
+    from pipeline.competitive_intel.service import get_competitive_intelligence
+
+    session = get_session()
+    try:
+        try:
+            return get_competitive_intelligence(
+                session,
+                company_id=company_id,
+                kind="construction",
+                peer_limit=peer_limit,
+                refresh_cip=refresh_cip,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/{company_id}/competitive-intelligence")
+@app.get("/api/arch-companies/id/{company_id}/competitive-intelligence")
+def arch_company_competitive_intelligence(
+    company_id: int,
+    peer_limit: int = Query(5, ge=1, le=10),
+    refresh_cip: bool = Query(False),
+) -> dict[str, Any]:
+    from pipeline.competitive_intel.service import get_competitive_intelligence
+
+    session = get_session()
+    try:
+        try:
+            return get_competitive_intelligence(
+                session,
+                company_id=company_id,
+                kind="architecture",
+                peer_limit=peer_limit,
+                refresh_cip=refresh_cip,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
 @app.get("/api/companies/{company_id}/capability-profile")
 def company_capability_profile(
     company_id: int,
