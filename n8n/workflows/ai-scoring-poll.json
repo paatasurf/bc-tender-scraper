@@ -7,17 +7,17 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 7 * * *"
+              "expression": "0 7,13,19 * * *"
             }
           ]
         }
       },
       "id": "f1a2b3c4-1111-4000-8000-000000000001",
-      "name": "Daily 7 AM Trigger",
+      "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [0, 300],
-      "notes": "Runs after the 6 AM Pacific pipeline import."
+      "notes": "Runs at 7:00, 13:00, and 19:00 daily (server timezone)."
     },
     {
       "parameters": {
@@ -126,7 +126,7 @@
     }
   ],
   "connections": {
-    "Daily 7 AM Trigger": {
+    "Schedule Trigger": {
       "main": [
         [
           {
