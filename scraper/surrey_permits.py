@@ -15,7 +15,7 @@ from scraper.config import (
 )
 from scraper.utils import clean_text, create_session, polite_api_get
 
-PAGE_SIZE = 1000
+DEFAULT_PAGE_SIZE = 500
 OUT_FIELDS = (
     "PermitNumber,Address,PermitType,WorkType,SubType,IssuedDate,ValueOfConstruction"
 )
@@ -75,13 +75,21 @@ def _build_where_clause(*, days: int | None) -> str:
     return f"IssuedDate >= '{_issued_date_cutoff(days)}'"
 
 
+def _layer_page_size(session) -> int:
+    response = polite_api_get(session, SURREY_PERMITS_API, params={"f": "pjson"})
+    response.raise_for_status()
+    payload = response.json()
+    max_records = int(payload.get("maxRecordCount") or DEFAULT_PAGE_SIZE)
+    return min(max_records, DEFAULT_PAGE_SIZE)
+
+
 def _query_page(
     session,
     *,
     where: str,
     offset: int,
-    page_size: int = PAGE_SIZE,
-) -> tuple[list[dict[str, str]], bool]:
+    page_size: int,
+) -> tuple[list[dict[str, str]], int, bool]:
     response = polite_api_get(
         session,
         f"{SURREY_PERMITS_API}/query",
@@ -107,7 +115,7 @@ def _query_page(
         for feature in features
         if clean_text((feature.get("attributes") or {}).get("Address"))
     ]
-    return records, exceeded
+    return records, len(features), exceeded
 
 
 def _count_matches(session, *, where: str) -> int:
@@ -123,22 +131,47 @@ def _count_matches(session, *, where: str) -> int:
     return int(payload.get("count") or 0)
 
 
+def _should_fetch_next_page(*, raw_count: int, page_size: int, exceeded: bool) -> bool:
+    if raw_count == 0:
+        return False
+    return exceeded or raw_count >= page_size
+
+
 def iter_surrey_permits(*, days: int | None = None) -> Iterator[dict[str, str]]:
     session = create_session()
+    page_size = _layer_page_size(session)
     where = _build_where_clause(days=days)
     total = _count_matches(session, where=where)
     mode = f"last {days} days" if days else "full history"
-    print(f"[Surrey Permits] Fetching {mode}: {total} records")
+    print(f"[Surrey Permits] Fetching {mode}: {total} records (page_size={page_size})")
 
     offset = 0
+    pages = 0
+    fetched = 0
     while True:
-        page, exceeded = _query_page(session, where=where, offset=offset)
-        if not page:
+        page, raw_count, exceeded = _query_page(
+            session,
+            where=where,
+            offset=offset,
+            page_size=page_size,
+        )
+        pages += 1
+        if raw_count == 0:
             break
+
+        fetched += raw_count
         yield from page
-        offset += len(page)
-        if not exceeded and len(page) < PAGE_SIZE:
+        offset += raw_count
+
+        print(
+            f"[Surrey Permits] Page {pages}: {raw_count} rows "
+            f"(offset={offset}, yielded={len(page)}, exceeded={exceeded})"
+        )
+
+        if not _should_fetch_next_page(raw_count=raw_count, page_size=page_size, exceeded=exceeded):
             break
+
+    print(f"[Surrey Permits] Completed pagination: {pages} pages, {fetched} API rows")
 
 
 def _write_csv(records: list[dict[str, str]], *, append: bool) -> None:

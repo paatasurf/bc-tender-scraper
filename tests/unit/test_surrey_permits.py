@@ -6,6 +6,7 @@ from scraper.surrey_permits import (
     _build_where_clause,
     _format_record,
     _parse_issue_date,
+    _should_fetch_next_page,
 )
 
 
@@ -42,3 +43,16 @@ def test_build_where_clause_incremental():
 
 def test_build_where_clause_full_history():
     assert _build_where_clause(days=None) == "1=1"
+
+
+def test_should_fetch_next_page_when_transfer_limit_exceeded():
+    assert _should_fetch_next_page(raw_count=500, page_size=500, exceeded=True) is True
+
+
+def test_should_fetch_next_page_when_full_page_without_flag():
+    assert _should_fetch_next_page(raw_count=500, page_size=500, exceeded=False) is True
+
+
+def test_should_stop_on_short_final_page():
+    assert _should_fetch_next_page(raw_count=330, page_size=500, exceeded=False) is False
+
