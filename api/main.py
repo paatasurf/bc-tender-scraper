@@ -36,6 +36,7 @@ from db.models import (
     RedditSignal,
     Tender,
 )
+from api.admin import router as admin_router
 from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
@@ -77,6 +78,7 @@ app.add_middleware(
 )
 
 app.include_router(internal_router)
+app.include_router(admin_router)
 
 
 @app.exception_handler(OperationalError)

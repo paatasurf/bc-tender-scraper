@@ -1,0 +1,82 @@
+{
+  "name": "TenderScope — Bulk Prescore (one-time)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b1a2c3d4-1111-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 300],
+      "notes": "One-time job to populate tender_matches for all construction companies."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1a2c3d4-1111-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/admin/bulk-prescore?batch_size=100",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "b1a2c3d4-1111-4000-8000-000000000003",
+      "name": "Start Bulk Prescore",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Starts background bulk prescore (100 companies per batch). Requires ALLOW_MANUAL_PIPELINE=true. Poll pipeline_run_id via GET /internal/steps/{id}."
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "Start Bulk Prescore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "bulk-prescore-v1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
