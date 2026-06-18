@@ -1,0 +1,250 @@
+{
+  "name": "TenderScope — AI Scoring (poll)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000001",
+      "name": "Daily 7 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Runs after the 6 AM Pacific pipeline import. Adjust cron to match your schedule."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300],
+      "notes": "Change baseUrl if using a different Railway environment."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/internal/ai-scoring",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000003",
+      "name": "1. Start AI Scoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "POST /internal/ai-scoring — returns pipeline_run_id and poll_url. Requires ALLOW_MANUAL_PIPELINE=true on Railway."
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000004",
+      "name": "2. Wait 30 Seconds",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [660, 300],
+      "webhookId": "ai-scoring-initial-wait",
+      "notes": "Initial delay before first status poll."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Steps 3–5: GET /internal/steps/{pipeline_run_id}, retry up to 10 times with 30s between attempts.\nconst start = $('1. Start AI Scoring').first().json;\nconst baseUrl = $('Set API Base URL').first().json.baseUrl;\nconst pipelineRunId = start.pipeline_run_id;\n\nif (!pipelineRunId) {\n  throw new Error('Missing pipeline_run_id from Start AI Scoring response');\n}\n\nconst pollUrl = `${baseUrl}/internal/steps/${pipelineRunId}`;\nconst maxAttempts = 10;\nconst waitMs = 30_000;\n\nlet last = null;\nlet attempt = 0;\n\nfor (attempt = 1; attempt <= maxAttempts; attempt++) {\n  last = await this.helpers.httpRequest({\n    method: 'GET',\n    url: pollUrl,\n    json: true,\n  });\n\n  if (last.done === true) {\n    break;\n  }\n\n  if (attempt < maxAttempts) {\n    await new Promise((resolve) => setTimeout(resolve, waitMs));\n  }\n}\n\nconst counts = last?.counts ?? {};\n\nreturn [\n  {\n    json: {\n      ...last,\n      pipeline_run_id: pipelineRunId,\n      run_id: start.run_id,\n      poll_attempts: attempt,\n      timed_out: last?.done !== true,\n      total_tenders_scored: counts.total_tenders_scored ?? 0,\n      tenders_scored: counts.tenders_scored ?? 0,\n      arch_tenders_scored: counts.arch_tenders_scored ?? 0,\n      commercial_tenders_scored: counts.commercial_tenders_scored ?? 0,\n    },\n  },\n];"
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000005",
+      "name": "3–5. Poll Step Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "notes": "Polls GET /internal/steps/{pipeline_run_id} until done=true or 10 attempts."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "done-check",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "status-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000006",
+      "name": "Scoring Finished OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=✅ AI Scoring complete\n\nTenders scored: {{ $json.total_tenders_scored }}\n• Federal: {{ $json.tenders_scored }}\n• Architecture: {{ $json.arch_tenders_scored }}\n• Commercial: {{ $json.commercial_tenders_scored }}\n\nStatus: {{ $json.status }}\nPoll attempts: {{ $json.poll_attempts }}\nRun ID: {{ $json.run_id }}\nPipeline run ID: {{ $json.pipeline_run_id }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000007",
+      "name": "6. Telegram Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1340, 180],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ AI Scoring did not finish successfully\n\nDone: {{ $json.done }}\nStatus: {{ $json.status }}\nPoll attempts: {{ $json.poll_attempts }}\nTimed out: {{ $json.timed_out }}\nError: {{ $json.error || 'none' }}\n\nRun ID: {{ $json.run_id }}\nPipeline run ID: {{ $json.pipeline_run_id }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000008",
+      "name": "Telegram Failure",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1340, 420],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 7 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "1. Start AI Scoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Start AI Scoring": {
+      "main": [
+        [
+          {
+            "node": "2. Wait 30 Seconds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Wait 30 Seconds": {
+      "main": [
+        [
+          {
+            "node": "3–5. Poll Step Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3–5. Poll Step Status": {
+      "main": [
+        [
+          {
+            "node": "Scoring Finished OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scoring Finished OK?": {
+      "main": [
+        [
+          {
+            "node": "6. Telegram Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Replaces single HTTP Request AI scoring node. POST starts background scoring, polls /internal/steps/{pipeline_run_id} up to 10 times (30s apart), then sends Telegram with total_tenders_scored."
+  }
+}
