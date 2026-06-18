@@ -13,7 +13,7 @@ from pipeline.competitive_intel.awards import AwardCountResolver, select_award_m
 from pipeline.competitive_intel.benchmark import compute_benchmark_strip
 from pipeline.competitive_intel.cohort import build_market_cohort
 from pipeline.competitive_intel.peers import select_top_competitors
-from pipeline.competitive_intel.types import Kind
+from pipeline.competitive_intel.types import CompanyRow, Kind
 
 ENGINE_VERSION = "competitive_intel_v1.3"
 WARN_INSUFFICIENT = "insufficient_market_data"
@@ -34,6 +34,44 @@ def _load_cips_for_members(
     for member in members:
         cips[member.id] = get_cip(session, company_id=member.id, kind=kind, refresh=refresh)
     return cips
+
+
+def get_top_competitors_for_company(
+    session: Session,
+    *,
+    company_id: int,
+    kind: Kind = "construction",
+    peer_limit: int = 5,
+    refresh_cip: bool = False,
+) -> list:
+    """Return ranked top competitors for a company (shared by CI endpoints)."""
+    peer_limit = _clamp_peer_limit(peer_limit)
+    model = ArchCompany if kind == "architecture" else Company
+    subject = session.get(model, company_id)
+    if subject is None:
+        raise ValueError(f"Company {company_id} not found")
+
+    subject_cip = get_cip(session, company_id=company_id, kind=kind, refresh=refresh_cip)
+    cohort = build_market_cohort(session, subject, subject_cip, kind=kind)
+
+    member_ids = {subject.id, *(m.id for m in cohort.members)}
+    peer_cips = _load_cips_for_members(
+        session,
+        [m for m in cohort.members if m.id in member_ids],
+        kind=kind,
+        refresh=False,
+    )
+    peer_cips[subject.id] = subject_cip
+
+    return select_top_competitors(
+        session,
+        subject=subject,
+        subject_cip=subject_cip,
+        cohort=cohort,
+        peer_cips=peer_cips,
+        kind=kind,
+        peer_limit=peer_limit,
+    )
 
 
 def get_competitive_intelligence(

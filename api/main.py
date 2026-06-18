@@ -690,6 +690,50 @@ def arch_company_competitive_intelligence(
         session.close()
 
 
+@app.get("/api/competitive-intelligence/missed-opportunities")
+def competitive_intelligence_missed_opportunities(
+    company_id: int = Query(..., ge=1),
+    peer_limit: int = Query(5, ge=3, le=5),
+) -> dict[str, Any]:
+    from pipeline.competitive_intel.tender_activity import get_missed_opportunities
+
+    session = get_session()
+    try:
+        try:
+            return get_missed_opportunities(
+                session,
+                company_id=company_id,
+                kind="construction",
+                peer_limit=peer_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@app.get("/api/competitive-intelligence/competitor-activity")
+def competitive_intelligence_competitor_activity(
+    company_id: int = Query(..., ge=1),
+    peer_limit: int = Query(5, ge=3, le=5),
+) -> dict[str, Any]:
+    from pipeline.competitive_intel.tender_activity import get_competitor_tender_activity
+
+    session = get_session()
+    try:
+        try:
+            return get_competitor_tender_activity(
+                session,
+                company_id=company_id,
+                kind="construction",
+                peer_limit=peer_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
 @app.get("/api/companies/{company_id}/capability-profile")
 def company_capability_profile(
     company_id: int,
