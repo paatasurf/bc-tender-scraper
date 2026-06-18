@@ -14,6 +14,9 @@ _STREET_SUFFIX_RE = re.compile(
     r"\b(street|st|avenue|ave|road|rd|drive|dr|boulevard|blvd|lane|ln|way|court|ct|crescent|cres)\b",
     re.I,
 )
+_POSTAL_FSA_RE = re.compile(r"^[A-Z]\d[A-Z]$", re.I)
+_POSTAL_LDU_RE = re.compile(r"^\d[A-Z]\d$", re.I)
+_BC_PROVINCE_TOKENS = frozenset({"bc", "b.c.", "british", "columbia", "canada"})
 
 
 def _normalize_city(city: str) -> str:
@@ -24,35 +27,60 @@ def _is_street_like_token(token: str) -> bool:
     return bool(_STREET_SUFFIX_RE.search(token))
 
 
+def _is_postal_code_token(token: str) -> bool:
+    upper = token.strip().upper()
+    return bool(_POSTAL_FSA_RE.match(upper) or _POSTAL_LDU_RE.match(upper))
+
+
+def _is_invalid_city_token(token: str) -> bool:
+    return (
+        not token
+        or _is_street_like_token(token)
+        or _is_postal_code_token(token)
+        or token in _BC_PROVINCE_TOKENS
+    )
+
+
+def _city_tokens_from_raw(raw: str) -> set[str]:
+    """Split compound geo strings and keep city-level tokens only."""
+    tokens: set[str] = set()
+    for part in re.split(r"[,;/]+|\s+", _normalize_city(raw)):
+        part = part.strip()
+        if _is_invalid_city_token(part):
+            continue
+        tokens.add(part)
+    return tokens
+
+
+def _add_city_tokens(cities: set[str], raw: str) -> None:
+    cities.update(_city_tokens_from_raw(raw))
+
+
 def _city_level_tokens(cip: CompanyIntelligenceProfile, company: CompanyRow) -> set[str]:
     """Primary geo signal: cities from CIP service areas and concentration map."""
     cities: set[str] = set()
     for raw in cip.service_cities:
-        city = _normalize_city(raw)
-        if city and not _is_street_like_token(city):
-            cities.add(city)
+        _add_city_tokens(cities, raw)
     for geo in cip.concentration_map:
-        city = _normalize_city(geo.geo)
-        if city and not _is_street_like_token(city):
-            cities.add(city)
-    primary = _normalize_city(getattr(company, "primary_city", "") or "")
-    if primary:
-        cities.add(primary)
+        _add_city_tokens(cities, geo.geo)
+    _add_city_tokens(cities, getattr(company, "primary_city", "") or "")
     google_address = getattr(company, "google_address", "") or ""
     if google_address:
         parsed = _parse_city_from_address(google_address)
         if parsed:
-            cities.add(_normalize_city(parsed))
+            _add_city_tokens(cities, parsed)
     for area in getattr(company, "website_service_areas", None) or []:
-        city = _normalize_city(area)
-        if city and not _is_street_like_token(city):
-            cities.add(city)
+        _add_city_tokens(cities, area)
     return cities
 
 
 def _neighborhood_fallback_tokens(cip: CompanyIntelligenceProfile) -> set[str]:
     """Fallback only when city-level tokens are sparse — may include street names."""
-    return {_normalize_city(n) for n in cip.neighborhoods if n}
+    tokens: set[str] = set()
+    for neighborhood in cip.neighborhoods:
+        if neighborhood:
+            _add_city_tokens(tokens, neighborhood)
+    return tokens
 
 
 def city_set(cip: CompanyIntelligenceProfile, company: CompanyRow) -> set[str]:

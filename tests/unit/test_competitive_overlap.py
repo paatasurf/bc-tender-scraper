@@ -59,3 +59,16 @@ def test_geographic_overlap_same_primary_city_floor():
     raw, detail = geographic_overlap_raw(s_cip, p_cip, subject, peer)
     assert raw >= 40.0
     assert "Vancouver" in detail
+
+
+def test_geographic_overlap_strips_postal_code_tokens():
+    subject = make_company(id=1, primary_city="Vancouver")
+    peer = make_company(id=2, primary_city="Vancouver")
+    s_cip = make_cip(company_id=1, service_cities=["BC V6C 1G8, Vancouver"])
+    p_cip = make_cip(company_id=2, service_cities=["Vancouver", "V6B"])
+    raw, detail = geographic_overlap_raw(s_cip, p_cip, subject, peer)
+    assert "Vancouver" in detail
+    assert "V6C" not in detail
+    assert "1G8" not in detail
+    assert "V6B" not in detail
+    assert raw > 0
