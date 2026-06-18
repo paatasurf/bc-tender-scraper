@@ -15,11 +15,14 @@ from pipeline.internal_steps import (
     run_import_step,
 )
 from pipeline.runs import (
+    execute_tracked_step,
+    get_pipeline_run,
     list_recent_runs,
     list_runs_for_run_id,
     new_run_id,
     pipeline_run_to_dict,
     run_tracked_step,
+    start_run,
 )
 from scraper.runners import (
     run_building_permits_scraper,
@@ -48,15 +51,64 @@ def _require_manual_pipeline() -> None:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
 
 
+def _step_status_path(pipeline_run_id: int) -> str:
+    return f"/internal/steps/{pipeline_run_id}"
+
+
+def _run_status_path(run_id: str) -> str:
+    return f"/internal/runs/{run_id}"
+
+
 def _enqueue_step(
     background_tasks: BackgroundTasks,
     step: str,
     worker,
     run_id: str | None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     actual_run_id = run_id or new_run_id()
-    background_tasks.add_task(run_tracked_step, step, worker, run_id=actual_run_id)
-    return {"status": "started", "run_id": actual_run_id, "step": step}
+    bootstrap = get_session()
+    try:
+        record = start_run(bootstrap, step, actual_run_id)
+        pipeline_run_id = record.id
+    finally:
+        bootstrap.close()
+
+    background_tasks.add_task(
+        run_tracked_step,
+        step,
+        worker,
+        run_id=actual_run_id,
+        record_id=pipeline_run_id,
+    )
+    return {
+        "status": "started",
+        "run_id": actual_run_id,
+        "step": step,
+        "pipeline_run_id": pipeline_run_id,
+        "poll_url": _step_status_path(pipeline_run_id),
+        "run_poll_url": _run_status_path(actual_run_id),
+    }
+
+
+def _run_step_sync(
+    step: str,
+    worker,
+    run_id: str | None,
+) -> dict[str, Any]:
+    actual_run_id = run_id or new_run_id()
+    result = execute_tracked_step(step, worker, run_id=actual_run_id)
+    return {
+        "status": result.get("status", "success"),
+        "run_id": actual_run_id,
+        "step": step,
+        "pipeline_run_id": result.get("id"),
+        "poll_url": _step_status_path(result["id"]) if result.get("id") else None,
+        "run_poll_url": _run_status_path(actual_run_id),
+        "started_at": result.get("started_at"),
+        "finished_at": result.get("finished_at"),
+        "error": result.get("error"),
+        "counts": result.get("counts", {}),
+    }
 
 
 @router.post("/scrape/federal")
@@ -219,13 +271,20 @@ def import_csvs(
 def ai_scoring(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
+) -> dict[str, Any]:
     _require_manual_pipeline()
+    run_id = body.run_id if body else None
+    if sync:
+        return _run_step_sync("ai-scoring", run_ai_scoring_step, run_id)
     return _enqueue_step(
         background_tasks,
         "ai-scoring",
         run_ai_scoring_step,
-        body.run_id if body else None,
+        run_id,
     )
 
 
@@ -255,6 +314,24 @@ def arch_company_intelligence(
         run_arch_company_intelligence_step,
         body.run_id if body else None,
     )
+
+
+@router.get("/steps/{pipeline_run_id}")
+def get_pipeline_step_status(pipeline_run_id: int) -> dict[str, Any]:
+    """Poll a single pipeline step by database id (returned as pipeline_run_id from POST)."""
+    session = get_session()
+    try:
+        record = get_pipeline_run(session, pipeline_run_id)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No pipeline run found for id '{pipeline_run_id}'",
+            )
+        payload = pipeline_run_to_dict(record)
+        payload["done"] = record.status in {"success", "failed", "skipped"}
+        return payload
+    finally:
+        session.close()
 
 
 @router.get("/runs")

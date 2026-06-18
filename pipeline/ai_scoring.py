@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from typing import Any
 
 import anthropic
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender, Tender
@@ -203,16 +206,33 @@ def _estimate_budget(client: anthropic.Anthropic, tender: ScoredTender) -> str:
     return budget_estimate
 
 
+def _count_unscored(session: Session, model) -> int:
+    return int(
+        session.scalar(
+            select(func.count()).select_from(model).where(model.ai_score.is_(None))
+        )
+        or 0
+    )
+
+
 def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
     batch_limit = _ai_batch_limit()
+    backlog = _count_unscored(session, model)
     rows = session.scalars(
         select(model).where(model.ai_score.is_(None)).limit(batch_limit)
     ).all()
+    label = model.__tablename__
+    logger.info(
+        "[AI Scoring] %s backlog=%s processing=%s batch_limit=%s",
+        label,
+        backlog,
+        len(rows),
+        batch_limit,
+    )
     scored = 0
 
     for index, tender in enumerate(rows, start=1):
-        label = model.__tablename__
-        print(f"[AI Scoring] {label} {index}/{len(rows)}: {tender.title[:70]}")
+        logger.info("[AI Scoring] %s %s/%s: %s", label, index, len(rows), tender.title[:70])
         try:
             score, summary, budget_estimate = _score_tender(client, tender)
             tender.ai_score = score
@@ -223,10 +243,11 @@ def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
             scored += 1
         except Exception as exc:
             session.rollback()
-            print(f"[AI Scoring] Failed ({label}): {exc}")
+            logger.warning("[AI Scoring] Failed (%s): %s", label, exc)
 
         time.sleep(SCORING_DELAY_SECONDS)
 
+    logger.info("[AI Scoring] %s scored=%s attempted=%s", label, scored, len(rows))
     return scored
 
 
@@ -260,14 +281,20 @@ def _estimate_budgets_table(session: Session, client: anthropic.Anthropic, model
 
         for tender in targets:
             label = model.__tablename__
-            print(f"[AI Budget] {label} {estimated + 1}/{batch_limit}: {tender.title[:70]}")
+            logger.info(
+                "[AI Budget] %s %s/%s: %s",
+                label,
+                estimated + 1,
+                batch_limit,
+                tender.title[:70],
+            )
             try:
                 tender.ai_budget_estimate = _estimate_budget(client, tender)
                 session.commit()
                 estimated += 1
             except Exception as exc:
                 session.rollback()
-                print(f"[AI Budget] Failed ({label}): {exc}")
+                logger.warning("[AI Budget] Failed (%s): %s", label, exc)
 
             time.sleep(SCORING_DELAY_SECONDS)
 
@@ -275,6 +302,7 @@ def _estimate_budgets_table(session: Session, client: anthropic.Anthropic, model
 
 
 def score_unscored_tenders(session: Session) -> dict[str, int]:
+    batch_limit = _ai_batch_limit()
     api_key = get_anthropic_api_key()
     if not api_key:
         hint = (
@@ -282,7 +310,7 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
             if os.getenv("RAILWAY_ENVIRONMENT_NAME")
             else " Set ANTHROPIC_API_KEY in your environment or .env file."
         )
-        print(f"[AI Scoring] Skipping: ANTHROPIC_API_KEY is not set.{hint}")
+        logger.warning("[AI Scoring] Skipping: ANTHROPIC_API_KEY is not set.%s", hint)
         return {
             "tenders_scored": 0,
             "arch_tenders_scored": 0,
@@ -290,19 +318,39 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
             "tenders_budgeted": 0,
             "arch_tenders_budgeted": 0,
             "commercial_tenders_budgeted": 0,
+            "total_tenders_scored": 0,
+            "total_tenders_budgeted": 0,
+            "batch_limit_per_table": batch_limit,
         }
 
     client = anthropic.Anthropic(api_key=api_key)
-    print("[AI Scoring] Scoring unscored federal, architecture, and commercial tenders...")
+    logger.info(
+        "[AI Scoring] Starting run batch_limit_per_table=%s unscored_backlog federal=%s arch=%s commercial=%s",
+        batch_limit,
+        _count_unscored(session, Tender),
+        _count_unscored(session, ArchTender),
+        _count_unscored(session, CommercialTender),
+    )
 
     federal_scored = _score_table(session, client, Tender)
     arch_scored = _score_table(session, client, ArchTender)
     commercial_scored = _score_table(session, client, CommercialTender)
 
-    print("[AI Budget] Estimating budgets for tenders with missing values...")
+    logger.info("[AI Budget] Estimating budgets for tenders with missing values...")
     federal_budgeted = _estimate_budgets_table(session, client, Tender)
     arch_budgeted = _estimate_budgets_table(session, client, ArchTender)
     commercial_budgeted = _estimate_budgets_table(session, client, CommercialTender)
+
+    total_scored = federal_scored + arch_scored + commercial_scored
+    total_budgeted = federal_budgeted + arch_budgeted + commercial_budgeted
+    logger.info(
+        "[AI Scoring] Run complete scored=%s (federal=%s arch=%s commercial=%s) budgeted=%s",
+        total_scored,
+        federal_scored,
+        arch_scored,
+        commercial_scored,
+        total_budgeted,
+    )
 
     return {
         "tenders_scored": federal_scored,
@@ -311,4 +359,7 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         "tenders_budgeted": federal_budgeted,
         "arch_tenders_budgeted": arch_budgeted,
         "commercial_tenders_budgeted": commercial_budgeted,
+        "total_tenders_scored": total_scored,
+        "total_tenders_budgeted": total_budgeted,
+        "batch_limit_per_table": batch_limit,
     }

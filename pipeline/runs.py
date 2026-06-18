@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from db.connection import get_session
 from db.models import PipelineRun
+
+logger = logging.getLogger(__name__)
 
 
 def new_run_id() -> str:
@@ -49,21 +52,18 @@ def finish_run(
     return record
 
 
-def run_tracked_step(
-    step: str,
-    worker: Callable[[], dict[str, Any]],
-    *,
-    run_id: str | None = None,
-) -> None:
-    """Execute a pipeline step in a background task and persist run status."""
-    bootstrap = get_session()
-    try:
-        record = start_run(bootstrap, step, run_id)
-        record_id = record.id
-        actual_run_id = record.run_id
-    finally:
-        bootstrap.close()
+def get_pipeline_run(session: Session, pipeline_run_id: int) -> PipelineRun | None:
+    return session.get(PipelineRun, pipeline_run_id)
 
+
+def _execute_tracked_worker(
+    *,
+    record_id: int,
+    step: str,
+    run_id: str,
+    worker: Callable[[], dict[str, Any]],
+) -> tuple[str, dict[str, Any], str | None]:
+    logger.info("[Pipeline/%s] Started run_id=%s pipeline_run_id=%s", step, run_id, record_id)
     counts: dict[str, Any] = {}
     status = "success"
     error: str | None = None
@@ -74,11 +74,86 @@ def run_tracked_step(
     except Exception as exc:
         status = "failed"
         error = str(exc)
-        print(f"[Pipeline/{step}] Failed (run_id={actual_run_id}): {exc}")
+        logger.exception(
+            "[Pipeline/%s] Failed run_id=%s pipeline_run_id=%s",
+            step,
+            run_id,
+            record_id,
+        )
+    else:
+        logger.info(
+            "[Pipeline/%s] Finished run_id=%s pipeline_run_id=%s status=%s counts=%s",
+            step,
+            run_id,
+            record_id,
+            status,
+            counts,
+        )
+    return status, counts, error
+
+
+def run_tracked_step(
+    step: str,
+    worker: Callable[[], dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    record_id: int | None = None,
+) -> None:
+    """Execute a pipeline step in a background task and persist run status."""
+    bootstrap = get_session()
+    try:
+        if record_id is None:
+            record = start_run(bootstrap, step, run_id)
+            record_id = record.id
+            actual_run_id = record.run_id
+        else:
+            record = bootstrap.get(PipelineRun, record_id)
+            if record is None:
+                raise ValueError(f"Pipeline run {record_id} not found")
+            actual_run_id = record.run_id
+    finally:
+        bootstrap.close()
+
+    status, counts, error = _execute_tracked_worker(
+        record_id=record_id,
+        step=step,
+        run_id=actual_run_id,
+        worker=worker,
+    )
 
     session = get_session()
     try:
         finish_run(session, record_id, status, counts=counts, error=error)
+    finally:
+        session.close()
+
+
+def execute_tracked_step(
+    step: str,
+    worker: Callable[[], dict[str, Any]],
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Run a pipeline step synchronously and return the persisted run record."""
+    actual_run_id = run_id or new_run_id()
+    bootstrap = get_session()
+    try:
+        record = start_run(bootstrap, step, actual_run_id)
+        record_id = record.id
+    finally:
+        bootstrap.close()
+
+    status, counts, error = _execute_tracked_worker(
+        record_id=record_id,
+        step=step,
+        run_id=actual_run_id,
+        worker=worker,
+    )
+
+    session = get_session()
+    try:
+        record = finish_run(session, record_id, status, counts=counts, error=error)
+        return pipeline_run_to_dict(record) if record is not None else {}
     finally:
         session.close()
 
