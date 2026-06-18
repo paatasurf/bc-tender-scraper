@@ -57,8 +57,21 @@ def test_geographic_overlap_same_primary_city_floor():
     p_cip = make_cip(company_id=2, service_cities=[], concentration_map=[])
     p_cip.neighborhoods = ["Main St", "Cambie St"]
     raw, detail = geographic_overlap_raw(s_cip, p_cip, subject, peer)
-    assert raw >= 40.0
+    assert raw >= 50.0
     assert "Vancouver" in detail
+    assert ", W" not in detail
+    assert " W" not in detail or detail.endswith("Vancouver")
+
+
+def test_geographic_overlap_filters_single_letter_tokens():
+    subject = make_company(id=1, primary_city="Vancouver")
+    peer = make_company(id=2, primary_city="Vancouver")
+    s_cip = make_cip(company_id=1, service_cities=["W Georgia St, Vancouver, BC"])
+    p_cip = make_cip(company_id=2, service_cities=["W Pender St, Vancouver, BC"])
+    _, detail = geographic_overlap_raw(s_cip, p_cip, subject, peer)
+    assert "Vancouver" in detail
+    assert ", W" not in detail
+    assert detail == "Shared cities: Vancouver" or "Shared primary city: Vancouver" in detail
 
 
 def test_geographic_overlap_strips_postal_code_tokens():

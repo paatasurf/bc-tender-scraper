@@ -35,14 +35,37 @@ def _is_postal_code_token(token: str) -> bool:
 def _is_invalid_city_token(token: str) -> bool:
     return (
         not token
+        or len(token) <= 1
         or _is_street_like_token(token)
         or _is_postal_code_token(token)
         or token in _BC_PROVINCE_TOKENS
+        or token.isdigit()
+        or bool(re.match(r"^#?\d+$", token))
     )
+
+
+def _is_valid_city_name(token: str) -> bool:
+    return bool(token) and not _is_invalid_city_token(token)
+
+
+def _looks_like_street_address(raw: str) -> bool:
+    norm = _normalize_city(raw)
+    if not norm:
+        return False
+    if norm[0].isdigit() or "#" in norm:
+        return True
+    return _is_street_like_token(norm)
 
 
 def _city_tokens_from_raw(raw: str) -> set[str]:
     """Split compound geo strings and keep city-level tokens only."""
+    if _looks_like_street_address(raw):
+        parsed = _parse_city_from_address(raw) if "," in raw else None
+        if parsed:
+            city = _normalize_city(parsed)
+            return {city} if _is_valid_city_name(city) else set()
+        return set()
+
     tokens: set[str] = set()
     for part in re.split(r"[,;/]+|\s+", _normalize_city(raw)):
         part = part.strip()
@@ -133,9 +156,9 @@ def geographic_overlap_raw(
     p_city = _resolve_primary_city(peer, peer_cip)
     if s_city and p_city and s_city == p_city:
         raw = min(100.0, raw + 15.0)
-        raw = max(raw, 40.0)
+        raw = max(raw, 50.0)
 
-    shared = sorted(cities_s & cities_p)[:4]
+    shared = sorted(t for t in (cities_s & cities_p) if _is_valid_city_name(t))[:4]
     if shared:
         detail = f"Shared cities: {', '.join(t.title() for t in shared)}"
     elif s_city and p_city and s_city == p_city:
@@ -149,13 +172,38 @@ def geographic_overlap_raw(
 
 def _resolve_primary_city(company: CompanyRow, cip: CompanyIntelligenceProfile) -> str:
     primary = _normalize_city(getattr(company, "primary_city", "") or "")
-    if primary:
+    if _is_valid_city_name(primary) and not _looks_like_street_address(primary):
         return primary
-    if cip.service_cities:
-        return _normalize_city(cip.service_cities[0])
+
     google_address = getattr(company, "google_address", "") or ""
     if google_address:
-        return _parse_city_from_address(google_address) or ""
+        parsed = _parse_city_from_address(google_address)
+        if parsed:
+            city = _normalize_city(parsed)
+            if _is_valid_city_name(city):
+                return city
+
+    best = ""
+    best_share = -1.0
+    for geo in cip.concentration_map:
+        for token in _city_tokens_from_raw(geo.geo):
+            if _is_valid_city_name(token) and geo.share > best_share:
+                best_share = geo.share
+                best = token
+    if best:
+        return best
+
+    for raw in cip.service_cities:
+        if "," in raw:
+            parsed = _parse_city_from_address(raw)
+            if parsed:
+                city = _normalize_city(parsed)
+                if _is_valid_city_name(city):
+                    return city
+        for token in _city_tokens_from_raw(raw):
+            if _is_valid_city_name(token):
+                return token
+
     return ""
 
 
