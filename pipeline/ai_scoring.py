@@ -18,9 +18,12 @@ from db.models import ArchTender, CommercialTender, Tender
 
 CLAUDE_MODEL = "claude-sonnet-4-5"
 SCORING_DELAY_SECONDS = 0.5
-DEFAULT_AI_BATCH_LIMIT = 50
+DEFAULT_AI_BATCH_LIMIT = 10
+FEDERAL_GOV_SOURCE = "buyandsell.gc.ca"
+MERX_SOURCE = "merx.com"
 
 ScoredTender = ArchTender | CommercialTender | Tender
+ScoredModel = type[ArchTender] | type[CommercialTender] | type[Tender]
 
 
 def _ai_batch_limit() -> int:
@@ -54,8 +57,33 @@ def _extract_json(text: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
+def _is_commercial_tender(tender: ScoredTender) -> bool:
+    return tender.__tablename__ == "commercial_tenders"
+
+
+def _is_merx_tender(tender: ScoredTender) -> bool:
+    return (
+        tender.__tablename__ == "tenders"
+        and (getattr(tender, "source", "") or "").strip().lower() == MERX_SOURCE
+    )
+
+
+def _needs_ai_scoring_filter(model: ScoredModel):
+    """Rows missing a usable AI score (NULL/0 score or empty summary)."""
+    return or_(
+        model.ai_score.is_(None),
+        model.ai_score == 0,
+        model.ai_summary.is_(None),
+        model.ai_summary == "",
+    )
+
+
 def _is_federal(tender: ScoredTender) -> bool:
-    return tender.__tablename__ == "tenders"
+    return tender.__tablename__ == "tenders" and not _is_merx_tender(tender)
+
+
+def _source_filter(model: ScoredModel, source: str):
+    return func.lower(model.source) == source.lower()
 
 
 def _tender_company(tender: ScoredTender) -> str:
@@ -105,6 +133,11 @@ def _build_scoring_prompt(tender: ScoredTender) -> str:
             "Score this Canadian federal procurement opportunity for British Columbia "
             "construction and services contractors."
         )
+    elif _is_commercial_tender(tender) or _is_merx_tender(tender):
+        audience = (
+            "Score this British Columbia commercial/provincial procurement opportunity "
+            "for construction contractors and builders."
+        )
     else:
         audience = (
             "Score this British Columbia procurement opportunity for architecture and engineering firms "
@@ -116,7 +149,7 @@ def _build_scoring_prompt(tender: ScoredTender) -> str:
         status_line = f"Status: {getattr(tender, 'status', None) or 'Unknown'}\n"
 
     location_line = ""
-    if _is_federal(tender):
+    if _is_federal(tender) or _is_merx_tender(tender):
         location_line = f"Location: {getattr(tender, 'location', None) or 'Not stated'}\n"
 
     return f"""{audience}
@@ -206,25 +239,31 @@ def _estimate_budget(client: anthropic.Anthropic, tender: ScoredTender) -> str:
     return budget_estimate
 
 
-def _count_unscored(session: Session, model) -> int:
-    return int(
-        session.scalar(
-            select(func.count()).select_from(model).where(model.ai_score.is_(None))
-        )
-        or 0
-    )
+def _count_unscored(session: Session, model: ScoredModel, *, extra_filter=None) -> int:
+    query = select(func.count()).select_from(model).where(_needs_ai_scoring_filter(model))
+    if extra_filter is not None:
+        query = query.where(extra_filter)
+    return int(session.scalar(query) or 0)
 
 
-def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
+def _score_table(
+    session: Session,
+    client: anthropic.Anthropic,
+    model: ScoredModel,
+    *,
+    extra_filter=None,
+    label: str | None = None,
+) -> int:
     batch_limit = _ai_batch_limit()
-    backlog = _count_unscored(session, model)
-    rows = session.scalars(
-        select(model).where(model.ai_score.is_(None)).limit(batch_limit)
-    ).all()
-    label = model.__tablename__
+    backlog = _count_unscored(session, model, extra_filter=extra_filter)
+    query = select(model).where(_needs_ai_scoring_filter(model))
+    if extra_filter is not None:
+        query = query.where(extra_filter)
+    rows = session.scalars(query.limit(batch_limit)).all()
+    table_label = label or model.__tablename__
     logger.info(
         "[AI Scoring] %s backlog=%s processing=%s batch_limit=%s",
-        label,
+        table_label,
         backlog,
         len(rows),
         batch_limit,
@@ -232,7 +271,7 @@ def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
     scored = 0
 
     for index, tender in enumerate(rows, start=1):
-        logger.info("[AI Scoring] %s %s/%s: %s", label, index, len(rows), tender.title[:70])
+        logger.info("[AI Scoring] %s %s/%s: %s", table_label, index, len(rows), tender.title[:70])
         try:
             score, summary, budget_estimate = _score_tender(client, tender)
             tender.ai_score = score
@@ -243,26 +282,33 @@ def _score_table(session: Session, client: anthropic.Anthropic, model) -> int:
             scored += 1
         except Exception as exc:
             session.rollback()
-            logger.warning("[AI Scoring] Failed (%s): %s", label, exc)
+            logger.warning("[AI Scoring] Failed (%s): %s", table_label, exc)
 
         time.sleep(SCORING_DELAY_SECONDS)
 
-    logger.info("[AI Scoring] %s scored=%s attempted=%s", label, scored, len(rows))
+    logger.info("[AI Scoring] %s scored=%s attempted=%s", table_label, scored, len(rows))
     return scored
 
 
-def _estimate_budgets_table(session: Session, client: anthropic.Anthropic, model) -> int:
+def _estimate_budgets_table(
+    session: Session,
+    client: anthropic.Anthropic,
+    model: ScoredModel,
+    *,
+    extra_filter=None,
+) -> int:
     batch_limit = _ai_batch_limit()
     estimated = 0
     processed_ids: set[int] = set()
 
     while estimated < batch_limit:
         remaining = batch_limit - estimated
-        candidates = session.scalars(
-            select(model)
-            .where(or_(model.ai_budget_estimate.is_(None), model.ai_budget_estimate == ""))
-            .limit(remaining * 4)
-        ).all()
+        query = select(model).where(
+            or_(model.ai_budget_estimate.is_(None), model.ai_budget_estimate == "")
+        )
+        if extra_filter is not None:
+            query = query.where(extra_filter)
+        candidates = session.scalars(query.limit(remaining * 4)).all()
         targets: list = []
         for tender in candidates:
             if tender.id in processed_ids:
@@ -313,53 +359,99 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         logger.warning("[AI Scoring] Skipping: ANTHROPIC_API_KEY is not set.%s", hint)
         return {
             "tenders_scored": 0,
+            "federal_gov_tenders_scored": 0,
+            "merx_tenders_scored": 0,
             "arch_tenders_scored": 0,
+            "bidcentral_tenders_scored": 0,
             "commercial_tenders_scored": 0,
             "tenders_budgeted": 0,
+            "federal_gov_tenders_budgeted": 0,
+            "merx_tenders_budgeted": 0,
             "arch_tenders_budgeted": 0,
             "commercial_tenders_budgeted": 0,
+            "bidcentral_tenders_budgeted": 0,
             "total_tenders_scored": 0,
             "total_tenders_budgeted": 0,
             "batch_limit_per_table": batch_limit,
+            "backlog": {},
         }
 
     client = anthropic.Anthropic(api_key=api_key)
+    federal_gov_filter = _source_filter(Tender, FEDERAL_GOV_SOURCE)
+    merx_filter = _source_filter(Tender, MERX_SOURCE)
+
+    backlog = {
+        "federal_gov": _count_unscored(session, Tender, extra_filter=federal_gov_filter),
+        "merx_provincial": _count_unscored(session, Tender, extra_filter=merx_filter),
+        "commercial_tenders": _count_unscored(session, CommercialTender),
+        "arch_tenders": _count_unscored(session, ArchTender),
+    }
     logger.info(
-        "[AI Scoring] Starting run batch_limit_per_table=%s unscored_backlog federal=%s arch=%s commercial=%s",
+        "[AI Scoring] Starting run batch_limit_per_table=%s backlog=%s",
         batch_limit,
-        _count_unscored(session, Tender),
-        _count_unscored(session, ArchTender),
-        _count_unscored(session, CommercialTender),
+        backlog,
     )
 
-    federal_scored = _score_table(session, client, Tender)
+    federal_gov_scored = _score_table(
+        session,
+        client,
+        Tender,
+        extra_filter=federal_gov_filter,
+        label="federal_gov",
+    )
+    merx_scored = _score_table(
+        session,
+        client,
+        Tender,
+        extra_filter=merx_filter,
+        label="merx_provincial",
+    )
     arch_scored = _score_table(session, client, ArchTender)
-    commercial_scored = _score_table(session, client, CommercialTender)
+    bidcentral_scored = _score_table(
+        session,
+        client,
+        CommercialTender,
+        label="commercial_tenders",
+    )
 
     logger.info("[AI Budget] Estimating budgets for tenders with missing values...")
-    federal_budgeted = _estimate_budgets_table(session, client, Tender)
+    federal_gov_budgeted = _estimate_budgets_table(
+        session, client, Tender, extra_filter=federal_gov_filter
+    )
+    merx_budgeted = _estimate_budgets_table(session, client, Tender, extra_filter=merx_filter)
     arch_budgeted = _estimate_budgets_table(session, client, ArchTender)
-    commercial_budgeted = _estimate_budgets_table(session, client, CommercialTender)
+    bidcentral_budgeted = _estimate_budgets_table(session, client, CommercialTender)
 
-    total_scored = federal_scored + arch_scored + commercial_scored
-    total_budgeted = federal_budgeted + arch_budgeted + commercial_budgeted
+    tenders_scored = federal_gov_scored + merx_scored
+    commercial_tenders_scored = bidcentral_scored + merx_scored
+    total_scored = tenders_scored + arch_scored + bidcentral_scored
+    total_budgeted = federal_gov_budgeted + merx_budgeted + arch_budgeted + bidcentral_budgeted
     logger.info(
-        "[AI Scoring] Run complete scored=%s (federal=%s arch=%s commercial=%s) budgeted=%s",
+        "[AI Scoring] Run complete total_scored=%s "
+        "(federal_gov=%s merx=%s bidcentral=%s arch=%s) budgeted=%s",
         total_scored,
-        federal_scored,
+        federal_gov_scored,
+        merx_scored,
+        bidcentral_scored,
         arch_scored,
-        commercial_scored,
         total_budgeted,
     )
 
     return {
-        "tenders_scored": federal_scored,
+        "tenders_scored": tenders_scored,
+        "federal_gov_tenders_scored": federal_gov_scored,
+        "merx_tenders_scored": merx_scored,
         "arch_tenders_scored": arch_scored,
-        "commercial_tenders_scored": commercial_scored,
-        "tenders_budgeted": federal_budgeted,
+        "bidcentral_tenders_scored": bidcentral_scored,
+        "commercial_tenders_scored": commercial_tenders_scored,
+        "tenders_budgeted": federal_gov_budgeted + merx_budgeted,
+        "federal_gov_tenders_budgeted": federal_gov_budgeted,
+        "merx_tenders_budgeted": merx_budgeted,
         "arch_tenders_budgeted": arch_budgeted,
-        "commercial_tenders_budgeted": commercial_budgeted,
+        "commercial_tenders_budgeted": bidcentral_budgeted + merx_budgeted,
+        "bidcentral_tenders_budgeted": bidcentral_budgeted,
         "total_tenders_scored": total_scored,
         "total_tenders_budgeted": total_budgeted,
         "batch_limit_per_table": batch_limit,
+        "backlog": backlog,
     }
