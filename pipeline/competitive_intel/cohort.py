@@ -26,6 +26,60 @@ def subject_city(subject: CompanyRow, cip: CompanyIntelligenceProfile, kind: Kin
     return ""
 
 
+def _normalize_token(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def _peer_matches_sector_or_trade(subject: CompanyRow, member: CompanyRow) -> bool:
+    sector = (subject.dominant_sector or "").strip()
+    trade = (subject.primary_trade or "").strip()
+    member_sector = (getattr(member, "dominant_sector", "") or "").strip()
+    member_trade = (getattr(member, "primary_trade", "") or "").strip()
+    if sector and member_sector == sector:
+        return True
+    if trade and member_trade == trade:
+        return True
+    return not sector and not trade
+
+
+def _award_category_overlap_ratio(subject: CompanyRow, member: CompanyRow) -> float:
+    subject_types = {_normalize_token(t) for t in (getattr(subject, "project_types", None) or []) if t}
+    peer_categories = {_normalize_token(t) for t in (getattr(member, "award_categories", None) or []) if t}
+    if not subject_types or not peer_categories:
+        return 0.0
+    union = subject_types | peer_categories
+    if not union:
+        return 0.0
+    return len(subject_types & peer_categories) / len(union)
+
+
+def _passes_cohort_quality_gate(subject: CompanyRow, member: CompanyRow, *, kind: Kind) -> bool:
+    if kind != "construction":
+        return True
+    if not _peer_matches_sector_or_trade(subject, member):
+        return False
+
+    subject_projects = int(getattr(subject, "total_projects", 0) or 0)
+    peer_projects = int(getattr(member, "total_projects", 0) or 0)
+
+    if peer_projects == 0:
+        return _award_category_overlap_ratio(subject, member) > 0.5
+
+    if subject_projects >= 10 and peer_projects < 2:
+        return False
+
+    return True
+
+
+def _apply_cohort_quality_gate(
+    members: list[CompanyRow],
+    subject: CompanyRow,
+    *,
+    kind: Kind,
+) -> list[CompanyRow]:
+    return [m for m in members if _passes_cohort_quality_gate(subject, m, kind=kind)]
+
+
 def _quality_clause(model, kind: Kind):
     if kind == "construction":
         return or_(model.total_projects >= 2, model.award_count >= 1)
@@ -100,6 +154,7 @@ def build_market_cohort(
     members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=True, city=city)
     if kind == "architecture" and city:
         members = _filter_arch_city(members, subject, subject_cip, city)
+    members = _apply_cohort_quality_gate(members, subject, kind=kind)
 
     definition_key = "sector_and_city"
     if city:
@@ -109,6 +164,7 @@ def build_market_cohort(
 
     if len(members) < 8:
         members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=False, city=city)
+        members = _apply_cohort_quality_gate(members, subject, kind=kind)
         definition_key = "sector_only_widened"
         definition = f"dominant_sector={sector} (widened — cohort < 8 with city gate)"
 

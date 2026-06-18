@@ -47,3 +47,15 @@ def test_value_overlap_close_medians():
 def test_similarity_weights():
     score = similarity_pre_score(80, 60, 40)
     assert score == round(0.35 * 60 + 0.35 * 80 + 0.30 * 40, 2)
+
+
+def test_geographic_overlap_same_primary_city_floor():
+    subject = make_company(id=1, primary_city="Vancouver")
+    peer = make_company(id=2, primary_city="Vancouver")
+    s_cip = make_cip(company_id=1, service_cities=[], concentration_map=[])
+    s_cip.neighborhoods = ["W 41st Ave", "W Georgia St"]
+    p_cip = make_cip(company_id=2, service_cities=[], concentration_map=[])
+    p_cip.neighborhoods = ["Main St", "Cambie St"]
+    raw, detail = geographic_overlap_raw(s_cip, p_cip, subject, peer)
+    assert raw >= 40.0
+    assert "Vancouver" in detail

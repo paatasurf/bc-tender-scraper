@@ -20,16 +20,20 @@ def _normalize_city(city: str) -> str:
     return (city or "").strip().lower()
 
 
-def city_set(cip: CompanyIntelligenceProfile, company: CompanyRow) -> set[str]:
-    """City-level geography only (constitution III)."""
+def _is_street_like_token(token: str) -> bool:
+    return bool(_STREET_SUFFIX_RE.search(token))
+
+
+def _city_level_tokens(cip: CompanyIntelligenceProfile, company: CompanyRow) -> set[str]:
+    """Primary geo signal: cities from CIP service areas and concentration map."""
     cities: set[str] = set()
     for raw in cip.service_cities:
         city = _normalize_city(raw)
-        if city and not _STREET_SUFFIX_RE.search(city):
+        if city and not _is_street_like_token(city):
             cities.add(city)
     for geo in cip.concentration_map:
         city = _normalize_city(geo.geo)
-        if city:
+        if city and not _is_street_like_token(city):
             cities.add(city)
     primary = _normalize_city(getattr(company, "primary_city", "") or "")
     if primary:
@@ -38,11 +42,24 @@ def city_set(cip: CompanyIntelligenceProfile, company: CompanyRow) -> set[str]:
     if google_address:
         parsed = _parse_city_from_address(google_address)
         if parsed:
-            cities.add(parsed)
+            cities.add(_normalize_city(parsed))
     for area in getattr(company, "website_service_areas", None) or []:
         city = _normalize_city(area)
-        if city:
+        if city and not _is_street_like_token(city):
             cities.add(city)
+    return cities
+
+
+def _neighborhood_fallback_tokens(cip: CompanyIntelligenceProfile) -> set[str]:
+    """Fallback only when city-level tokens are sparse — may include street names."""
+    return {_normalize_city(n) for n in cip.neighborhoods if n}
+
+
+def city_set(cip: CompanyIntelligenceProfile, company: CompanyRow) -> set[str]:
+    """City-level geography only (constitution III)."""
+    cities = _city_level_tokens(cip, company)
+    if not cities:
+        cities = _neighborhood_fallback_tokens(cip)
     return cities
 
 
@@ -74,19 +91,27 @@ def geographic_overlap_raw(
     subject: CompanyRow,
     peer: CompanyRow,
 ) -> tuple[float, str]:
-    cities_s = city_set(subject_cip, subject)
-    cities_p = city_set(peer_cip, peer)
+    cities_s = _city_level_tokens(subject_cip, subject)
+    cities_p = _city_level_tokens(peer_cip, peer)
+    if not cities_s:
+        cities_s = _neighborhood_fallback_tokens(subject_cip)
+    if not cities_p:
+        cities_p = _neighborhood_fallback_tokens(peer_cip)
+
     city_j = _jaccard(cities_s, cities_p)
-    raw = 100.0 * (0.6 * city_j + 0.4 * city_j)
+    raw = 100.0 * city_j
 
     s_city = _resolve_primary_city(subject, subject_cip)
     p_city = _resolve_primary_city(peer, peer_cip)
-    if s_city and s_city == p_city:
-        raw = min(100.0, raw + 10.0)
+    if s_city and p_city and s_city == p_city:
+        raw = min(100.0, raw + 15.0)
+        raw = max(raw, 40.0)
 
     shared = sorted(cities_s & cities_p)[:4]
     if shared:
         detail = f"Shared cities: {', '.join(t.title() for t in shared)}"
+    elif s_city and p_city and s_city == p_city:
+        detail = f"Shared primary city: {s_city.title()}"
     elif s_city and p_city:
         detail = f"Subject: {s_city.title()}; peer: {p_city.title()}"
     else:
