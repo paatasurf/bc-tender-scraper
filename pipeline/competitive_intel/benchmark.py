@@ -16,7 +16,15 @@ BENCHMARK_METRICS: list[tuple[str, str, str]] = [
 ]
 
 
-def _metric_value(company: CompanyRow, key: str) -> float | int | None:
+def _metric_value(
+    company: CompanyRow,
+    key: str,
+    *,
+    award_counts: dict[int, int] | None = None,
+) -> float | int | None:
+    if key == "award_count" and award_counts is not None:
+        return int(award_counts.get(int(company.id), 0))
+
     value = getattr(company, key, None)
     if value is None:
         return None
@@ -39,16 +47,22 @@ def compute_benchmark_strip(
     peers: list[TopCompetitor],
     *,
     kind: Kind,
+    award_counts: dict[int, int] | None = None,
+    award_market_members: list[CompanyRow] | None = None,
 ) -> dict[str, Any]:
     metrics_out: list[dict[str, Any]] = []
+    award_median_members = award_market_members if award_market_members is not None else cohort.members
 
     for key, label, unit in BENCHMARK_METRICS:
         not_applicable = kind == "architecture" and key == "award_count"
 
-        company_val = None if not_applicable else _metric_value(subject, key)
+        company_val = None if not_applicable else _metric_value(
+            subject, key, award_counts=award_counts if key == "award_count" else None
+        )
 
         cohort_vals: list[float | int] = []
-        for member in cohort.members:
+        median_members = award_median_members if key == "award_count" else cohort.members
+        for member in median_members:
             if key == "ai_reliability_score":
                 rel = getattr(member, "ai_reliability_score", None)
                 if rel is not None:
@@ -56,24 +70,30 @@ def compute_benchmark_strip(
             elif key == "award_count" and kind == "architecture":
                 continue
             else:
-                val = _metric_value(member, key)
+                val = _metric_value(
+                    member, key, award_counts=award_counts if key == "award_count" else None
+                )
                 if val is not None:
                     cohort_vals.append(val)
 
         market_median = None if not_applicable else _median(cohort_vals)
 
-        peer_ids = {p.company_id for p in peers}
-        peer_rows = [m for m in cohort.members if m.id in peer_ids]
         peer_vals: list[float | int] = []
-        for row in peer_rows:
-            if key == "ai_reliability_score":
-                rel = getattr(row, "ai_reliability_score", None)
-                if rel is not None:
-                    peer_vals.append(int(rel))
-            else:
-                val = _metric_value(row, key)
-                if val is not None:
-                    peer_vals.append(val)
+        if key == "award_count" and award_counts is not None:
+            for peer in peers:
+                peer_vals.append(int(award_counts.get(peer.company_id, 0)))
+        else:
+            peer_ids = {p.company_id for p in peers}
+            peer_rows = [m for m in cohort.members if m.id in peer_ids]
+            for row in peer_rows:
+                if key == "ai_reliability_score":
+                    rel = getattr(row, "ai_reliability_score", None)
+                    if rel is not None:
+                        peer_vals.append(int(rel))
+                else:
+                    val = _metric_value(row, key)
+                    if val is not None:
+                        peer_vals.append(val)
 
         top_rival_median = None if not_applicable else _median(peer_vals)
 

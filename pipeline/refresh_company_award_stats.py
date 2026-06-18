@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import Company, ContractAward
+from pipeline.competitive_intel.awards import AwardCountResolver
 
 MAX_LIST_ITEMS = 15
 
@@ -113,6 +114,26 @@ def _aggregate_award_stats(session: Session) -> dict[int, _AwardCompanyStats]:
     return stats_by_company
 
 
+def _merge_award_stats(target: _AwardCompanyStats, source: _AwardCompanyStats) -> None:
+    target.award_count += source.award_count
+    target.total_award_value += source.total_award_value
+    target.categories.update(source.categories)
+    target.clients.update(source.clients)
+    target.buyer_levels.update(source.buyer_levels)
+    target.sources.update(source.sources)
+    target.addresses.update(source.addresses)
+    target.cities.update(source.cities)
+    target.provinces.update(source.provinces)
+    if source.first_award_date and (
+        not target.first_award_date or source.first_award_date < target.first_award_date
+    ):
+        target.first_award_date = source.first_award_date
+    if source.last_award_date and (
+        not target.last_award_date or source.last_award_date > target.last_award_date
+    ):
+        target.last_award_date = source.last_award_date
+
+
 def _pick_primary_address(addresses: Counter[str]) -> str:
     if not addresses:
         return ""
@@ -139,34 +160,42 @@ def refresh_company_award_stats(session: Session) -> dict[str, Any]:
             "overlap_companies": 0,
         }
 
-    company_ids = list(stats_by_company.keys())
-    companies = session.scalars(select(Company).where(Company.id.in_(company_ids))).all()
+    resolver = AwardCountResolver(session)
+    touched_ids: set[int] = set()
+    for company_id in stats_by_company:
+        touched_ids |= resolver.sibling_ids(company_id)
+
+    companies = session.scalars(select(Company).where(Company.id.in_(touched_ids))).all()
 
     updated = 0
     overlap = 0
     for company in companies:
-        stats = stats_by_company.get(company.id)
-        if stats is None:
+        merged = _AwardCompanyStats()
+        for sibling_id in resolver.sibling_ids(company.id, company):
+            sibling_stats = stats_by_company.get(sibling_id)
+            if sibling_stats is not None:
+                _merge_award_stats(merged, sibling_stats)
+        if merged.award_count == 0:
             continue
 
         has_permits = (company.total_projects or 0) > 0
         if has_permits:
             overlap += 1
 
-        company.award_count = stats.award_count
-        company.total_award_value = round(stats.total_award_value, 2)
+        company.award_count = merged.award_count
+        company.total_award_value = round(merged.total_award_value, 2)
         company.avg_award_value = (
-            round(stats.total_award_value / stats.award_count, 2) if stats.award_count else 0.0
+            round(merged.total_award_value / merged.award_count, 2) if merged.award_count else 0.0
         )
-        company.award_categories = _top_items(stats.categories)
-        company.award_clients = _top_items(stats.clients)
-        company.buyer_levels = _top_items(stats.buyer_levels)
-        company.award_sources = _top_items(stats.sources)
-        company.first_award_date = stats.first_award_date
-        company.last_award_date = stats.last_award_date
-        company.primary_address = _pick_primary_address(stats.addresses)[:500]
-        company.primary_city = _pick_primary_location(stats.cities)[:100]
-        company.primary_province = _pick_primary_location(stats.provinces)[:50]
+        company.award_categories = _top_items(merged.categories)
+        company.award_clients = _top_items(merged.clients)
+        company.buyer_levels = _top_items(merged.buyer_levels)
+        company.award_sources = _top_items(merged.sources)
+        company.first_award_date = merged.first_award_date
+        company.last_award_date = merged.last_award_date
+        company.primary_address = _pick_primary_address(merged.addresses)[:500]
+        company.primary_city = _pick_primary_location(merged.cities)[:100]
+        company.primary_province = _pick_primary_location(merged.provinces)[:50]
         company.data_sources = _merge_data_sources(company.data_sources, has_permits=has_permits)
         updated += 1
 

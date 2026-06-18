@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from db.models import ArchCompany, Company
 from pipeline.cip_builder import get_cip
+from pipeline.competitive_intel.awards import AwardCountResolver, select_award_market_members
 from pipeline.competitive_intel.benchmark import compute_benchmark_strip
 from pipeline.competitive_intel.cohort import build_market_cohort
 from pipeline.competitive_intel.peers import select_top_competitors
@@ -71,7 +72,36 @@ def get_competitive_intelligence(
         peer_limit=peer_limit,
     )
 
-    benchmark = compute_benchmark_strip(subject, cohort, peers, kind=kind)
+    award_resolver = AwardCountResolver(session)
+    scoped_companies: dict[int, CompanyRow] = {int(subject.id): subject}
+    for member in cohort.members:
+        scoped_companies[int(member.id)] = member
+
+    award_market_members = select_award_market_members(
+        session,
+        subject,
+        cohort.members,
+        award_resolver,
+        kind=kind,
+    )
+    for member in award_market_members:
+        scoped_companies[int(member.id)] = member
+
+    award_counts = {
+        company_id: award_resolver.count_for(company)
+        for company_id, company in scoped_companies.items()
+    }
+    for peer in peers:
+        award_counts[peer.company_id] = award_resolver.count_for_id(peer.company_id)
+
+    benchmark = compute_benchmark_strip(
+        subject,
+        cohort,
+        peers,
+        kind=kind,
+        award_counts=award_counts,
+        award_market_members=award_market_members,
+    )
 
     warnings: list[str] = []
     if len(peers) < 3:
@@ -87,7 +117,7 @@ def get_competitive_intelligence(
             "similarity": p.similarity,
             "total_projects": p.total_projects,
             "total_value": p.total_value,
-            "award_count": p.award_count,
+            "award_count": award_counts.get(p.company_id, p.award_count),
         }
         for p in peers
     ]
