@@ -14,7 +14,30 @@ def test_parse_issue_date_yyyymmdd():
     assert _parse_issue_date("20230102") == "2023-01-02"
 
 
-def test_format_record_maps_arcgis_fields():
+def test_format_record_maps_current_arcgis_fields():
+    row = _format_record(
+        {
+            "PermitNumber": "22-020638-000-00",
+            "ProjectAddress": "17065 84 Ave",
+            "WorkDescription": "New Single Family with Secondary Suite",
+            "SubDescription": "Primary",
+            "IssuedDate": "20230102",
+            "ValueOfConstruction": 995000,
+            "ApplicantOrganization": "Example Builder Ltd",
+        }
+    )
+    assert row["external_id"] == "22-020638-000-00"
+    assert row["address"] == "17065 84 Ave"
+    assert row["permit_type"] == "New Single Family with Secondary Suite"
+    assert row["project_value"] == "995000"
+    assert row["applicant"] == "Example Builder Ltd"
+    assert row["issue_date"] == "2023-01-02"
+    assert row["description"] == "New Single Family with Secondary Suite / Primary"
+    assert row["source"] == "surrey"
+    assert row["city"] == "Surrey"
+
+
+def test_format_record_falls_back_to_legacy_arcgis_fields():
     row = _format_record(
         {
             "PermitNumber": "22-020638-000-00",
@@ -26,14 +49,9 @@ def test_format_record_maps_arcgis_fields():
             "ValueOfConstruction": 995000,
         }
     )
-    assert row["external_id"] == "22-020638-000-00"
     assert row["address"] == "17065 84 Ave"
     assert row["permit_type"] == "New Single Family with Secondary Suite"
-    assert row["project_value"] == "995000"
-    assert row["issue_date"] == "2023-01-02"
     assert row["description"] == "New / Primary"
-    assert row["source"] == "surrey"
-    assert row["city"] == "Surrey"
 
 
 def test_build_where_clause_incremental():

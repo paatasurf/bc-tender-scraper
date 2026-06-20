@@ -17,7 +17,8 @@ from scraper.utils import clean_text, create_session, polite_api_get
 
 DEFAULT_PAGE_SIZE = 500
 OUT_FIELDS = (
-    "PermitNumber,Address,PermitType,WorkType,SubType,IssuedDate,ValueOfConstruction"
+    "PermitNumber,ProjectAddress,WorkDescription,SubDescription,"
+    "IssuedDate,ValueOfConstruction,ApplicantOrganization"
 )
 FIELDNAMES = [
     "external_id",
@@ -43,20 +44,29 @@ def _parse_issue_date(raw: str | None) -> str:
     return value
 
 
+def _project_address(attrs: dict[str, Any]) -> str:
+    return clean_text(attrs.get("ProjectAddress")) or clean_text(attrs.get("Address"))
+
+
 def _format_record(attrs: dict[str, Any]) -> dict[str, str]:
-    permit_type = clean_text(attrs.get("PermitType")) or clean_text(attrs.get("WorkType"))
-    work_type = clean_text(attrs.get("WorkType"))
-    sub_type = clean_text(attrs.get("SubType"))
-    description_parts = [part for part in (work_type, sub_type) if part]
+    work_description = clean_text(attrs.get("WorkDescription")) or clean_text(attrs.get("WorkType"))
+    sub_description = clean_text(attrs.get("SubDescription")) or clean_text(attrs.get("SubType"))
+    permit_type = (
+        clean_text(attrs.get("PermitType"))
+        or work_description
+        or sub_description
+    )
+    description_parts = [part for part in (work_description, sub_description) if part]
     value = attrs.get("ValueOfConstruction")
     project_value = "" if value is None else str(value)
+    applicant = clean_text(attrs.get("ApplicantOrganization"))
 
     return {
         "external_id": clean_text(attrs.get("PermitNumber")),
-        "address": clean_text(attrs.get("Address")),
+        "address": _project_address(attrs),
         "permit_type": permit_type,
         "project_value": project_value,
-        "applicant": "",
+        "applicant": applicant,
         "issue_date": _parse_issue_date(attrs.get("IssuedDate")),
         "description": " / ".join(description_parts),
         "source": SURREY_SOURCE,
@@ -113,7 +123,7 @@ def _query_page(
     records = [
         _format_record(feature.get("attributes") or {})
         for feature in features
-        if clean_text((feature.get("attributes") or {}).get("Address"))
+        if _project_address(feature.get("attributes") or {})
     ]
     return records, len(features), exceeded
 
