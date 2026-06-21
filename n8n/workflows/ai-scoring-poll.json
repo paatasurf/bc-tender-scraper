@@ -106,23 +106,31 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=⚠️ AI Scoring failed\n\nStatus: {{ $json.status }}\nError: {{ $json.error || 'none' }}\n\nRun ID: {{ $json.run_id }}\nCounts: {{ JSON.stringify($json.counts || {}) }}",
-        "additionalFields": {
-          "appendAttribution": false
+        "jsCode": "const r = $input.first().json;\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const r = (Math.random() * 16) | 0;\n    const v = c === 'x' ? r : (r & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst errorMsg = r.error || `status=${r.status}`;\nconst incident_key = `ai-scoring:failed:${r.run_id || 'unknown'}`;\n\nreturn [\n  {\n    json: {\n      incident_id: uuidv4(),\n      incident_key,\n      severity: 'high',\n      source: 'n8n-ai-scoring',\n      step: 'ai-scoring',\n      timestamp: new Date().toISOString(),\n      summary: 'AI scoring step failed or returned non-success status',\n      error: errorMsg,\n      context: {\n        step: 'ai-scoring',\n        run_id: r.run_id,\n        pipeline_run_id: r.pipeline_run_id,\n        status: r.status,\n        counts: r.counts,\n        poll_url: r.poll_url,\n      },\n    },\n  },\n];"
+      },
+      "id": "f1a2b3c4-1111-4000-8000-000000000009",
+      "name": "Prepare Incident Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.INCIDENT_ROUTER_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
         }
       },
       "id": "f1a2b3c4-1111-4000-8000-000000000008",
-      "name": "Telegram Failure",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [900, 420],
-      "credentials": {
-        "telegramApi": {
-          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
-          "name": "Telegram Bot"
-        }
-      }
+      "name": "Forward to Incident Router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 420],
+      "notes": "Set INCIDENT_ROUTER_WEBHOOK_URL to the Incident Router workflow Production webhook URL."
     }
   ],
   "connections": {
@@ -170,7 +178,18 @@
         ],
         [
           {
-            "node": "Telegram Failure",
+            "node": "Prepare Incident Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Incident Payload": {
+      "main": [
+        [
+          {
+            "node": "Forward to Incident Router",
             "type": "main",
             "index": 0
           }
@@ -182,7 +201,8 @@
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner"
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "REPLACE_WITH_ERROR_WORKFLOW_ID"
   },
   "staticData": null,
   "tags": [],

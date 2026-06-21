@@ -22,23 +22,21 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=🚨 TenderScope — n8n Error\n\nID: {{ $json.incident_id }}\nKey: {{ $json.incident_key }}\nSeverity: {{ $json.severity }}\nSource: {{ $json.source }}\nStep: {{ $json.step }}\nTime: {{ $json.timestamp }}\n\nSummary:\n{{ $json.summary }}\n\nError:\n{{ $json.error }}\n\nContext:\n{{ JSON.stringify($json.context, null, 2) }}",
-        "additionalFields": {
-          "appendAttribution": false
+        "method": "POST",
+        "url": "={{ $env.INCIDENT_ROUTER_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
         }
       },
       "id": "e1a2b3c4-1111-4000-8000-000000000003",
-      "name": "Telegram Alert",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
+      "name": "Forward to Incident Router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [480, 300],
-      "credentials": {
-        "telegramApi": {
-          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
-          "name": "Telegram Bot"
-        }
-      }
+      "notes": "Set INCIDENT_ROUTER_WEBHOOK_URL to the Incident Router workflow Production webhook URL."
     }
   ],
   "connections": {
@@ -57,7 +55,7 @@
       "main": [
         [
           {
-            "node": "Telegram Alert",
+            "node": "Forward to Incident Router",
             "type": "main",
             "index": 0
           }
@@ -78,6 +76,6 @@
     }
   ],
   "meta": {
-    "description": "Global n8n error handler. Assign as Error Workflow on all TenderScope workflows. Sends structured Telegram alerts with incident details."
+    "description": "Global n8n error handler. Assign as Error Workflow on all TenderScope workflows. Forwards incidents to Incident Router."
   }
 }

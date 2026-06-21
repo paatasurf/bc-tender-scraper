@@ -1,0 +1,336 @@
+{
+  "name": "TenderScope — Incident Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tenderscope-incident",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000001",
+      "name": "Incident Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "tenderscope-incident",
+      "notes": "Receives incidents from error handler, pipeline monitor, and other workflows. Copy Production URL to INCIDENT_ROUTER_WEBHOOK_URL env var."
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body ?? raw;\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const r = (Math.random() * 16) | 0;\n    const v = c === 'x' ? r : (r & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst source = body.source || body.workflow?.name || 'unknown';\nconst step = body.step || body.node?.name || body.context?.step || 'unknown';\nconst errorRaw =\n  body.error?.message ||\n  body.execution?.error?.message ||\n  (typeof body.error === 'string' ? body.error : JSON.stringify(body.error || 'unknown error'));\nconst summary = body.summary || `Pipeline failure: ${step}`;\nconst incident_key =\n  body.incident_key ||\n  `${step}:${String(errorRaw).slice(0, 80).replace(/\\s+/g, '-').toLowerCase()}`;\n\nreturn [\n  {\n    json: {\n      incident_id: body.incident_id || uuidv4(),\n      incident_key,\n      severity: body.severity || 'high',\n      tier: body.tier ?? null,\n      source,\n      step,\n      timestamp: body.timestamp || new Date().toISOString(),\n      summary,\n      error: errorRaw,\n      context: {\n        ...(body.context || {}),\n        workflow_id: body.workflow?.id || body.context?.workflow_id,\n        workflow_name: body.workflow?.name || body.context?.workflow_name,\n        execution_id: body.execution?.id || body.context?.execution_id,\n        execution_url: body.execution?.url || body.context?.execution_url,\n        node_name: body.node?.name || body.context?.node_name,\n        pipeline_run_id: body.pipeline_run_id || body.context?.pipeline_run_id,\n        run_id: body.run_id || body.context?.run_id,\n        counts: body.counts || body.context?.counts,\n      },\n      auto_fix_allowed: body.auto_fix_allowed !== false,\n      constitution_reminder: 'Scoring logic Python-only; no score changes in prompts',\n    },\n  },\n];"
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000002",
+      "name": "Normalize Incident",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst item = $input.first().json;\nconst key = item.incident_key;\nconst now = Date.now();\nconst WINDOW_MS = 6 * 60 * 60 * 1000;\n\nif (!staticData.recentIncidents) staticData.recentIncidents = {};\n\nfor (const [k, ts] of Object.entries(staticData.recentIncidents)) {\n  if (now - ts > WINDOW_MS) delete staticData.recentIncidents[k];\n}\n\nif (staticData.recentIncidents[key]) {\n  return [{ json: { ...item, _skip: true, _skip_reason: 'duplicate within 6h' } }];\n}\n\nstaticData.recentIncidents[key] = now;\nreturn [{ json: { ...item, _skip: false } }];"
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000003",
+      "name": "Dedupe (6h window)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000004",
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nif (item.tier !== null && item.tier !== undefined) {\n  return [{ json: item }];\n}\n\nconst error = String(item.error || '').toLowerCase();\nconst step = String(item.step || '').toLowerCase();\nconst summary = String(item.summary || '').toLowerCase();\nconst combined = `${error} ${step} ${summary}`;\n\nlet tier = 2;\nlet auto_fix_allowed = true;\n\nconst tier3Patterns = [\n  'database_connected',\n  'anthropic_api_key',\n  'connection refused',\n  'manual pipeline runs are disabled',\n  '403 forbidden',\n  'econnrefused',\n  'enotfound',\n  'ssl certificate',\n  'railway',\n  'timeout of 600',\n  'dataset truncated',\n  'row count drop',\n];\n\nif (tier3Patterns.some((p) => combined.includes(p))) {\n  tier = 3;\n  auto_fix_allowed = false;\n}\n\nconst tier1Patterns = [\n  'arcgis',\n  'invalid query',\n  'keyerror',\n  'attributeerror',\n  'importerror',\n  'syntaxerror',\n  'typeerror',\n  'nameerror',\n  '502',\n  '400',\n  '404 not found',\n  'scrape',\n  'field',\n  'traceback',\n];\n\nif (tier === 2 && tier1Patterns.some((p) => combined.includes(p))) {\n  tier = 1;\n}\n\nreturn [{ json: { ...item, tier, auto_fix_allowed } }];"
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000005",
+      "name": "Classify Tier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 220]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tier }}",
+                    "rightValue": 1,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Tier 1"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tier }}",
+                    "rightValue": 2,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Tier 2"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tier }}",
+                    "rightValue": 3,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Tier 3"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000006",
+      "name": "Route by Tier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1200, 220]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🚨 TenderScope Incident (Tier {{ $json.tier }})\n\nID: {{ $json.incident_id }}\nKey: {{ $json.incident_key }}\nSeverity: {{ $json.severity }}\nSource: {{ $json.source }}\nStep: {{ $json.step }}\nAuto-fix: {{ $json.auto_fix_allowed }}\nTime: {{ $json.timestamp }}\n\nSummary:\n{{ $json.summary }}\n\nError:\n{{ $json.error }}\n\nContext:\n{{ JSON.stringify($json.context, null, 2) }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000007",
+      "name": "Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1440, 220],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CURSOR_AUTOMATION_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.CURSOR_AUTOMATION_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "r1a2b3c4-1111-4000-8000-000000000008",
+      "name": "Cursor Auto-Fix Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, 120],
+      "notes": "Tier 1 and 2 only. Set CURSOR_AUTOMATION_WEBHOOK_URL and CURSOR_AUTOMATION_TOKEN (Bearer crsr_...) from cursor.com/automations."
+    },
+    {
+      "parameters": {},
+      "id": "r1a2b3c4-1111-4000-8000-000000000009",
+      "name": "Skip Duplicate",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 420]
+    }
+  ],
+  "connections": {
+    "Incident Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Incident": {
+      "main": [
+        [
+          {
+            "node": "Dedupe (6h window)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe (6h window)": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Skip Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classify Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Tier": {
+      "main": [
+        [
+          {
+            "node": "Route by Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Tier": {
+      "main": [
+        [
+          {
+            "node": "Telegram Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cursor Auto-Fix Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cursor Auto-Fix Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "REPLACE_WITH_ERROR_WORKFLOW_ID"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "meta": {
+    "description": "Central incident router: normalize, dedupe (6h), classify Tier 1/2/3, Telegram always, Cursor webhook for Tier 1-2."
+  }
+}
