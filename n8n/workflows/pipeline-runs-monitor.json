@@ -1,0 +1,148 @@
+{
+  "name": "TenderScope — Pipeline Runs Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "m1a2b3c4-1111-4000-8000-000000000001",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Polls GET /internal/runs?limit=20 for failed pipeline steps."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "m1a2b3c4-1111-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.baseUrl }}/internal/runs?limit=20",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "m1a2b3c4-1111-4000-8000-000000000003",
+      "name": "GET /internal/runs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nif (!staticData.alertedRunIds) staticData.alertedRunIds = {};\n\nconst response = $input.first().json;\nconst runs = response.data || [];\nconst now = Date.now();\nconst ALERT_TTL = 7 * 24 * 60 * 60 * 1000;\n\nfor (const [id, ts] of Object.entries(staticData.alertedRunIds)) {\n  if (now - ts > ALERT_TTL) delete staticData.alertedRunIds[id];\n}\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const r = (Math.random() * 16) | 0;\n    const v = c === 'x' ? r : (r & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst items = [];\nfor (const r of runs) {\n  if (r.status !== 'failed') continue;\n  const runKey = String(r.id);\n  if (staticData.alertedRunIds[runKey]) continue;\n  staticData.alertedRunIds[runKey] = now;\n\n  const errorMsg = r.error || 'unknown error';\n  const incident_key = `${r.step}:failed:${runKey}`;\n\n  items.push({\n    json: {\n      incident_id: uuidv4(),\n      incident_key,\n      severity: 'high',\n      source: 'pipeline-runs-monitor',\n      step: r.step,\n      timestamp: new Date().toISOString(),\n      summary: `Pipeline step failed: ${r.step}`,\n      error: errorMsg,\n      context: {\n        step: r.step,\n        pipeline_run_id: r.id,\n        run_id: r.run_id,\n        started_at: r.started_at,\n        finished_at: r.finished_at,\n        counts: r.counts,\n        poll_url: `/internal/steps/${r.id}`,\n      },\n    },\n  });\n}\n\nreturn items;"
+      },
+      "id": "m1a2b3c4-1111-4000-8000-000000000004",
+      "name": "Filter New Failed Runs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "notes": "Skips already-alerted pipeline_run ids (stored in workflow staticData for 7 days)."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🚨 TenderScope — Pipeline Failure\n\nID: {{ $json.incident_id }}\nKey: {{ $json.incident_key }}\nSeverity: {{ $json.severity }}\nSource: {{ $json.source }}\nStep: {{ $json.step }}\nTime: {{ $json.timestamp }}\n\nSummary:\n{{ $json.summary }}\n\nError:\n{{ $json.error }}\n\nContext:\n{{ JSON.stringify($json.context, null, 2) }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "m1a2b3c4-1111-4000-8000-000000000005",
+      "name": "Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "GET /internal/runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /internal/runs": {
+      "main": [
+        [
+          {
+            "node": "Filter New Failed Runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Failed Runs": {
+      "main": [
+        [
+          {
+            "node": "Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "REPLACE_WITH_ERROR_WORKFLOW_ID"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "meta": {
+    "description": "Cron monitor: polls /internal/runs every 15 minutes, detects new failed steps, sends structured Telegram alerts."
+  }
+}

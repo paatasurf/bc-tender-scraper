@@ -1,0 +1,83 @@
+{
+  "name": "TenderScope — Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e1a2b3c4-1111-4000-8000-000000000001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 300],
+      "notes": "Catches failures from any workflow that lists this workflow in Settings → Error Workflow. Also set as instance default Error Workflow in n8n Settings."
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const r = (Math.random() * 16) | 0;\n    const v = c === 'x' ? r : (r & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst workflowName = raw.workflow?.name || 'unknown-workflow';\nconst nodeName = raw.execution?.lastNodeExecuted || raw.node?.name || 'unknown-node';\nconst errorMsg =\n  raw.execution?.error?.message ||\n  raw.error?.message ||\n  (typeof raw.error === 'string' ? raw.error : JSON.stringify(raw.error || 'unknown error'));\n\nconst step = nodeName;\nconst incident_key = `${workflowName}:${nodeName}:${String(errorMsg).slice(0, 60).replace(/\\s+/g, '-').toLowerCase()}`;\n\nreturn [\n  {\n    json: {\n      incident_id: uuidv4(),\n      incident_key,\n      severity: 'high',\n      source: `n8n-error:${workflowName}`,\n      step,\n      timestamp: new Date().toISOString(),\n      summary: `n8n workflow failed: ${workflowName} at node ${nodeName}`,\n      error: errorMsg,\n      context: {\n        workflow_id: raw.workflow?.id,\n        workflow_name: workflowName,\n        execution_id: raw.execution?.id,\n        execution_url: raw.execution?.url,\n        node_name: nodeName,\n        mode: raw.execution?.mode,\n      },\n    },\n  },\n];"
+      },
+      "id": "e1a2b3c4-1111-4000-8000-000000000002",
+      "name": "Prepare Incident Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🚨 TenderScope — n8n Error\n\nID: {{ $json.incident_id }}\nKey: {{ $json.incident_key }}\nSeverity: {{ $json.severity }}\nSource: {{ $json.source }}\nStep: {{ $json.step }}\nTime: {{ $json.timestamp }}\n\nSummary:\n{{ $json.summary }}\n\nError:\n{{ $json.error }}\n\nContext:\n{{ JSON.stringify($json.context, null, 2) }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "e1a2b3c4-1111-4000-8000-000000000003",
+      "name": "Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [480, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Incident Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Incident Payload": {
+      "main": [
+        [
+          {
+            "node": "Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "meta": {
+    "description": "Global n8n error handler. Assign as Error Workflow on all TenderScope workflows. Sends structured Telegram alerts with incident details."
+  }
+}
