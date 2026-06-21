@@ -115,7 +115,7 @@ def _run_step_sync(
 def scrape_federal(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -129,7 +129,7 @@ def scrape_federal(
 def scrape_merx(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Refresh MERX BC open tenders and merge with existing federal rows in tenders.csv."""
     _require_manual_pipeline()
     return _enqueue_step(
@@ -144,7 +144,7 @@ def scrape_merx(
 def scrape_merx_arch(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -158,7 +158,7 @@ def scrape_merx_arch(
 def scrape_commercial(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -172,7 +172,7 @@ def scrape_commercial(
 def scrape_building_permits(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -186,7 +186,7 @@ def scrape_building_permits(
 def scrape_reddit(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -200,7 +200,7 @@ def scrape_reddit(
 def scrape_news(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -214,7 +214,7 @@ def scrape_news(
 def scrape_linkedin(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -228,7 +228,7 @@ def scrape_linkedin(
 def scrape_contract_awards(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Legacy alias for import-contract-awards."""
     _require_manual_pipeline()
     return _enqueue_step(
@@ -243,7 +243,7 @@ def scrape_contract_awards(
 def import_contract_awards_route(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -257,7 +257,7 @@ def import_contract_awards_route(
 def import_csvs(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -292,7 +292,7 @@ def ai_scoring(
 def company_intelligence(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
@@ -306,7 +306,7 @@ def company_intelligence(
 def arch_company_intelligence(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manual_pipeline()
     return _enqueue_step(
         background_tasks,
