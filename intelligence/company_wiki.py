@@ -16,8 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import anthropic
-from sqlalchemy import select, text
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from config.env import get_anthropic_api_key
@@ -267,44 +266,46 @@ def _upsert_wiki(
     snapshot: dict[str, Any],
 ) -> CompanyWiki:
     now = datetime.now(timezone.utc)
-    stmt = (
-        insert(CompanyWiki)
-        .values(
-            company_id=company_id,
-            company_kind=kind,
-            company_name=company_name,
-            wiki_markdown=markdown,
-            summary=sections["summary"],
-            specializations=sections["specializations"],
-            market_position=sections["market_position"],
-            geographic_focus=sections["geographic_focus"],
-            competitive_profile=sections["competitive_profile"],
-            data_snapshot=snapshot,
-            model_used=CLAUDE_MODEL,
-            generated_at=now,
-            updated_at=now,
-        )
-        .on_conflict_do_update(
-            index_elements=["company_id", "company_kind"],
-            set_={
-                "company_name": company_name,
-                "wiki_markdown": markdown,
-                "summary": sections["summary"],
-                "specializations": sections["specializations"],
-                "market_position": sections["market_position"],
-                "geographic_focus": sections["geographic_focus"],
-                "competitive_profile": sections["competitive_profile"],
-                "data_snapshot": snapshot,
-                "model_used": CLAUDE_MODEL,
-                "generated_at": now,
-                "updated_at": now,
-            },
-        )
-        .returning(CompanyWiki)
+
+    existing = session.scalar(
+        select(CompanyWiki)
+        .where(CompanyWiki.company_id == company_id)
+        .where(CompanyWiki.company_kind == kind)
     )
-    result = session.execute(stmt)
+
+    if existing:
+        existing.company_name = company_name
+        existing.wiki_markdown = markdown
+        existing.summary = sections["summary"]
+        existing.specializations = sections["specializations"]
+        existing.market_position = sections["market_position"]
+        existing.geographic_focus = sections["geographic_focus"]
+        existing.competitive_profile = sections["competitive_profile"]
+        existing.data_snapshot = snapshot
+        existing.model_used = CLAUDE_MODEL
+        existing.generated_at = now
+        existing.updated_at = now
+        session.commit()
+        return existing
+
+    wiki = CompanyWiki(
+        company_id=company_id,
+        company_kind=kind,
+        company_name=company_name,
+        wiki_markdown=markdown,
+        summary=sections["summary"],
+        specializations=sections["specializations"],
+        market_position=sections["market_position"],
+        geographic_focus=sections["geographic_focus"],
+        competitive_profile=sections["competitive_profile"],
+        data_snapshot=snapshot,
+        model_used=CLAUDE_MODEL,
+        generated_at=now,
+        updated_at=now,
+    )
+    session.add(wiki)
     session.commit()
-    return result.scalar_one()
+    return wiki
 
 
 # ──────────────────────────────────────────────
