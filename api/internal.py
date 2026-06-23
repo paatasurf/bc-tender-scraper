@@ -430,6 +430,9 @@ def refresh_company_wiki(
             result = generate_company_wiki(company_id=company_id, kind=kind)  # type: ignore[arg-type]
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error("[CompanyWiki] generate_company_wiki failed: %s: %s", type(exc).__name__, exc)
+            raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
 
         return {
             "generated": 1,
