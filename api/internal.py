@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from db.connection import get_session
+from db.models import Company
 from pipeline.internal_steps import (
     run_ai_scoring_step,
     run_arch_company_intelligence_step,
@@ -36,6 +39,8 @@ from scraper.runners import (
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+
+logger = logging.getLogger(__name__)
 
 
 class InternalRunRequest(BaseModel):
@@ -366,3 +371,91 @@ def get_runs_for_id(run_id: str) -> dict[str, Any]:
         }
     finally:
         session.close()
+
+
+# ──────────────────────────────────────────────
+# Company wiki refresh
+# ──────────────────────────────────────────────
+
+def _batch_refresh_wikis(company_ids: list[int], kind: str) -> None:
+    """Background task: generate wikis for a list of companies, then notify via Telegram."""
+    from intelligence.company_wiki import generate_company_wiki
+    from intelligence.telegram import send_telegram_message
+
+    generated = 0
+    errors = 0
+    for cid in company_ids:
+        try:
+            generate_company_wiki(company_id=cid, kind=kind)  # type: ignore[arg-type]
+            generated += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[CompanyWiki] Failed for company_id=%s: %s", cid, exc)
+            errors += 1
+
+    msg = (
+        f"\u2705 *Company Wiki Refresh Complete*\n"
+        f"Generated: {generated} wikis\n"
+        f"Errors: {errors}\n"
+        f"Kind: {kind}"
+    )
+    send_telegram_message(msg)
+    logger.info("[CompanyWiki] Batch done — generated=%s errors=%s", generated, errors)
+
+
+@router.post("/refresh-company-wiki")
+def refresh_company_wiki(
+    background_tasks: BackgroundTasks,
+    company_id: int | None = Query(
+        None,
+        description="Generate wiki for a single company. Omit to refresh the top 50 by permit count.",
+    ),
+    kind: Literal["construction", "architecture"] = Query(
+        "construction",
+        description="Company table to use.",
+    ),
+) -> dict[str, Any]:
+    """
+    Generate (or refresh) AI company wikis.
+
+    - With **company_id**: generates one wiki synchronously and returns its details.
+    - Without **company_id**: enqueues a background job for the top 50 construction
+      companies by permit count and sends a Telegram notification when complete.
+    """
+    _require_manual_pipeline()
+
+    if company_id is not None:
+        from intelligence.company_wiki import generate_company_wiki
+
+        try:
+            result = generate_company_wiki(company_id=company_id, kind=kind)  # type: ignore[arg-type]
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        return {
+            "generated": 1,
+            "company_id": result["company_id"],
+            "company_name": result["company_name"],
+            "wiki_id": result["wiki_id"],
+            "kind": result["kind"],
+            "generated_at": result["generated_at"],
+        }
+
+    # Batch: resolve top-50 company IDs then hand off to background task.
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(Company.id)
+            .order_by(Company.total_projects.desc())
+            .limit(50)
+        ).all()
+        company_ids = [r.id for r in rows]
+    finally:
+        session.close()
+
+    background_tasks.add_task(_batch_refresh_wikis, company_ids, kind)
+    return {
+        "status": "started",
+        "queued": len(company_ids),
+        "kind": kind,
+        "message": "Wikis are being generated in the background. A Telegram notification will be sent on completion.",
+    }
