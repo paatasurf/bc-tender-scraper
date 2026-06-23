@@ -573,11 +573,11 @@ def _ensure_company_wiki_table(engine) -> None:
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_company_wiki_company_kind "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_wiki_company_kind "
         "ON company_wiki (company_id, company_kind)",
         "CREATE INDEX IF NOT EXISTS ix_company_wiki_generated_at "
         "ON company_wiki (generated_at DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_company_wiki_company_kind_col "
+        "CREATE INDEX IF NOT EXISTS ix_company_wiki_kind "
         "ON company_wiki (company_kind)",
     )
     with engine.begin() as conn:

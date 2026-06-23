@@ -293,10 +293,13 @@ class ContractAward(Base):
 
 class CompanyWiki(Base):
     __tablename__ = "company_wiki"
+    __table_args__ = (
+        UniqueConstraint("company_id", "company_kind", name="uq_company_wiki_company_kind"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="construction", index=True)
+    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="construction")
     company_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     wiki_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
