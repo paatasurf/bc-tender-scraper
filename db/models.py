@@ -316,6 +316,35 @@ class CompanyWiki(Base):
     )
 
 
+class WikiBatchProgress(Base):
+    """Checkpoint table for batch wiki generation jobs.
+
+    Each row represents one company in a batch run.  The background task marks
+    each entry 'done' or 'failed' immediately after processing, so a redeploy
+    only loses the *currently-in-flight* company.  Re-calling the endpoint
+    resumes from the first 'pending' entry.
+    """
+
+    __tablename__ = "wiki_batch_progress"
+    __table_args__ = (
+        UniqueConstraint(
+            "batch_id", "company_id", "company_kind",
+            name="uq_wiki_batch_progress_entry",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="construction")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ArchTender(Base):
     __tablename__ = "arch_tenders"
 

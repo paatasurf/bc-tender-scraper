@@ -6,10 +6,10 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.connection import get_session
-from db.models import Company
+from db.models import Company, WikiBatchProgress
 from pipeline.internal_steps import (
     run_ai_scoring_step,
     run_arch_company_intelligence_step,
@@ -374,32 +374,129 @@ def get_runs_for_id(run_id: str) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────
-# Company wiki refresh
+# Company wiki refresh — checkpointed batch
 # ──────────────────────────────────────────────
 
-def _batch_refresh_wikis(company_ids: list[int], kind: str) -> None:
-    """Background task: generate wikis for a list of companies, then notify via Telegram."""
+_WIKI_BATCH_LIMIT = 50
+
+
+def _get_or_create_batch(kind: str) -> tuple[str, list[int], bool]:
+    """Return (batch_id, pending_company_ids, is_resume).
+
+    If an incomplete batch exists (pending entries), resume it.
+    Otherwise create a new batch from the top-N companies by permit count.
+    """
+    session = get_session()
+    try:
+        # Find the most recent batch that still has pending entries.
+        active_batch_id: str | None = session.scalar(
+            select(WikiBatchProgress.batch_id)
+            .where(WikiBatchProgress.company_kind == kind)
+            .where(WikiBatchProgress.status == "pending")
+            .order_by(WikiBatchProgress.created_at.desc())
+            .limit(1)
+        )
+
+        if active_batch_id:
+            pending_ids: list[int] = list(session.scalars(
+                select(WikiBatchProgress.company_id)
+                .where(WikiBatchProgress.batch_id == active_batch_id)
+                .where(WikiBatchProgress.status == "pending")
+                .order_by(WikiBatchProgress.company_id)
+            ).all())
+            return active_batch_id, pending_ids, True
+
+        # No active batch — start a fresh one.
+        company_ids: list[int] = list(session.scalars(
+            select(Company.id)
+            .order_by(Company.total_projects.desc())
+            .limit(_WIKI_BATCH_LIMIT)
+        ).all())
+
+        batch_id = new_run_id()
+        for cid in company_ids:
+            session.add(WikiBatchProgress(
+                batch_id=batch_id,
+                company_id=cid,
+                company_kind=kind,
+                status="pending",
+            ))
+        session.commit()
+        return batch_id, company_ids, False
+
+    finally:
+        session.close()
+
+
+def _mark_batch_entry(batch_id: str, company_id: int, kind: str, status: str, error: str = "") -> None:
+    """Update a single wiki_batch_progress row after processing."""
+    session = get_session()
+    try:
+        entry = session.scalar(
+            select(WikiBatchProgress)
+            .where(WikiBatchProgress.batch_id == batch_id)
+            .where(WikiBatchProgress.company_id == company_id)
+            .where(WikiBatchProgress.company_kind == kind)
+        )
+        if entry:
+            entry.status = status
+            entry.error = error[:500] if error else ""
+            session.commit()
+    finally:
+        session.close()
+
+
+def _batch_has_pending(batch_id: str) -> bool:
+    session = get_session()
+    try:
+        n = session.scalar(
+            select(func.count()).select_from(WikiBatchProgress)
+            .where(WikiBatchProgress.batch_id == batch_id)
+            .where(WikiBatchProgress.status == "pending")
+        ) or 0
+        return n > 0
+    finally:
+        session.close()
+
+
+def _run_wiki_batch(batch_id: str, pending_ids: list[int], kind: str) -> None:
+    """Background task: process pending companies, checkpoint after each one.
+
+    On a Railway redeploy this task is killed, but pending rows remain in
+    wiki_batch_progress.  The next POST /internal/refresh-company-wiki call
+    picks them up automatically via _get_or_create_batch().
+    """
     from intelligence.company_wiki import generate_company_wiki
     from intelligence.telegram import send_telegram_message
 
-    generated = 0
-    errors = 0
-    for cid in company_ids:
+    generated = errors = 0
+
+    for cid in pending_ids:
         try:
             generate_company_wiki(company_id=cid, kind=kind)  # type: ignore[arg-type]
+            _mark_batch_entry(batch_id, cid, kind, "done")
             generated += 1
+            logger.info("[WikiBatch] %s done (%s/%s)", cid, generated + errors, len(pending_ids))
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[CompanyWiki] Failed for company_id=%s: %s", cid, exc)
+            _mark_batch_entry(batch_id, cid, kind, "failed", str(exc))
             errors += 1
+            logger.warning("[WikiBatch] company_id=%s failed: %s", cid, exc)
 
-    msg = (
-        f"\u2705 *Company Wiki Refresh Complete*\n"
-        f"Generated: {generated} wikis\n"
-        f"Errors: {errors}\n"
-        f"Kind: {kind}"
-    )
-    send_telegram_message(msg)
-    logger.info("[CompanyWiki] Batch done — generated=%s errors=%s", generated, errors)
+    # Only fire Telegram when the entire batch is fully done (no pending left).
+    if not _batch_has_pending(batch_id):
+        send_telegram_message(
+            f"\u2705 *Company Wiki Batch Complete*\n"
+            f"Batch: `{batch_id[:8]}...`\n"
+            f"Generated: {generated}\n"
+            f"Errors: {errors}\n"
+            f"Kind: {kind}"
+        )
+        logger.info("[WikiBatch] %s complete — generated=%s errors=%s", batch_id[:8], generated, errors)
+    else:
+        logger.info(
+            "[WikiBatch] %s interrupted — generated=%s errors=%s (pending remain, re-call to resume)",
+            batch_id[:8], generated, errors,
+        )
 
 
 @router.post("/refresh-company-wiki")
@@ -407,7 +504,8 @@ def refresh_company_wiki(
     background_tasks: BackgroundTasks,
     company_id: int | None = Query(
         None,
-        description="Generate wiki for a single company. Omit to refresh the top 50 by permit count.",
+        description="Generate wiki for a single company (synchronous). "
+                    "Omit to run/resume the checkpointed top-50 batch.",
     ),
     kind: Literal["construction", "architecture"] = Query(
         "construction",
@@ -417,9 +515,12 @@ def refresh_company_wiki(
     """
     Generate (or refresh) AI company wikis.
 
-    - With **company_id**: generates one wiki synchronously and returns its details.
-    - Without **company_id**: enqueues a background job for the top 50 construction
-      companies by permit count and sends a Telegram notification when complete.
+    **Single company** (`company_id` provided): runs synchronously, returns wiki details.
+
+    **Batch** (no `company_id`): starts or *resumes* a checkpointed background job.
+    Progress is saved to `wiki_batch_progress` after every company, so a Railway
+    redeploy only loses the currently-in-flight company.  Re-call this endpoint
+    to continue from the last checkpoint.  Telegram fires when the full batch is done.
     """
     _require_manual_pipeline()
 
@@ -443,22 +544,27 @@ def refresh_company_wiki(
             "generated_at": result["generated_at"],
         }
 
-    # Batch: resolve top-50 company IDs then hand off to background task.
-    session = get_session()
-    try:
-        rows = session.execute(
-            select(Company.id)
-            .order_by(Company.total_projects.desc())
-            .limit(50)
-        ).all()
-        company_ids = [r.id for r in rows]
-    finally:
-        session.close()
+    # Batch: start a new batch or resume an existing incomplete one.
+    batch_id, pending_ids, is_resume = _get_or_create_batch(kind)
 
-    background_tasks.add_task(_batch_refresh_wikis, company_ids, kind)
+    if not pending_ids:
+        return {
+            "status": "already_complete",
+            "batch_id": batch_id,
+            "pending": 0,
+            "message": "All companies in the last batch already have wikis. "
+                       "No work to do.",
+        }
+
+    background_tasks.add_task(_run_wiki_batch, batch_id, pending_ids, kind)
     return {
-        "status": "started",
-        "queued": len(company_ids),
+        "status": "resumed" if is_resume else "started",
+        "batch_id": batch_id,
+        "pending": len(pending_ids),
         "kind": kind,
-        "message": "Wikis are being generated in the background. A Telegram notification will be sent on completion.",
+        "message": (
+            f"Resuming batch {batch_id[:8]}... — {len(pending_ids)} companies remaining."
+            if is_resume else
+            f"New batch {batch_id[:8]}... started — {len(pending_ids)} companies queued."
+        ),
     }

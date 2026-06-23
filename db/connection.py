@@ -635,6 +635,37 @@ def _ensure_pipeline_runs_table(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_wiki_batch_progress_table(engine) -> None:
+    """Checkpoint table for resumable batch wiki generation."""
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS wiki_batch_progress (
+                id           SERIAL PRIMARY KEY,
+                batch_id     VARCHAR(36)  NOT NULL,
+                company_id   INTEGER      NOT NULL,
+                company_kind VARCHAR(20)  NOT NULL DEFAULT 'construction',
+                status       VARCHAR(20)  NOT NULL DEFAULT 'pending',
+                error        TEXT         NOT NULL DEFAULT '',
+                created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+            )
+        """))
+    # Indexes in separate connections so a single failure doesn't roll back the table.
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_wiki_batch_progress_batch_id "
+            "ON wiki_batch_progress (batch_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_wiki_batch_progress_status "
+            "ON wiki_batch_progress (status)"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_wiki_batch_progress_entry "
+            "ON wiki_batch_progress (batch_id, company_id, company_kind)"
+        ))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -647,6 +678,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_bd_intelligence_columns(engine)
     _ensure_cip_columns(engine)
     _ensure_company_wiki_table(engine)
+    _ensure_wiki_batch_progress_table(engine)
     _widen_commercial_text_columns(engine)
 
 
