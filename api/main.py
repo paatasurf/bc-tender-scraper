@@ -37,9 +37,10 @@ from db.models import (
     Tender,
 )
 from api.admin import router as admin_router
-from api.internal import router as internal_router
+from api.internal import _enqueue_step, router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
+from pipeline.internal_steps import run_arch_google_places_step
 from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
@@ -902,32 +903,6 @@ def _run_ai_scoring() -> None:
         session.close()
 
 
-def _run_arch_google_places() -> None:
-    from pipeline.arch_company_intelligence import enrich_arch_companies_google
-    from pipeline.scrape_arch_companies_google import scrape_arch_companies_google
-
-    session = get_session()
-    try:
-        try:
-            scraped = scrape_arch_companies_google(session)
-        except Exception as exc:
-            print(f"[ArchCompanies] Google Places scrape failed: {exc}")
-            scraped = 0
-
-        try:
-            enriched = enrich_arch_companies_google(session)
-        except Exception as exc:
-            print(f"[ArchCompanies] Google enrichment failed: {exc}")
-            enriched = 0
-
-        print(
-            f"[ArchCompanies] Google Places manual run complete: "
-            f"{scraped} scraped, {enriched} enriched"
-        )
-    finally:
-        session.close()
-
-
 @app.post("/api/pipeline/run")
 def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
@@ -939,12 +914,16 @@ def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
 
 
 @app.post("/api/pipeline/run-google-places")
-def trigger_google_places(background_tasks: BackgroundTasks) -> dict[str, str]:
+def trigger_google_places(background_tasks: BackgroundTasks) -> dict[str, Any]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
 
-    background_tasks.add_task(_run_arch_google_places)
-    return {"status": "started"}
+    return _enqueue_step(
+        background_tasks,
+        "arch-google-places",
+        run_arch_google_places_step,
+        None,
+    )
 
 
 @app.post("/api/pipeline/run-ai-scoring")

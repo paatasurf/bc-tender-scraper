@@ -10,6 +10,7 @@ from db.connection import get_session
 from pipeline.internal_steps import (
     run_ai_scoring_step,
     run_arch_company_intelligence_step,
+    run_arch_google_places_step,
     run_company_intelligence_step,
     run_import_contract_awards_step,
     run_import_step,
@@ -312,6 +313,20 @@ def arch_company_intelligence(
         background_tasks,
         "arch-company-intelligence",
         run_arch_company_intelligence_step,
+        body.run_id if body else None,
+    )
+
+
+@router.post("/arch-google-places")
+def arch_google_places(
+    background_tasks: BackgroundTasks,
+    body: InternalRunRequest | None = None,
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+    return _enqueue_step(
+        background_tasks,
+        "arch-google-places",
+        run_arch_google_places_step,
         body.run_id if body else None,
     )
 
