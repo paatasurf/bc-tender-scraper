@@ -1,0 +1,51 @@
+"""Contract snapshot for GET /api/early-signals."""
+
+{
+  "endpoint": "GET /api/early-signals",
+  "query_parameters": {
+    "company_id": "optional int — score signals for company profile",
+    "kind": "construction | architecture (default construction)",
+    "lookback_days": "1-365 (default 30)",
+    "min_value": "optional float",
+    "max_value": "optional float",
+    "min_score": "0-100 (default 50)",
+    "limit": "1-50 (default 15)",
+    "city": "optional region filter matched against local_area/city"
+  },
+  "response": {
+    "data_scope": "vancouver_permit_applications",
+    "lookback_days": 30,
+    "company_id": 1,
+    "kind": "construction",
+    "total": 1,
+    "signals": [
+      {
+        "id": 123,
+        "signal_type": "permit_application",
+        "external_id": "BP-2026-01953",
+        "city": "Vancouver",
+        "local_area": "Downtown",
+        "title": "Interior alterations",
+        "address": "595 BURRARD STREET, Vancouver, BC",
+        "permit_type": "Addition / Alteration",
+        "estimated_value": 1000000,
+        "application_date": "2026-06-12",
+        "issue_date": "2026-06-22",
+        "contractor": "PB Management Group Inc",
+        "applicant": "Example Applicant",
+        "pipeline_lag_days": 10,
+        "score": 72,
+        "reasons": ["Comparable market permit activity"],
+        "breakdown": [
+          {
+            "factor": "permit_fit",
+            "label": "Permit relevance",
+            "points": 40,
+            "max_points": 25,
+            "detail": "Comparable market permit activity"
+          }
+        ]
+      }
+    ]
+  }
+}

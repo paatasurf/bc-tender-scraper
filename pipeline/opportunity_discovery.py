@@ -802,14 +802,29 @@ def _tender_payload(row: Any, source: str) -> dict[str, Any]:
 
 
 def _permit_payload(permit: Permit) -> dict[str, Any]:
+    lag = None
+    if permit.application_date and permit.issue_date:
+        try:
+            applied = datetime.fromisoformat(permit.application_date.replace("/", "-")[:10]).date()
+            issued = datetime.fromisoformat(permit.issue_date.replace("/", "-")[:10]).date()
+            lag = (issued - applied).days
+        except ValueError:
+            lag = None
     return {
         "id": permit.id,
+        "external_id": permit.external_id or "",
         "address": permit.address,
         "type": permit.permit_type,
         "value": _parse_value(permit.project_value),
         "date": (permit.issue_date or "").replace("/", "-")[:10],
-        "status": "Issued" if permit.issue_date else "Pending",
+        "application_date": (permit.application_date or "").replace("/", "-")[:10],
+        "issue_date": (permit.issue_date or "").replace("/", "-")[:10],
+        "pipeline_lag_days": lag,
+        "status": "Issued" if permit.issue_date else "Applied",
         "applicant": permit.applicant,
+        "contractor": permit.contractor or "",
+        "local_area": permit.local_area or "",
+        "city": permit.city or "Vancouver",
         "description": permit.description,
     }
 

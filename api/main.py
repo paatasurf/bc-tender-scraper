@@ -483,6 +483,40 @@ def company_opportunities(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/early-signals")
+def early_signals(
+    company_id: int | None = Query(None, ge=1),
+    kind: Literal["construction", "architecture"] = Query("construction"),
+    lookback_days: int = Query(30, ge=1, le=365),
+    min_value: float | None = Query(None, ge=0),
+    max_value: float | None = Query(None, ge=0),
+    min_score: int = Query(50, ge=0, le=100),
+    limit: int = Query(15, ge=1, le=50),
+    city: str | None = Query(None, max_length=100),
+) -> dict[str, Any]:
+    from pipeline.early_signals import get_early_signals
+
+    regions = [city.strip()] if city and city.strip() else None
+    session = get_session()
+    try:
+        try:
+            return get_early_signals(
+                session,
+                company_id=company_id,
+                kind=kind,
+                lookback_days=lookback_days,
+                min_value=min_value,
+                max_value=max_value,
+                min_score=min_score,
+                limit=limit,
+                regions=regions,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
 @app.get("/api/company-wiki/{company_id}")
 def get_company_wiki(
     company_id: int,
