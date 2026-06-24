@@ -352,14 +352,6 @@ def _company_geo(company: Company) -> tuple[set[str], set[str]]:
 
     if company.primary_city and company.primary_city.strip():
         geo_texts.append(company.primary_city)
-    else:
-        for address in (company.primary_address or "", company.google_address or ""):
-            if not address:
-                continue
-            parsed_city = _parse_city_from_address(address)
-            if parsed_city:
-                geo_texts.append(parsed_city)
-                break
 
     if company.geographic_reach and company.geographic_reach.strip():
         geo_texts.append(company.geographic_reach)
