@@ -568,3 +568,15 @@ def refresh_company_wiki(
             f"New batch {batch_id[:8]}... started — {len(pending_ids)} companies queued."
         ),
     }
+
+
+@router.post("/send-alerts")
+def send_alerts() -> dict[str, Any]:
+    """
+    Generate and send personalized email digests for all client profiles
+    with alerts_enabled=true.  Sends Telegram notification when batch completes.
+    """
+    _require_manual_pipeline()
+    from intelligence.email_alerts import send_all_alert_digests
+
+    return send_all_alert_digests()

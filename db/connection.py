@@ -666,6 +666,55 @@ def _ensure_wiki_batch_progress_table(engine) -> None:
         ))
 
 
+def _ensure_client_profiles_table(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS client_profiles (
+                id                  SERIAL PRIMARY KEY,
+                clerk_user_id       VARCHAR(100) NOT NULL DEFAULT '',
+                company_id          INTEGER NOT NULL,
+                company_name        VARCHAR(300) NOT NULL DEFAULT '',
+                email               VARCHAR(320) NOT NULL,
+                regions             VARCHAR[] DEFAULT '{}',
+                specializations     VARCHAR[] DEFAULT '{}',
+                min_project_value   FLOAT,
+                max_project_value   FLOAT,
+                alerts_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_client_profiles_clerk_user_id "
+            "ON client_profiles (clerk_user_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_client_profiles_company_id "
+            "ON client_profiles (company_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_client_profiles_email "
+            "ON client_profiles (email)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_client_profiles_alerts_enabled "
+            "ON client_profiles (alerts_enabled)"
+        ))
+        conn.execute(text("""
+            INSERT INTO client_profiles (company_id, company_name, email, regions, alerts_enabled)
+            SELECT
+                1,
+                COALESCE(c.name, 'Test Company'),
+                'test@tenderscope.ca',
+                ARRAY['Vancouver', 'Burnaby', 'Surrey'],
+                TRUE
+            FROM companies c
+            WHERE c.id = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM client_profiles WHERE email = 'test@tenderscope.ca'
+              )
+        """))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -679,6 +728,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_cip_columns(engine)
     _ensure_company_wiki_table(engine)
     _ensure_wiki_batch_progress_table(engine)
+    _ensure_client_profiles_table(engine)
     _widen_commercial_text_columns(engine)
 
 
