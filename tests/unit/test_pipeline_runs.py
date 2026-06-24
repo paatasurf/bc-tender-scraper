@@ -61,6 +61,38 @@ def test_execute_tracked_step_marks_failed_runs():
     assert result["error"] == "boom"
 
 
+def test_execute_tracked_step_marks_returned_failed_status():
+    record = MagicMock()
+    record.id = 8
+    record.run_id = "run-returned-fail"
+    record.step = "daily-scrapers"
+    record.status = "failed"
+    record.started_at = None
+    record.finished_at = None
+    record.error = "Building permits: ArcGIS Invalid query parameters"
+    record.counts_json = '{"status": "failed"}'
+
+    session = MagicMock()
+    session.get.return_value = record
+
+    with patch("pipeline.runs.get_session", return_value=session):
+        with patch("pipeline.runs.start_run", return_value=record):
+            with patch("pipeline.runs.finish_run", return_value=record) as finish_run:
+                result = execute_tracked_step(
+                    "daily-scrapers",
+                    lambda: {
+                        "status": "failed",
+                        "errors": ["Building permits: ArcGIS Invalid query parameters"],
+                    },
+                    run_id="run-returned-fail",
+                )
+
+    finish_run.assert_called_once()
+    assert finish_run.call_args.args[2] == "failed"
+    assert finish_run.call_args.kwargs["error"] == "Building permits: ArcGIS Invalid query parameters"
+    assert result["status"] == "failed"
+
+
 def test_run_tracked_step_uses_existing_record_id():
     existing = MagicMock()
     existing.id = 99
