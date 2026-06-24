@@ -153,12 +153,29 @@ def list_tenders(
 def list_permits(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    city: str | None = Query(
+        None,
+        description="Filter by municipality: Vancouver, Surrey, or Burnaby",
+        max_length=100,
+    ),
 ) -> dict[str, Any]:
+    from pipeline.permits_query import list_permits_page, normalize_permit_city, count_permits
+
     session = get_session()
     try:
-        total = session.scalar(select(func.count()).select_from(Permit)) or 0
-        rows = session.scalars(select(Permit).order_by(Permit.id.desc()).offset(offset).limit(limit)).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        try:
+            city_filter = normalize_permit_city(city)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        total = count_permits(session, city=city_filter)
+        rows = list_permits_page(session, city=city_filter, limit=limit, offset=offset)
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "city": city_filter,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
