@@ -16,6 +16,7 @@ from scraper.config import (
 from scraper.utils import clean_text, create_session, polite_api_get
 
 DEFAULT_PAGE_SIZE = 500
+DEFAULT_INCREMENTAL_DAYS = 7
 OUT_FIELDS = (
     "PermitNumber,ProjectAddress,WorkDescription,SubDescription,"
     "IssuedDate,ValueOfConstruction,ApplicantOrganization"
@@ -241,8 +242,13 @@ def main() -> None:
     parser.add_argument(
         "--days",
         type=int,
-        default=None,
-        help="Incremental window in days (omit for full historical load)",
+        default=DEFAULT_INCREMENTAL_DAYS,
+        help=f"Incremental window in days (default: {DEFAULT_INCREMENTAL_DAYS})",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Full historical load",
     )
     parser.add_argument(
         "--no-persist",
@@ -250,7 +256,8 @@ def main() -> None:
         help="Write CSV only; do not upsert into PostgreSQL",
     )
     args = parser.parse_args()
-    scrape_surrey_permits(days=args.days, persist=not args.no_persist)
+    days = None if args.full else args.days
+    scrape_surrey_permits(days=days, persist=not args.no_persist)
 
 
 if __name__ == "__main__":

@@ -847,13 +847,15 @@ def scrape_surrey_permits_route(
         None,
         ge=1,
         le=365,
-        description="Incremental window in days; omit for full historical load",
+        description="Incremental window in days; defaults to 7 unless full=true",
     ),
+    full: bool = Query(False, description="Run a full historical load"),
 ) -> dict[str, Any]:
-    from scraper.surrey_permits import scrape_surrey_permits
+    from scraper.surrey_permits import DEFAULT_INCREMENTAL_DAYS, scrape_surrey_permits
 
     try:
-        return scrape_surrey_permits(days=days, persist=True)
+        effective_days = None if full else (days or DEFAULT_INCREMENTAL_DAYS)
+        return scrape_surrey_permits(days=effective_days, persist=True)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Surrey permits scrape failed: {exc}") from exc
 

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from scraper.surrey_permits import (
+    DEFAULT_INCREMENTAL_DAYS,
     _build_where_clause,
     _format_record,
     _parse_issue_date,
     _should_fetch_next_page,
 )
+from scraper.runners import run_surrey_permits_scraper
 
 
 def test_parse_issue_date_yyyymmdd():
@@ -61,6 +65,15 @@ def test_build_where_clause_incremental():
 
 def test_build_where_clause_full_history():
     assert _build_where_clause(days=None) == "1=1"
+
+
+def test_runner_defaults_to_weekly_incremental_scrape():
+    with patch("scraper.surrey_permits.scrape_surrey_permits") as scrape:
+        scrape.return_value = {"status": "ok"}
+
+        assert run_surrey_permits_scraper() == {"status": "ok"}
+
+    scrape.assert_called_once_with(days=DEFAULT_INCREMENTAL_DAYS, persist=True)
 
 
 def test_should_fetch_next_page_when_transfer_limit_exceeded():

@@ -88,9 +88,12 @@ def run_commercial_scraper() -> dict[str, Any]:
 
 
 def run_surrey_permits_scraper(*, days: int | None = None) -> dict[str, Any]:
-    from scraper.surrey_permits import scrape_surrey_permits
+    from scraper.surrey_permits import DEFAULT_INCREMENTAL_DAYS, scrape_surrey_permits
 
-    return scrape_surrey_permits(days=days, persist=True)
+    return scrape_surrey_permits(
+        days=DEFAULT_INCREMENTAL_DAYS if days is None else days,
+        persist=True,
+    )
 
 
 def run_burnaby_permits_scraper(*, days: int | None = None) -> dict[str, Any]:
