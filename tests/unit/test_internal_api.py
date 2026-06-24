@@ -94,6 +94,7 @@ def test_arch_company_intelligence_default_enqueues_background_step():
             payload = internal_api.arch_company_intelligence(
                 background_tasks,
                 internal_api.InternalRunRequest(run_id="run-arch"),
+                sync=False,
             )
 
     assert payload == enqueue_payload
