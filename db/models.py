@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -314,6 +314,25 @@ class CompanyWiki(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+
+class ClientProfile(Base):
+    """Email alert preferences for TenderScope clients (Clerk-authenticated users)."""
+
+    __tablename__ = "client_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    clerk_user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    company_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    regions: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    specializations: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    min_project_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_project_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ArchTender(Base):
