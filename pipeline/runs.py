@@ -69,7 +69,15 @@ def _execute_tracked_worker(
     error: str | None = None
     try:
         counts = worker()
-        if counts.get("skipped"):
+        returned_status = str(counts.get("status") or "").lower()
+        if returned_status in {"failed", "failure", "error"} or counts.get("failed") is True:
+            status = "failed"
+            raw_error = counts.get("error") or counts.get("errors")
+            if isinstance(raw_error, list):
+                error = "; ".join(str(item) for item in raw_error)
+            else:
+                error = str(raw_error or "worker returned failed status")
+        elif counts.get("skipped"):
             status = "skipped"
     except Exception as exc:
         status = "failed"
