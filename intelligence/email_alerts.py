@@ -23,12 +23,15 @@ from db.models import ClientProfile, Company, CompanyWiki, Tender
 from intelligence.resend import send_email
 from intelligence.telegram import send_telegram_message
 from pipeline.competitive_intel.service import get_competitive_intelligence
+from pipeline.early_signals import get_early_signals_for_profile
 
 logger = logging.getLogger(__name__)
 
 TENDER_LOOKBACK_DAYS = 7
 MAX_TENDERS = 8
 MAX_COMPETITORS = 5
+MAX_EARLY_SIGNALS = 8
+EARLY_SIGNAL_LOOKBACK_DAYS = 7
 
 
 def _wiki_for_company(session: Session, company_id: int) -> CompanyWiki | None:
@@ -145,10 +148,42 @@ def _render_competitors_section(competitors: list[dict[str, Any]]) -> str:
     return "<ul>" + "".join(items) + "</ul>"
 
 
+def _render_early_signals_section(signals: list[dict[str, Any]]) -> str:
+    if not signals:
+        return "<p><em>No new permit applications matched your regions this week.</em></p>"
+
+    items: list[str] = []
+    for signal in signals[:MAX_EARLY_SIGNALS]:
+        area = signal.get("local_area") or signal.get("city") or "Vancouver"
+        value = signal.get("estimated_value")
+        value_label = f"${value:,.0f}" if isinstance(value, (int, float)) and value else "—"
+        applied = html.escape(str(signal.get("application_date") or "—"))
+        issued = html.escape(str(signal.get("issue_date") or "—"))
+        contractor = html.escape(str(signal.get("contractor") or ""))
+        permit_type = html.escape(str(signal.get("permit_type") or "Permit"))
+        lag = signal.get("pipeline_lag_days")
+        lag_label = f" · {lag}d application lead" if lag else ""
+        contractor_line = f"<br>Contractor: {contractor}" if contractor else ""
+        items.append(
+            "<li>"
+            f"<strong>{permit_type}</strong> · {html.escape(str(area))}{lag_label}<br>"
+            f"Applied {applied} · Issued {issued} · Value {value_label}"
+            f"{contractor_line}"
+            "</li>"
+        )
+    return "<ul>" + "".join(items) + "</ul>"
+
+
 def generate_digest(session: Session, profile: ClientProfile) -> dict[str, str]:
     """Build subject + HTML body for one client profile."""
     company_name = profile.company_name or f"Company #{profile.company_id}"
     tenders = _fetch_matching_tenders(session, profile)
+    early_signals = get_early_signals_for_profile(
+        session,
+        profile,
+        lookback_days=EARLY_SIGNAL_LOOKBACK_DAYS,
+        limit=MAX_EARLY_SIGNALS,
+    )
     competitors = _fetch_competitor_activity(session, profile.company_id)
     summary = _company_summary_block(session, profile)
     regions = ", ".join(profile.regions) if profile.regions else "British Columbia"
@@ -164,6 +199,11 @@ def generate_digest(session: Session, profile: ClientProfile) -> dict[str, str]:
     Your Market Position
   </h2>
   <p>{html.escape(summary)}</p>
+
+  <h2 style="font-size: 16px; border-bottom: 1px solid #e5e5e5; padding-bottom: 4px;">
+    Early Permit Signals ({html.escape(regions)})
+  </h2>
+  {_render_early_signals_section(early_signals)}
 
   <h2 style="font-size: 16px; border-bottom: 1px solid #e5e5e5; padding-bottom: 4px;">
     New Tenders ({html.escape(regions)})
@@ -185,6 +225,7 @@ def generate_digest(session: Session, profile: ClientProfile) -> dict[str, str]:
         "subject": subject,
         "html": body_html,
         "tender_count": str(len(tenders)),
+        "early_signal_count": str(len(early_signals)),
         "competitor_count": str(len(competitors)),
     }
 
@@ -205,6 +246,7 @@ def send_digest_for_profile(session: Session, profile: ClientProfile) -> dict[st
             "status": "sent",
             "resend_id": result.get("id"),
             "tender_count": int(digest["tender_count"]),
+            "early_signal_count": int(digest.get("early_signal_count", 0)),
             "competitor_count": int(digest["competitor_count"]),
         }
     except Exception as exc:  # noqa: BLE001
