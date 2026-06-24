@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from config.env import env_flag
+from config.env import env_flag, get_env
 from db.import_contract_awards import import_contract_awards
-from scraper.building_permits import scrape_building_permits
+from scraper.building_permits import scrape_vancouver_permits
 from scraper.commercial import scrape_commercial_tenders
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.federal import scrape_federal_tenders
@@ -102,8 +102,19 @@ def run_burnaby_permits_scraper(*, days: int | None = None) -> dict[str, Any]:
 def run_building_permits_scraper() -> dict[str, Any]:
     if env_flag("PIPELINE_SKIP_BUILDING_PERMITS"):
         return {"skipped": True, "reason": "PIPELINE_SKIP_BUILDING_PERMITS=true"}
-    permits_saved = scrape_building_permits()
-    return {"permits_saved": permits_saved}
+
+    if env_flag("VANCOUVER_PERMITS_FULL_REFRESH"):
+        days = None
+    else:
+        raw_days = get_env("VANCOUVER_PERMITS_INCREMENTAL_DAYS", "14")
+        try:
+            days = int(raw_days)
+        except ValueError:
+            days = 14
+        if days <= 0:
+            days = None
+
+    return scrape_vancouver_permits(days=days, persist=True)
 
 
 def run_reddit_scraper() -> dict[str, Any]:

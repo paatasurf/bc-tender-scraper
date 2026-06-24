@@ -420,6 +420,21 @@ def _ensure_ai_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_permit_early_signal_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS application_date VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS contractor VARCHAR(300) DEFAULT ''",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS local_area VARCHAR(100) DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_permits_application_date "
+        "ON permits (application_date) WHERE application_date <> ''",
+        "CREATE INDEX IF NOT EXISTS ix_permits_local_area "
+        "ON permits (local_area) WHERE local_area <> ''",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _widen_commercial_text_columns(engine) -> None:
     if "commercial_tenders" not in inspect(engine).get_table_names():
         return
@@ -722,6 +737,7 @@ def _run_migrations(engine: Engine) -> None:
     _migrate_tender_matches_breakdown_json(engine)
     _ensure_pipeline_runs_table(engine)
     _ensure_ai_columns(engine)
+    _ensure_permit_early_signal_columns(engine)
     _ensure_company_intelligence_columns(engine)
     _ensure_company_award_columns(engine)
     _ensure_bd_intelligence_columns(engine)

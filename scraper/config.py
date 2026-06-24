@@ -37,6 +37,8 @@ VANCOUVER_PERMITS_API = (
     "issued-building-permits/records"
 )
 BUILDING_PERMITS_CSV = "building_permits.csv"
+VANCOUVER_SOURCE = "vancouver"
+VANCOUVER_CITY = "Vancouver"
 
 SURREY_PERMITS_API = (
     "https://services5.arcgis.com/YRpe0VKTJytZSSIB/arcgis/rest/services/"

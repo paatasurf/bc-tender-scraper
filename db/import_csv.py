@@ -94,41 +94,65 @@ def import_permits(session: Session, path: Path | None = None) -> int:
         print(f"[Import] Skipping missing file: {csv_path}")
         return 0
 
-    session.execute(delete(Permit).where(Permit.source == "vancouver"))
-    session.commit()
+    from db.permit_import import upsert_city_permits
 
-    imported = 0
-    batch: list[dict[str, str]] = []
+    rows: list[dict[str, str]] = []
+    legacy_rows: list[dict[str, str]] = []
 
     with csv_path.open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
-            if not row.get("address"):
+            address = row.get("address", "")
+            external_id = row.get("external_id", "")
+            if not address and not external_id:
                 continue
-            batch.append(
-                {
-                    "address": row.get("address", ""),
-                    "permit_type": row.get("permit_type", ""),
-                    "project_value": row.get("project_value", ""),
-                    "applicant": row.get("applicant", ""),
-                    "issue_date": row.get("issue_date", ""),
-                    "description": row.get("description", ""),
-                    "source": "vancouver",
-                    "city": "Vancouver",
-                    "external_id": "",
-                }
-            )
+            mapped = {
+                "external_id": external_id,
+                "address": address or external_id,
+                "permit_type": row.get("permit_type", ""),
+                "project_value": row.get("project_value", ""),
+                "applicant": row.get("applicant", ""),
+                "application_date": row.get("application_date", ""),
+                "issue_date": row.get("issue_date", ""),
+                "contractor": row.get("contractor", ""),
+                "local_area": row.get("local_area", ""),
+                "description": row.get("description", ""),
+                "source": row.get("source") or "vancouver",
+                "city": row.get("city") or "Vancouver",
+            }
+            if external_id:
+                rows.append(mapped)
+            else:
+                legacy_rows.append(mapped)
+
+    imported = 0
+    if rows:
+        imported += upsert_city_permits(
+            session,
+            rows,
+            source="vancouver",
+            full_refresh=False,
+        )
+        print(f"[Import] Permits: {imported} Vancouver rows upserted by external_id")
+
+    if legacy_rows:
+        session.execute(delete(Permit).where(Permit.source == "vancouver", Permit.external_id == ""))
+        session.commit()
+        batch: list[dict[str, str]] = []
+        for mapped in legacy_rows:
+            batch.append(mapped)
             if len(batch) >= BATCH_SIZE:
                 session.execute(insert(Permit.__table__), batch)
                 session.commit()
                 imported += len(batch)
                 batch = []
+        if batch:
+            session.execute(insert(Permit.__table__), batch)
+            session.commit()
+            imported += len(batch)
+        print(f"[Import] Permits: {len(legacy_rows)} legacy Vancouver rows (no external_id)")
 
-    if batch:
-        session.execute(insert(Permit.__table__), batch)
-        session.commit()
-        imported += len(batch)
-
-    print(f"[Import] Permits: {imported} rows (full refresh)")
+    if not rows and not legacy_rows:
+        print("[Import] Permits: 0 rows")
     return imported
 
 
