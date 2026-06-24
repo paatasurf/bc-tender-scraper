@@ -228,14 +228,21 @@ def scrape_linkedin(
 def scrape_contract_awards(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
 ) -> dict[str, Any]:
     """Legacy alias for import-contract-awards."""
     _require_manual_pipeline()
+    run_id = body.run_id if body else None
+    if sync:
+        return _run_step_sync("import-contract-awards", run_import_contract_awards_step, run_id)
     return _enqueue_step(
         background_tasks,
         "import-contract-awards",
         run_import_contract_awards_step,
-        body.run_id if body else None,
+        run_id,
     )
 
 
@@ -243,13 +250,20 @@ def scrape_contract_awards(
 def import_contract_awards_route(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
 ) -> dict[str, Any]:
     _require_manual_pipeline()
+    run_id = body.run_id if body else None
+    if sync:
+        return _run_step_sync("import-contract-awards", run_import_contract_awards_step, run_id)
     return _enqueue_step(
         background_tasks,
         "import-contract-awards",
         run_import_contract_awards_step,
-        body.run_id if body else None,
+        run_id,
     )
 
 
@@ -257,13 +271,20 @@ def import_contract_awards_route(
 def import_csvs(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
 ) -> dict[str, Any]:
     _require_manual_pipeline()
+    run_id = body.run_id if body else None
+    if sync:
+        return _run_step_sync("import-csvs", run_import_step, run_id)
     return _enqueue_step(
         background_tasks,
         "import-csvs",
         run_import_step,
-        body.run_id if body else None,
+        run_id,
     )
 
 
