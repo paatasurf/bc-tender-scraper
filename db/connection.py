@@ -448,12 +448,36 @@ def _ensure_tender_matches_table(engine) -> None:
         """,
         "CREATE INDEX IF NOT EXISTS ix_tender_matches_company_id ON tender_matches (company_id)",
         "CREATE INDEX IF NOT EXISTS ix_tender_matches_tender_id ON tender_matches (tender_id)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_tender "
-        "ON tender_matches (company_id, tender_id)",
     )
     with engine.begin() as conn:
         for statement in statements:
             conn.execute(text(statement))
+
+
+def _dedupe_tender_matches_for_unique_index(engine) -> None:
+    """Keep the newest cache row before enforcing tender_matches uniqueness."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                DELETE FROM tender_matches tm
+                USING (
+                    SELECT id
+                    FROM (
+                        SELECT
+                            id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY company_kind, company_id, tender_source, tender_id
+                                ORDER BY created_at DESC NULLS LAST, id DESC
+                            ) AS row_num
+                        FROM tender_matches
+                    ) ranked
+                    WHERE ranked.row_num > 1
+                ) duplicates
+                WHERE tm.id = duplicates.id
+                """
+            )
+        )
 
 
 def _migrate_tender_matches_breakdown_json(engine) -> None:
@@ -477,14 +501,20 @@ def _migrate_tender_matches_company_kind(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_tender_matches_tender_source "
         "ON tender_matches (tender_source)",
         "DROP INDEX IF EXISTS ix_tender_matches_company_tender",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_kind_tender "
-        "ON tender_matches (company_kind, company_id, tender_source, tender_id)",
         "CREATE INDEX IF NOT EXISTS ix_tender_matches_company_created "
         "ON tender_matches (company_kind, company_id, created_at DESC)",
     )
     with engine.begin() as conn:
         for statement in statements:
             conn.execute(text(statement))
+    _dedupe_tender_matches_for_unique_index(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_kind_tender "
+                "ON tender_matches (company_kind, company_id, tender_source, tender_id)"
+            )
+        )
 
 
 def _ensure_company_intelligence_columns(engine) -> None:
