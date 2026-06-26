@@ -98,6 +98,12 @@ async def company_intelligence_plan_gate(request: Request, call_next):
         assert_company_intelligence_access(request)
     except HTTPException as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    except Exception:
+        logger.exception("Company intelligence plan gate failed for %s", request.url.path)
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid authorization token"},
+        )
 
     return await call_next(request)
 

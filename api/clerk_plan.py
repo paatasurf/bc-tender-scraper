@@ -1,26 +1,20 @@
 from __future__ import annotations
 
-import json
+import base64
 import logging
 import threading
-import time
 from typing import Any
 
 import jwt
 import requests
 from fastapi import HTTPException, Request
+from jwt import PyJWKClient
 
 from config.env import get_env
 
 logger = logging.getLogger(__name__)
 
-# Clerk JWKS (public signing keys) cache. Keys rarely rotate, so a short-lived
-# in-memory cache keeps verification networkless on the hot path after warm-up.
-_DEFAULT_JWKS_URL = "https://api.clerk.com/v1/jwks"
-_JWKS_TTL_SECONDS = 600
-_jwks_lock = threading.Lock()
-_jwks_keys: dict[str, Any] = {}
-_jwks_fetched_at: float = 0.0
+_DEFAULT_BACKEND_JWKS_URL = "https://api.clerk.com/v1/jwks"
 
 COMPANY_INTEL_PATH_PREFIXES = (
     "/api/companies",
@@ -31,6 +25,9 @@ COMPANY_INTEL_PATH_PREFIXES = (
 
 UPGRADE_DETAIL = "Company Intelligence requires a Basic or Pro plan."
 PAID_PLANS = frozenset({"basic", "pro", "admin"})
+
+_jwk_clients_lock = threading.Lock()
+_jwk_clients: dict[str, PyJWKClient] = {}
 
 
 def is_company_intelligence_path(path: str) -> bool:
@@ -50,8 +47,34 @@ def requires_company_intelligence_access(request: Request) -> bool:
     return False
 
 
-def _jwks_url() -> str:
-    return get_env("CLERK_JWKS_URL") or _DEFAULT_JWKS_URL
+def _strip_env_credential(value: str) -> str:
+    return value.strip().strip('"').strip("'")
+
+
+def _get_sk_secret() -> str:
+    """Return a Clerk secret key (sk_test_* / sk_live_*), never a publishable key."""
+    raw = _strip_env_credential(get_env("CLERK_SECRET_KEY"))
+    if raw.startswith("sk_"):
+        return raw
+    return ""
+
+
+def _get_publishable_key() -> str:
+    """Return a Clerk publishable key (pk_test_* / pk_live_*)."""
+    raw = _strip_env_credential(get_env("CLERK_PUBLISHABLE_KEY"))
+    if raw.startswith("pk_"):
+        return raw
+
+    # Common misconfiguration: publishable key pasted into CLERK_SECRET_KEY.
+    wrong_slot = _strip_env_credential(get_env("CLERK_SECRET_KEY"))
+    if wrong_slot.startswith("pk_"):
+        logger.warning(
+            "CLERK_SECRET_KEY contains a publishable key (pk_*). "
+            "Set sk_* in CLERK_SECRET_KEY for Backend API calls; "
+            "set pk_* in CLERK_PUBLISHABLE_KEY for JWT verification."
+        )
+        return wrong_slot
+    return ""
 
 
 def _pem_public_key() -> str | None:
@@ -59,7 +82,6 @@ def _pem_public_key() -> str | None:
     pem = get_env("CLERK_JWT_KEY")
     if not pem:
         return None
-    # Env vars often store the PEM with escaped newlines.
     return pem.replace("\\n", "\n")
 
 
@@ -70,107 +92,159 @@ def _authorized_parties() -> frozenset[str]:
     return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
 
-def _clerk_verification_available() -> bool:
-    """True when the server can cryptographically verify Clerk tokens.
+def _frontend_api_domain_from_publishable(publishable_key: str) -> str | None:
+    """Decode the Clerk instance domain embedded in a publishable key."""
+    try:
+        parts = publishable_key.split("_", 2)
+        if len(parts) < 3:
+            return None
+        encoded = parts[2]
+        padding = "=" * (-len(encoded) % 4)
+        domain = base64.urlsafe_b64decode(encoded + padding).decode("utf-8").rstrip("$")
+        return domain or None
+    except Exception as exc:
+        logger.debug("Could not decode Clerk publishable key domain: %s", exc)
+        return None
 
-    Verification needs either a PEM public key (networkless) or a secret key to
-    fetch the JWKS. When neither is configured we MUST fail closed.
+
+def _jwks_sources() -> list[tuple[str, dict[str, str] | None]]:
+    """Ordered JWKS sources for session-token verification.
+
+    Session tokens from Clerk frontend SDKs are signed with the instance's
+    Frontend API keys (public JWKS). Backend API JWKS requires sk_* and is
+    tried as a fallback when available.
     """
-    return bool(_pem_public_key() or get_env("CLERK_SECRET_KEY"))
+    sources: list[tuple[str, dict[str, str] | None]] = []
+
+    custom = get_env("CLERK_JWKS_URL")
+    if custom:
+        headers: dict[str, str] | None = None
+        sk = _get_sk_secret()
+        if sk and "api.clerk.com" in custom:
+            headers = {"Authorization": f"Bearer {sk}"}
+        sources.append((custom, headers))
+
+    publishable = _get_publishable_key()
+    if publishable:
+        domain = _frontend_api_domain_from_publishable(publishable)
+        if domain:
+            sources.append((f"https://{domain}/.well-known/jwks.json", None))
+
+    sk = _get_sk_secret()
+    if sk:
+        sources.append((_DEFAULT_BACKEND_JWKS_URL, {"Authorization": f"Bearer {sk}"}))
+
+    return sources
 
 
-def _fetch_jwks() -> dict[str, Any]:
-    url = _jwks_url()
-    headers = {"Accept": "application/json"}
-    secret = get_env("CLERK_SECRET_KEY")
-    # The Backend API JWKS endpoint requires the secret key; the public
-    # Frontend API (`/.well-known/jwks.json`) does not.
-    if secret and "api.clerk.com" in url:
-        headers["Authorization"] = f"Bearer {secret}"
-    resp = requests.get(url, headers=headers, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
-    if not isinstance(data, dict):
-        raise ValueError("Unexpected JWKS response")
-    return data
+def _clerk_verification_available() -> bool:
+    """True when the server can cryptographically verify Clerk session tokens."""
+    return bool(
+        _pem_public_key()
+        or _get_sk_secret()
+        or _get_publishable_key()
+        or get_env("CLERK_JWKS_URL")
+    )
 
 
-def _load_signing_keys(*, force: bool = False) -> dict[str, Any]:
-    global _jwks_fetched_at
-    with _jwks_lock:
-        is_fresh = (time.time() - _jwks_fetched_at) < _JWKS_TTL_SECONDS
-        if _jwks_keys and is_fresh and not force:
-            return dict(_jwks_keys)
+def _get_jwk_client(url: str, headers: dict[str, str] | None) -> PyJWKClient:
+    with _jwk_clients_lock:
+        client = _jwk_clients.get(url)
+        if client is None:
+            client = PyJWKClient(url, headers=headers, cache_keys=True)
+            _jwk_clients[url] = client
+        return client
 
+
+def _issuer_jwks_url(token: str) -> str | None:
+    try:
+        claims = jwt.decode(
+            token,
+            options={
+                "verify_signature": False,
+                "verify_exp": False,
+                "verify_nbf": False,
+                "verify_aud": False,
+            },
+        )
+    except jwt.PyJWTError:
+        return None
+
+    iss = claims.get("iss") if isinstance(claims, dict) else None
+    if not isinstance(iss, str) or not iss.startswith("https://"):
+        return None
+    return iss.rstrip("/") + "/.well-known/jwks.json"
+
+
+def _resolve_signing_key(token: str) -> tuple[Any, list[str]]:
+    pem = _pem_public_key()
+    if pem:
+        return pem, ["RS256"]
+
+    errors: list[str] = []
+    tried: set[str] = set()
+
+    def _try_url(url: str, headers: dict[str, str] | None) -> tuple[Any, list[str]] | None:
+        if not url or url in tried:
+            return None
+        tried.add(url)
         try:
-            data = _fetch_jwks()
+            client = _get_jwk_client(url, headers)
+            jwk = client.get_signing_key_from_jwt(token)
+            algorithm = jwk.algorithm_name or "RS256"
+            return jwk.key, [algorithm]
         except Exception as exc:
-            logger.warning("Clerk JWKS fetch failed: %s", exc)
-            # Fall back to whatever we already cached (may be empty).
-            return dict(_jwks_keys)
+            errors.append(f"{url}: {exc}")
+            logger.debug("Clerk JWKS lookup failed url=%s err=%s", url, exc)
+            return None
 
-        keys: dict[str, Any] = {}
-        for entry in data.get("keys", []):
-            kid = entry.get("kid")
-            if not kid:
-                continue
-            try:
-                keys[kid] = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(entry))
-            except Exception as exc:  # malformed key entry — skip it
-                logger.debug("Skipping unusable JWKS entry %s: %s", kid, exc)
+    for url, headers in _jwks_sources():
+        resolved = _try_url(url, headers)
+        if resolved is not None:
+            return resolved
 
-        if keys:
-            _jwks_keys.clear()
-            _jwks_keys.update(keys)
-            _jwks_fetched_at = time.time()
-        return dict(_jwks_keys)
+    iss_url = _issuer_jwks_url(token)
+    if iss_url:
+        resolved = _try_url(iss_url, None)
+        if resolved is not None:
+            return resolved
 
-
-def _signing_key_for_kid(kid: str) -> Any | None:
-    keys = _load_signing_keys()
-    if kid not in keys:
-        # Key may have rotated since the last fetch — refetch once.
-        keys = _load_signing_keys(force=True)
-    return keys.get(kid)
+    logger.warning(
+        "Clerk JWT verification: no signing key found (sources=%s errors=%s)",
+        list(tried),
+        errors[:3],
+    )
+    raise HTTPException(status_code=401, detail="Invalid authorization token")
 
 
 def _verify_jwt(token: str) -> dict[str, Any]:
-    """Verify a Clerk session token's RS256 signature and return its claims.
-
-    Raises HTTP 401 on any signature, structure, or expiry failure.
-    """
+    """Verify a Clerk session token's signature and return its claims."""
     try:
         header = jwt.get_unverified_header(token)
-    except Exception as exc:
+    except jwt.PyJWTError as exc:
         raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
 
-    if header.get("alg") != "RS256":
-        # Reject anything that isn't Clerk's RS256 (notably "none" / HS* downgrade).
+    alg = header.get("alg")
+    if not isinstance(alg, str) or alg.lower() == "none":
         raise HTTPException(status_code=401, detail="Invalid authorization token")
 
-    pem = _pem_public_key()
-    if pem:
-        signing_key: Any = pem
-    else:
-        kid = header.get("kid")
-        if not kid:
-            raise HTTPException(status_code=401, detail="Invalid authorization token")
-        signing_key = _signing_key_for_kid(kid)
-        if signing_key is None:
-            logger.warning("Clerk JWT verification: no signing key for kid=%s", kid)
-            raise HTTPException(status_code=401, detail="Invalid authorization token")
-
     try:
+        signing_key, algorithms = _resolve_signing_key(token)
         payload = jwt.decode(
             token,
             signing_key,
-            algorithms=["RS256"],
+            algorithms=algorithms,
             leeway=5,
             options={"verify_aud": False},
         )
+    except HTTPException:
+        raise
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(status_code=401, detail="Token expired") from exc
     except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+    except Exception as exc:
+        logger.exception("Clerk JWT verification failed unexpectedly")
         raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
 
     if not isinstance(payload, dict):
@@ -216,9 +290,11 @@ def _has_paid_access(metadata: dict[str, Any]) -> bool:
 
 
 def _fetch_clerk_public_metadata(user_id: str) -> dict[str, Any]:
-    secret = get_env("CLERK_SECRET_KEY")
+    secret = _get_sk_secret()
     if not secret:
-        logger.debug("Clerk plan check: CLERK_SECRET_KEY missing, skipping user lookup")
+        logger.debug(
+            "Clerk plan check: no sk_* secret configured; skipping user metadata lookup"
+        )
         return {}
 
     try:
@@ -240,7 +316,12 @@ def _fetch_clerk_public_metadata(user_id: str) -> dict[str, Any]:
         )
         raise HTTPException(status_code=401, detail="Invalid authorization token")
 
-    payload = resp.json()
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        logger.warning("Clerk user lookup returned non-JSON for %s", user_id)
+        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+
     metadata = _extract_public_metadata(payload if isinstance(payload, dict) else {})
     logger.info(
         "Clerk plan check: user=%s api_metadata=%s api_plan=%s",
@@ -264,12 +345,22 @@ def get_plan_from_request(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     token = auth_header.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     logger.info(
         "Clerk plan check: path=%s token_length=%s",
         request.url.path,
         len(token),
     )
-    payload = _verify_jwt(token)
+
+    try:
+        payload = _verify_jwt(token)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Clerk plan check failed while verifying JWT for %s", request.url.path)
+        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
 
     sub = payload.get("sub")
     if not isinstance(sub, str) or not sub:
@@ -308,12 +399,10 @@ def get_plan_from_request(request: Request) -> str:
 
 
 def assert_company_intelligence_access(request: Request) -> None:
-    # FAIL CLOSED: without a way to cryptographically verify Clerk tokens we
-    # cannot trust any plan claim, so deny access instead of granting it.
     if not _clerk_verification_available():
         logger.error(
-            "Clerk plan gate FAIL-CLOSED for %s: neither CLERK_SECRET_KEY nor "
-            "CLERK_JWT_KEY is configured",
+            "Clerk plan gate FAIL-CLOSED for %s: configure CLERK_SECRET_KEY (sk_*), "
+            "CLERK_PUBLISHABLE_KEY (pk_*), CLERK_JWT_KEY, or CLERK_JWKS_URL",
             request.url.path,
         )
         raise HTTPException(
@@ -329,7 +418,14 @@ def assert_company_intelligence_access(request: Request) -> None:
         bool(auth_header),
     )
 
-    plan = get_plan_from_request(request)
+    try:
+        plan = get_plan_from_request(request)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Clerk plan gate failed unexpectedly for %s", request.url.path)
+        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+
     allowed = plan in PAID_PLANS
     logger.info(
         "Clerk plan gate: path=%s plan=%s allowed=%s",
