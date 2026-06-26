@@ -36,6 +36,9 @@ def is_company_intelligence_path(path: str) -> bool:
 
 def requires_company_intelligence_access(request: Request) -> bool:
     path = request.url.path
+    # Public catalog — paginated company list only; all other /api/companies/* routes stay gated.
+    if request.method == "GET" and path == "/api/companies":
+        return False
     if is_company_intelligence_path(path):
         return True
     if path == "/api/early-signals" and request.query_params.get("company_id"):
