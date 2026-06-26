@@ -47,6 +47,28 @@ def requires_company_intelligence_access(request: Request) -> bool:
     return False
 
 
+def _read_authorization_header(request: Request) -> str:
+    value = request.headers.get("Authorization")
+    if not value:
+        return ""
+    return value.strip() if isinstance(value, str) else str(value).strip()
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    auth_header = _read_authorization_header(request)
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.removeprefix("Bearer ").strip()
+    return token or None
+
+
+def _require_bearer_token(request: Request) -> str:
+    token = _extract_bearer_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return token
+
+
 def _strip_env_credential(value: str) -> str:
     return value.strip().strip('"').strip("'")
 
@@ -332,21 +354,16 @@ def _fetch_clerk_public_metadata(user_id: str) -> dict[str, Any]:
     return metadata
 
 
-def get_plan_from_request(request: Request) -> str:
-    auth_header = request.headers.get("Authorization", "")
+def get_user_plan(request: Request) -> str:
+    """Resolve the caller's subscription plan from a verified Clerk session token."""
+    auth_header = _read_authorization_header(request)
     logger.info(
         "Clerk plan check: path=%s authorization_present=%s bearer=%s",
         request.url.path,
         bool(auth_header),
         auth_header.startswith("Bearer "),
     )
-    if not auth_header.startswith("Bearer "):
-        logger.info("Clerk plan check: missing Authorization header for %s", request.url.path)
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    token = auth_header.removeprefix("Bearer ").strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Authentication required")
+    token = _require_bearer_token(request)
 
     logger.info(
         "Clerk plan check: path=%s token_length=%s",
@@ -398,7 +415,15 @@ def get_plan_from_request(request: Request) -> str:
     return api_plan if api_plan in PAID_PLANS else api_role
 
 
+# Backwards-compatible alias used by existing imports.
+get_plan_from_request = get_user_plan
+
+
 def assert_company_intelligence_access(request: Request) -> None:
+    # Fail fast on missing auth before any JWT/JWKS work that could raise
+    # uncaught exceptions from sync code invoked by async middleware.
+    _require_bearer_token(request)
+
     if not _clerk_verification_available():
         logger.error(
             "Clerk plan gate FAIL-CLOSED for %s: configure CLERK_SECRET_KEY (sk_*), "
@@ -419,7 +444,7 @@ def assert_company_intelligence_access(request: Request) -> None:
     )
 
     try:
-        plan = get_plan_from_request(request)
+        plan = get_user_plan(request)
     except HTTPException:
         raise
     except Exception as exc:
