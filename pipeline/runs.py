@@ -73,7 +73,8 @@ def _execute_tracked_worker(
             status = "skipped"
     except Exception as exc:
         status = "failed"
-        error = str(exc)
+        message = str(exc).strip()
+        error = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
         logger.exception(
             "[Pipeline/%s] Failed run_id=%s pipeline_run_id=%s",
             step,
