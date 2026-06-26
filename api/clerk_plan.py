@@ -34,10 +34,26 @@ def is_company_intelligence_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in COMPANY_INTEL_PATH_PREFIXES)
 
 
+def is_public_company_intelligence_get(path: str, method: str) -> bool:
+    """GET routes that skip JWT/plan gate (voice agent, public profile views)."""
+    if method != "GET":
+        return False
+    if path == "/api/companies":
+        return True
+    if path.startswith("/api/competitive-intelligence/"):
+        return True
+    for prefix in ("/api/companies/", "/api/arch-companies/"):
+        if not path.startswith(prefix) or not path.endswith("/competitive-intelligence"):
+            continue
+        slug = path[len(prefix) : -len("/competitive-intelligence")]
+        if slug.isdigit() or (slug.startswith("id/") and slug[3:].isdigit()):
+            return True
+    return False
+
+
 def requires_company_intelligence_access(request: Request) -> bool:
     path = request.url.path
-    # Public catalog — paginated company list only; all other /api/companies/* routes stay gated.
-    if request.method == "GET" and path == "/api/companies":
+    if is_public_company_intelligence_get(path, request.method):
         return False
     if is_company_intelligence_path(path):
         return True
