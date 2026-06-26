@@ -25,6 +25,7 @@ from pipeline.runs import (
     start_run,
 )
 from scraper.runners import (
+    run_burnaby_permits_scraper,
     run_building_permits_scraper,
     run_commercial_scraper,
     run_federal_scraper,
@@ -33,6 +34,7 @@ from scraper.runners import (
     run_merx_scraper,
     run_news_scraper,
     run_reddit_scraper,
+    run_surrey_permits_scraper,
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -43,6 +45,15 @@ class InternalRunRequest(BaseModel):
         default=None,
         max_length=36,
         description="Optional shared run id for grouping steps in n8n orchestration.",
+    )
+
+
+class InternalScrapeRunRequest(InternalRunRequest):
+    days: int | None = Field(
+        default=7,
+        ge=1,
+        le=365,
+        description="Incremental window in days; set null for a full historical load.",
     )
 
 
@@ -179,6 +190,50 @@ def scrape_building_permits(
         "scrape-building-permits",
         run_building_permits_scraper,
         body.run_id if body else None,
+    )
+
+
+@router.post("/scrape/surrey-permits")
+def scrape_surrey_permits(
+    background_tasks: BackgroundTasks,
+    body: InternalScrapeRunRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+    request = body or InternalScrapeRunRequest()
+    worker = lambda: run_surrey_permits_scraper(days=request.days)
+    if sync:
+        return _run_step_sync("scrape-surrey-permits", worker, request.run_id)
+    return _enqueue_step(
+        background_tasks,
+        "scrape-surrey-permits",
+        worker,
+        request.run_id,
+    )
+
+
+@router.post("/scrape/burnaby-permits")
+def scrape_burnaby_permits(
+    background_tasks: BackgroundTasks,
+    body: InternalScrapeRunRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+    request = body or InternalScrapeRunRequest()
+    worker = lambda: run_burnaby_permits_scraper(days=request.days)
+    if sync:
+        return _run_step_sync("scrape-burnaby-permits", worker, request.run_id)
+    return _enqueue_step(
+        background_tasks,
+        "scrape-burnaby-permits",
+        worker,
+        request.run_id,
     )
 
 
