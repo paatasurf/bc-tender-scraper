@@ -23,6 +23,18 @@ COMPANY_INTEL_PATH_PREFIXES = (
     "/api/company-wiki",
 )
 
+PUBLIC_GET_PATH_PREFIXES = (
+    "/api/companies",
+    "/api/arch-companies",
+    "/api/competitive-intelligence",
+    "/api/company-wiki",
+    "/api/permits",
+    "/api/early-signals",
+    "/api/signals",
+    "/api/tenders",
+    "/api/contract-awards",
+)
+
 UPGRADE_DETAIL = "Company Intelligence requires a Basic or Pro plan."
 PAID_PLANS = frozenset({"basic", "pro", "admin"})
 
@@ -34,32 +46,22 @@ def is_company_intelligence_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in COMPANY_INTEL_PATH_PREFIXES)
 
 
-def is_public_company_intelligence_get(path: str, method: str) -> bool:
-    """GET routes that skip JWT/plan gate (voice agent, public profile views)."""
+def _matches_path_prefix(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def is_public_get_path(path: str, method: str) -> bool:
+    """GET routes that skip JWT/plan gate (public dashboard data)."""
     if method != "GET":
         return False
-    if path == "/api/companies":
-        return True
-    if path.startswith("/api/competitive-intelligence/"):
-        return True
-    for prefix in ("/api/companies/", "/api/arch-companies/"):
-        if not path.startswith(prefix) or not path.endswith("/competitive-intelligence"):
-            continue
-        slug = path[len(prefix) : -len("/competitive-intelligence")]
-        if slug.isdigit() or (slug.startswith("id/") and slug[3:].isdigit()):
-            return True
-    return False
+    return any(_matches_path_prefix(path, prefix) for prefix in PUBLIC_GET_PATH_PREFIXES)
 
 
 def requires_company_intelligence_access(request: Request) -> bool:
     path = request.url.path
-    if is_public_company_intelligence_get(path, request.method):
+    if is_public_get_path(path, request.method):
         return False
     if is_company_intelligence_path(path):
-        return True
-    if path == "/api/early-signals" and request.query_params.get("company_id"):
-        return True
-    if path == "/api/contract-awards" and request.query_params.get("company_id"):
         return True
     if path == "/api/ai-matching":
         return True
