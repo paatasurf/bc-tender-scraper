@@ -30,6 +30,45 @@ def test_enqueue_step_returns_int_pipeline_run_id():
     assert payload["poll_url"] == "/internal/steps/123"
 
 
+def test_arch_company_intelligence_sync_returns_completion_payload():
+    """Arch n8n workflows can request blocking execution, matching ai-scoring."""
+    background_tasks = MagicMock()
+    request = internal_api.InternalRunRequest(run_id="run-arch")
+
+    with patch("api.internal._require_manual_pipeline"):
+        with patch("api.internal.execute_tracked_step") as execute_tracked_step:
+            execute_tracked_step.return_value = {
+                "id": 456,
+                "status": "success",
+                "started_at": "2026-06-26T10:00:00+00:00",
+                "finished_at": "2026-06-26T10:01:00+00:00",
+                "error": "",
+                "counts": {"arch_companies_populated": 12},
+            }
+
+            payload = internal_api.arch_company_intelligence(
+                background_tasks,
+                request,
+                sync=True,
+            )
+
+    execute_tracked_step.assert_called_once()
+    assert execute_tracked_step.call_args.args[0] == "arch-company-intelligence"
+    assert payload == {
+        "status": "success",
+        "run_id": "run-arch",
+        "step": "arch-company-intelligence",
+        "pipeline_run_id": 456,
+        "poll_url": "/internal/steps/456",
+        "run_poll_url": "/internal/runs/run-arch",
+        "started_at": "2026-06-26T10:00:00+00:00",
+        "finished_at": "2026-06-26T10:01:00+00:00",
+        "error": "",
+        "counts": {"arch_companies_populated": 12},
+    }
+    background_tasks.add_task.assert_not_called()
+
+
 def test_background_internal_routes_allow_non_string_response_fields():
     """FastAPI validates route return types; int fields must not use dict[str, str]."""
     for name, func in inspect.getmembers(internal_api, inspect.isfunction):
