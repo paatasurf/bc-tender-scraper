@@ -392,6 +392,13 @@ def _ensure_ai_columns(engine) -> None:
         "ALTER TABLE permits ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'vancouver'",
         "ALTER TABLE permits ADD COLUMN IF NOT EXISTS city VARCHAR(100) DEFAULT 'Vancouver'",
         "ALTER TABLE permits ADD COLUMN IF NOT EXISTS external_id VARCHAR(100) DEFAULT ''",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS application_date VARCHAR(20) DEFAULT ''",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS contractor VARCHAR(300) DEFAULT ''",
+        "ALTER TABLE permits ADD COLUMN IF NOT EXISTS local_area VARCHAR(100) DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_permits_application_date "
+        "ON permits (application_date) WHERE application_date <> ''",
+        "CREATE INDEX IF NOT EXISTS ix_permits_local_area "
+        "ON permits (local_area) WHERE local_area <> ''",
         "CREATE INDEX IF NOT EXISTS ix_permits_source ON permits (source)",
         "CREATE INDEX IF NOT EXISTS ix_permits_city ON permits (city)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_permits_source_external_id "
