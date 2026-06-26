@@ -30,6 +30,36 @@ def test_enqueue_step_returns_int_pipeline_run_id():
     assert payload["poll_url"] == "/internal/steps/123"
 
 
+def test_import_route_supports_sync_response():
+    result = {
+        "status": "success",
+        "id": 456,
+        "started_at": "2026-06-26T10:00:00+00:00",
+        "finished_at": "2026-06-26T10:00:05+00:00",
+        "error": "",
+        "counts": {"tenders": 3},
+    }
+
+    with patch("api.internal._require_manual_pipeline"):
+        with patch("api.internal.execute_tracked_step", return_value=result) as execute_tracked_step:
+            payload = internal_api.import_csvs(
+                MagicMock(),
+                internal_api.InternalRunRequest(run_id="run-import"),
+                sync=True,
+            )
+
+    execute_tracked_step.assert_called_once_with(
+        "import-csvs",
+        internal_api.run_import_step,
+        run_id="run-import",
+    )
+    assert payload["status"] == "success"
+    assert payload["step"] == "import-csvs"
+    assert payload["pipeline_run_id"] == 456
+    assert payload["counts"] == {"tenders": 3}
+    assert payload["poll_url"] == "/internal/steps/456"
+
+
 def test_background_internal_routes_allow_non_string_response_fields():
     """FastAPI validates route return types; int fields must not use dict[str, str]."""
     for name, func in inspect.getmembers(internal_api, inspect.isfunction):

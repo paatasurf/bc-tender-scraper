@@ -257,13 +257,20 @@ def import_contract_awards_route(
 def import_csvs(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run to completion and return counts instead of starting a background job.",
+    ),
 ) -> dict[str, Any]:
     _require_manual_pipeline()
+    run_id = body.run_id if body else None
+    if sync:
+        return _run_step_sync("import-csvs", run_import_step, run_id)
     return _enqueue_step(
         background_tasks,
         "import-csvs",
         run_import_step,
-        body.run_id if body else None,
+        run_id,
     )
 
 
