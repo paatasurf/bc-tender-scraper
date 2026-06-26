@@ -193,11 +193,18 @@ def list_tenders(
 def list_permits(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    city: str | None = Query(None, max_length=100),
 ) -> dict[str, Any]:
     session = get_session()
     try:
-        total = session.scalar(select(func.count()).select_from(Permit)) or 0
-        rows = session.scalars(select(Permit).order_by(Permit.id.desc()).offset(offset).limit(limit)).all()
+        query = select(Permit)
+        count_query = select(func.count()).select_from(Permit)
+        if city and city.strip():
+            city_value = city.strip().title()
+            query = query.where(Permit.city == city_value)
+            count_query = count_query.where(Permit.city == city_value)
+        total = session.scalar(count_query) or 0
+        rows = session.scalars(query.order_by(Permit.id.desc()).offset(offset).limit(limit)).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
     finally:
         session.close()
