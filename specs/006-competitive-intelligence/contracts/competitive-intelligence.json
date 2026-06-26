@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/companies/{company_id}/competitive-intelligence",
+  "description": "Consolidated competitive intelligence response for company profiles. Threat score MUST equal sum of breakdown component points. Architecture route mirrors shape under /api/arch-companies/{company_id}/competitive-intelligence.",
+  "type": "object",
+  "required": [
+    "company_id",
+    "kind",
+    "engine_version",
+    "computed_at",
+    "market",
+    "benchmark",
+    "top_competitors"
+  ],
+  "properties": {
+    "company_id": { "type": "integer" },
+    "kind": { "enum": ["construction", "architecture"] },
+    "engine_version": { "const": "competitive_intel_v1" },
+    "computed_at": { "type": "string", "format": "date-time" },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Includes insufficient_market_data when fewer than 3 peers"
+    },
+    "market": {
+      "type": "object",
+      "required": ["definition", "definition_key", "cohort_size", "data_scope"],
+      "properties": {
+        "definition": { "type": "string" },
+        "definition_key": {
+          "enum": ["sector_and_city", "sector_only_widened"]
+        },
+        "cohort_size": { "type": "integer", "minimum": 0 },
+        "data_scope": {
+          "const": "vancouver_permits_and_public_awards"
+        }
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "required": ["metrics"],
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/BenchmarkMetric" }
+        }
+      }
+    },
+    "top_competitors": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/TopCompetitor" }
+    }
+  },
+  "$defs": {
+    "BreakdownComponent": {
+      "type": "object",
+      "required": ["factor", "label", "points", "max_points", "detail"],
+      "properties": {
+        "factor": {
+          "enum": [
+            "geographic_overlap",
+            "category_overlap",
+            "value_overlap",
+            "award_activity",
+            "permit_activity"
+          ]
+        },
+        "label": { "type": "string" },
+        "points": { "type": "integer", "minimum": 0 },
+        "max_points": { "type": "integer" },
+        "detail": { "type": "string" }
+      }
+    },
+    "ThreatBreakdown": {
+      "type": "object",
+      "required": ["score", "score_label", "breakdown", "reasons", "confidence"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "MUST equal sum(breakdown[].points)"
+        },
+        "score_label": { "const": "Competitive Threat Score" },
+        "rank_key": { "type": "number" },
+        "breakdown": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/BreakdownComponent" }
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "confidence": { "enum": ["high", "medium", "low"] }
+      }
+    },
+    "TopCompetitor": {
+      "type": "object",
+      "required": [
+        "company_id",
+        "name",
+        "company_kind",
+        "threat_score",
+        "threat_breakdown",
+        "similarity"
+      ],
+      "properties": {
+        "company_id": { "type": "integer" },
+        "name": { "type": "string" },
+        "company_kind": { "enum": ["construction", "architecture"] },
+        "threat_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "threat_breakdown": { "$ref": "#/$defs/ThreatBreakdown" },
+        "similarity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "total_projects": { "type": "integer" },
+        "total_value": { "type": "number" },
+        "award_count": {
+          "type": ["integer", "null"],
+          "description": "null for architecture kind"
+        }
+      }
+    },
+    "BenchmarkMetric": {
+      "type": "object",
+      "required": ["key", "label", "company", "market_median", "top_competitor_median", "unit"],
+      "properties": {
+        "key": {
+          "enum": [
+            "total_projects",
+            "total_value",
+            "avg_project_value",
+            "award_count",
+            "ai_reliability_score"
+          ]
+        },
+        "label": { "type": "string" },
+        "company": { "type": ["number", "null"] },
+        "market_median": { "type": ["number", "null"] },
+        "top_competitor_median": { "type": ["number", "null"] },
+        "unit": { "enum": ["count", "currency", "score"] },
+        "not_applicable": { "type": "boolean" }
+      }
+    }
+  }
+}

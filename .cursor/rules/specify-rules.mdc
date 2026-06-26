@@ -14,6 +14,7 @@ Constitution (`.specify/memory/constitution.md` v1.0.0) — non-negotiable:
 4. API: consistent JSON response structures across all endpoints
 5. Scoring logic: Python only — not in prompts or frontend
 
-Active spec: `specs/005-async-opportunity-snapshots/spec.md`
-Prior: `specs/004-scope-opportunities-db-sessions/plan.md`, `specs/003-fix-railway-startup/plan.md`, `specs/002-construction-deterministic-score/plan.md`, `specs/001-deterministic-ai-match/plan.md`
+Active spec: `specs/006-competitive-intelligence/spec.md`
+Active plan: `specs/006-competitive-intelligence/plan.md`
+Prior: `specs/005-async-opportunity-snapshots/spec.md`, `specs/004-scope-opportunities-db-sessions/plan.md`, `specs/003-fix-railway-startup/plan.md`, `specs/002-construction-deterministic-score/plan.md`, `specs/001-deterministic-ai-match/plan.md`
 <!-- SPECKIT END -->

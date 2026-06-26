@@ -1,0 +1,64 @@
+---
+description: HyperFrames product film — production craft bar (emotional impact, not feature demo)
+globs: v0-construction-dashboard/hyperframes/**,v0-construction-dashboard/components/animations/**,v0-construction-dashboard/public/hyperframes/**,v0-construction-dashboard/lib/bc-mock-data.ts
+alwaysApply: false
+---
+
+# HyperFrames film production
+
+Architecture is locked: film structure, scene order, messaging, philosophy, storyboard, motion language — do not change.
+
+From production onward, optimize for **emotional impact**, not feature presentation.
+
+Every module must feel like a **premium film sequence**, not a dashboard demo.
+
+- Remove anything that looks like an admin interface unless absolutely necessary to communicate the approved idea.
+- **Typography, light, timing, silence, and composition** carry the story.
+- **UI is supporting evidence, never the main subject.**
+
+## Black frame test
+
+Every module must pass the **black frame test**:
+
+If every UI element disappears for one second, the scene must still communicate its idea through timing, typography, composition, light, and silence.
+
+**UI proves the idea. It never creates the idea.**
+
+Before shipping any module: mentally remove all UI for 1s — if the message collapses, the module fails.
+
+## Mock data realism
+
+Every piece of placeholder data must reinforce realism.
+
+- Never duplicate the same project, city, owner, or value unless the duplication is **meaningful** (e.g. same company appearing in Companies vs Intelligence).
+- Every visible row represents a **different** project or signal.
+- Even in mock data, the dashboard must feel like a **living intelligence system**, not a UI template.
+- City/region level only — no street addresses.
+- Source: `lib/bc-mock-data.ts` — single source for landing mock and animation lab rows.
+
+## Cinematic visual language
+
+Production target: **premium cinematic product film** — not animated interface mockups.
+
+Every frame should feel **poster-worthy** (Apple launch / luxury brand film).
+
+| Reduce | Increase |
+|--------|----------|
+| UI chrome, cards, pills, tag rows, product glow | Atmosphere, depth, negative space |
+| Simultaneous readable widgets | Lighting quality, composition, restraint |
+| Decorative motion | Silence, hold, typographic presence |
+
+**Field grammar** (all modules): `field-base` → `key-light` → `fill-light` → `vignette` → content.  
+Reference: `hyperframes/shared/film-visual-language.ts` + existing module compositions.
+
+- Key light from above — briefing room, not dashboard highlight.
+- Vignette frames the statement; 50%+ void in headline modules.
+- Type uses film shadow (depth), never glow or bounce.
+- Whispers / evidence: peripheral, ghosted — not navigation or tags.
+- **Remember images, not interface elements.**
+
+Production question: not *“What should happen?”* — *“Does this feel world-class?”*
+
+Priority order: typography → motion → timing → lighting → composition → polish.
+
+Execute the approved storyboard only. No new ideas. No story improvements.

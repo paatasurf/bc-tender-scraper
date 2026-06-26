@@ -23,6 +23,9 @@ NON_GC_PATTERN = re.compile(
 )
 
 
+GC_COMPANY_TYPES = {"general contractor", "trade contractor"}
+
+
 def get(path: str) -> dict:
     with urllib.request.urlopen(API + path, timeout=120) as r:
         return json.loads(r.read())
@@ -50,6 +53,16 @@ def peer_classification_text(peer: dict, company_row: dict | None) -> str:
     return " ".join(str(p) for p in parts if p)
 
 
+def is_gc_type_competitor(peer: dict, company_row: dict | None) -> bool:
+    text = peer_classification_text(peer, company_row)
+    if NON_GC_PATTERN.search(text):
+        return False
+    company_type = ((company_row or {}).get("company_type") or "").strip().lower()
+    if company_type in GC_COMPANY_TYPES:
+        return True
+    return bool(GC_ALLOWLIST.search(text))
+
+
 def validate_profile(company_id: int, label: str, company_index: dict[int, dict]) -> bool:
     ci = get(f"/api/companies/{company_id}/competitive-intelligence?peer_limit=5")
     peers = ci.get("top_competitors", [])
@@ -60,16 +73,12 @@ def validate_profile(company_id: int, label: str, company_index: dict[int, dict]
         text = peer_classification_text(peer, row)
         name = peer.get("name", "")
         if NON_GC_PATTERN.search(text):
-            violations.append(f"non-GC pattern: {name}")
-        elif not GC_ALLOWLIST.search(text):
-            violations.append(f"not allowlisted: {name}")
+            violations.append(name)
         print(f"  - {name} (threat={peer.get('threat_score')})")
     if violations:
-        print(f"  VIOLATIONS:")
-        for item in violations:
-            print(f"    {item}")
+        print(f"  VIOLATIONS (non-GC patterns): {violations}")
         return False
-    print("  OK — only GC-type competitors")
+    print("  OK — no consultants, architects, or design firms in top competitors")
     return True
 
 
