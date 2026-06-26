@@ -552,6 +552,39 @@ def _ensure_bd_intelligence_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_company_wiki_table(engine) -> None:
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS company_wiki (
+            id                  SERIAL PRIMARY KEY,
+            company_id          INTEGER NOT NULL,
+            company_kind        VARCHAR(20) NOT NULL DEFAULT 'construction',
+            company_name        VARCHAR(300) NOT NULL DEFAULT '',
+            wiki_markdown       TEXT NOT NULL DEFAULT '',
+            summary             TEXT NOT NULL DEFAULT '',
+            specializations     TEXT NOT NULL DEFAULT '',
+            market_position     TEXT NOT NULL DEFAULT '',
+            geographic_focus    TEXT NOT NULL DEFAULT '',
+            competitive_profile TEXT NOT NULL DEFAULT '',
+            data_snapshot       JSONB,
+            model_used          VARCHAR(80) NOT NULL DEFAULT '',
+            generated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_company_wiki_company_kind "
+        "ON company_wiki (company_id, company_kind)",
+        "CREATE INDEX IF NOT EXISTS ix_company_wiki_generated_at "
+        "ON company_wiki (generated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_company_wiki_company_kind_col "
+        "ON company_wiki (company_kind)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_cip_columns(engine) -> None:
     statements = (
         "ALTER TABLE companies ADD COLUMN IF NOT EXISTS cip_json JSONB",
@@ -613,6 +646,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_company_award_columns(engine)
     _ensure_bd_intelligence_columns(engine)
     _ensure_cip_columns(engine)
+    _ensure_company_wiki_table(engine)
     _widen_commercial_text_columns(engine)
 
 

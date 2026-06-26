@@ -291,6 +291,28 @@ class ContractAward(Base):
     )
 
 
+class CompanyWiki(Base):
+    __tablename__ = "company_wiki"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="construction", index=True)
+    company_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    wiki_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    specializations: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    market_position: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    geographic_focus: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    competitive_profile: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    data_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    model_used: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ArchTender(Base):
     __tablename__ = "arch_tenders"
 
