@@ -44,3 +44,30 @@ def test_background_internal_routes_allow_non_string_response_fields():
         assert hints["return"] != dict[str, str], (
             f"{name} must return dict[str, Any] because _enqueue_step includes int pipeline_run_id"
         )
+
+
+def test_company_intelligence_sync_uses_tracked_sync_helper():
+    background_tasks = MagicMock()
+    expected = {
+        "status": "success",
+        "run_id": "run-company",
+        "step": "company-intelligence",
+        "pipeline_run_id": 456,
+        "counts": {"companies_populated": 3},
+    }
+
+    with patch("api.internal._require_manual_pipeline"):
+        with patch("api.internal._run_step_sync", return_value=expected) as run_step_sync:
+            payload = internal_api.company_intelligence(
+                background_tasks,
+                internal_api.InternalRunRequest(run_id="run-company"),
+                sync=True,
+            )
+
+    assert payload == expected
+    run_step_sync.assert_called_once_with(
+        "company-intelligence",
+        internal_api.run_company_intelligence_step,
+        "run-company",
+    )
+    background_tasks.add_task.assert_not_called()
