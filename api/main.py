@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -69,6 +69,22 @@ def _require_manual_pipeline() -> None:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
 
 
+def verify_internal_key(request: Request):
+    expected = os.getenv("INTERNAL_API_KEY")
+    if not expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    key = request.headers.get("X-Internal-Key")
+    if key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+pipeline_router = APIRouter(
+    prefix="/api/pipeline",
+    tags=["pipeline"],
+    dependencies=[Depends(verify_internal_key)],
+)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Bind HTTP port immediately; schema init runs in a background thread.
@@ -118,7 +134,7 @@ async def company_intelligence_plan_gate(request: Request, call_next):
     return await call_next(request)
 
 
-app.include_router(internal_router)
+app.include_router(internal_router, dependencies=[Depends(verify_internal_key)])
 app.include_router(admin_router)
 
 
@@ -959,7 +975,7 @@ def scrape_burnaby_permits_route(
         raise HTTPException(status_code=502, detail=f"Burnaby permits scrape failed: {exc}") from exc
 
 
-@app.get("/api/pipeline/status")
+@pipeline_router.get("/status")
 def pipeline_status() -> dict[str, Any]:
     runtime = get_pipeline_runtime_status()
     scheduler = scheduler_status()
@@ -1012,7 +1028,7 @@ def _run_arch_google_places() -> None:
         session.close()
 
 
-@app.post("/api/pipeline/run")
+@pipeline_router.post("/run")
 def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
@@ -1022,7 +1038,7 @@ def trigger_pipeline(background_tasks: BackgroundTasks) -> dict[str, str]:
     return {"status": "started"}
 
 
-@app.post("/api/pipeline/run-google-places")
+@pipeline_router.post("/run-google-places")
 def trigger_google_places(background_tasks: BackgroundTasks) -> dict[str, str]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
@@ -1031,13 +1047,16 @@ def trigger_google_places(background_tasks: BackgroundTasks) -> dict[str, str]:
     return {"status": "started"}
 
 
-@app.post("/api/pipeline/run-ai-scoring")
+@pipeline_router.post("/run-ai-scoring")
 def trigger_ai_scoring(background_tasks: BackgroundTasks) -> dict[str, str]:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
 
     background_tasks.add_task(_run_ai_scoring)
     return {"status": "started"}
+
+
+app.include_router(pipeline_router)
 
 
 class AIMatchingRequest(BaseModel):
