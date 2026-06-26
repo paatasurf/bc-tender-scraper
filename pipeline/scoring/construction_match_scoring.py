@@ -293,11 +293,13 @@ _PROVINCE_SEGMENT_RE = re.compile(r"\b(BC|British Columbia)\b", re.I)
 
 
 def _parse_city_from_address(address: str) -> str | None:
-    """Extract city from a Canadian address when primary_city is empty.
+    """Extract city from a city/province address when primary_city is empty.
 
-    e.g. "1827 W 5th Ave, Vancouver, BC V6J 1P5" → "vancouver"
+    Full street addresses are ignored so location matching stays city/region-level.
     """
     if not address or not address.strip():
+        return None
+    if _is_street_address(address):
         return None
     parts = [part.strip() for part in address.split(",") if part.strip()]
     if not parts:
