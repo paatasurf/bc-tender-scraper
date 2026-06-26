@@ -37,6 +37,7 @@ from db.models import (
     Tender,
 )
 from api.admin import router as admin_router
+from api.clerk_plan import assert_company_intelligence_access, requires_company_intelligence_access
 from api.internal import router as internal_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
@@ -76,6 +77,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def company_intelligence_plan_gate(request: Request, call_next):
+    if request.method == "OPTIONS" or not requires_company_intelligence_access(request):
+        return await call_next(request)
+
+    try:
+        assert_company_intelligence_access(request)
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    return await call_next(request)
+
 
 app.include_router(internal_router)
 app.include_router(admin_router)
