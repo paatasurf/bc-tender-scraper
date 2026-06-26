@@ -52,9 +52,15 @@ def test_execute_tracked_step_marks_failed_runs():
     def _boom() -> dict:
         raise RuntimeError("boom")
 
+    def _finish_run(_session, _record_id, status, *, counts=None, error=None):
+        record.status = status
+        record.error = error
+        record.counts_json = "{}"
+        return record
+
     with patch("pipeline.runs.get_session", return_value=session):
         with patch("pipeline.runs.start_run", return_value=record):
-            with patch("pipeline.runs.finish_run", return_value=record):
+            with patch("pipeline.runs.finish_run", side_effect=_finish_run):
                 result = execute_tracked_step("ai-scoring", _boom, run_id="run-fail")
 
     assert result["status"] == "failed"
@@ -78,9 +84,15 @@ def test_execute_tracked_step_records_exception_type_for_blank_message():
     def _blank_error() -> dict:
         raise RuntimeError()
 
+    def _finish_run(_session, _record_id, status, *, counts=None, error=None):
+        record.status = status
+        record.error = error
+        record.counts_json = "{}"
+        return record
+
     with patch("pipeline.runs.get_session", return_value=session):
         with patch("pipeline.runs.start_run", return_value=record):
-            with patch("pipeline.runs.finish_run", return_value=record):
+            with patch("pipeline.runs.finish_run", side_effect=_finish_run):
                 result = execute_tracked_step("import-csvs", _blank_error, run_id="run-blank-fail")
 
     assert result["status"] == "failed"
