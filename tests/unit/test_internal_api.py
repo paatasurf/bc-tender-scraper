@@ -6,6 +6,7 @@ import inspect
 from unittest.mock import MagicMock, patch
 
 from api import internal as internal_api
+from pipeline import internal_steps
 
 
 def test_enqueue_step_returns_int_pipeline_run_id():
@@ -44,3 +45,53 @@ def test_background_internal_routes_allow_non_string_response_fields():
         assert hints["return"] != dict[str, str], (
             f"{name} must return dict[str, Any] because _enqueue_step includes int pipeline_run_id"
         )
+
+
+def test_arch_google_places_sync_uses_tracked_step():
+    background_tasks = MagicMock()
+    body = internal_api.InternalRunRequest(run_id="run-123")
+
+    with patch("api.internal._require_manual_pipeline"):
+        with patch("api.internal._run_step_sync", return_value={"status": "success"}) as run_sync:
+            payload = internal_api.arch_google_places(background_tasks, body, sync=True)
+
+    assert payload == {"status": "success"}
+    run_sync.assert_called_once_with(
+        "arch-google-places",
+        internal_api.run_arch_google_places_step,
+        "run-123",
+    )
+    background_tasks.add_task.assert_not_called()
+
+
+def test_arch_google_places_async_enqueues_tracked_step():
+    background_tasks = MagicMock()
+
+    with patch("api.internal._require_manual_pipeline"):
+        with patch("api.internal._enqueue_step", return_value={"status": "started"}) as enqueue:
+            payload = internal_api.arch_google_places(background_tasks, None)
+
+    assert payload == {"status": "started"}
+    enqueue.assert_called_once_with(
+        background_tasks,
+        "arch-google-places",
+        internal_api.run_arch_google_places_step,
+        None,
+    )
+
+
+def test_run_arch_google_places_step_returns_counts_and_closes_session():
+    session = MagicMock()
+
+    with patch("pipeline.internal_steps.get_session", return_value=session):
+        with patch("pipeline.internal_steps.scrape_arch_companies_google", return_value=3) as scrape:
+            with patch("pipeline.internal_steps.enrich_arch_companies_google", return_value=5) as enrich:
+                counts = internal_steps.run_arch_google_places_step()
+
+    assert counts == {
+        "arch_companies_google_scraped": 3,
+        "arch_companies_google_enriched": 5,
+    }
+    scrape.assert_called_once_with(session)
+    enrich.assert_called_once_with(session)
+    session.close.assert_called_once_with()
