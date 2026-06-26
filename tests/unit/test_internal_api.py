@@ -69,7 +69,7 @@ def test_arch_google_places_async_enqueues_tracked_step():
 
     with patch("api.internal._require_manual_pipeline"):
         with patch("api.internal._enqueue_step", return_value={"status": "started"}) as enqueue:
-            payload = internal_api.arch_google_places(background_tasks, None)
+            payload = internal_api.arch_google_places(background_tasks, None, sync=False)
 
     assert payload == {"status": "started"}
     enqueue.assert_called_once_with(
