@@ -1,6 +1,7 @@
 .env
 .pipeline.lock
 pipeline.log
+indeed_cookies.txt
 __pycache__/
 *.py[cod]
 .venv/

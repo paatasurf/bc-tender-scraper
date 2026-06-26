@@ -54,6 +54,16 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return data
 
 
+def _require_manual_pipeline() -> None:
+    """Guard for operator-only scrape/pipeline endpoints.
+
+    These trigger expensive scrapes/imports, so they are disabled by default and
+    only enabled (for n8n automation) via ALLOW_MANUAL_PIPELINE.
+    """
+    if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Bind HTTP port immediately; schema init runs in a background thread.
@@ -899,6 +909,7 @@ def scrape_surrey_permits_route(
         description="Incremental window in days; omit for full historical load",
     ),
 ) -> dict[str, Any]:
+    _require_manual_pipeline()
     from scraper.surrey_permits import scrape_surrey_permits
 
     try:
@@ -916,6 +927,7 @@ def scrape_burnaby_permits_route(
         description="Incremental window in days; omit for full historical load",
     ),
 ) -> dict[str, Any]:
+    _require_manual_pipeline()
     from scraper.burnaby_permits import scrape_burnaby_permits
 
     try:

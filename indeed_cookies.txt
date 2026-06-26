@@ -1,8 +1,0 @@
-# Netscape HTTP Cookie File
-# https://curl.se/docs/http-cookies.html
-
-ca.indeed.com	FALSE	/	TRUE	0	INDEED_CSRF_TOKEN	KT8JuGUm7i2KSE9nfarXLr33M6fBWCw2
-ca.indeed.com	FALSE	/	FALSE	1815427998	indeed_rcc	LOCALE:LV
-ca.indeed.com	FALSE	/	TRUE	0	JSESSIONID	node0ctbsbk91vom112vsux31w8nmm9717124.node0
-ca.indeed.com	FALSE	/	FALSE	1815427960	LOCALE	en_CA
-ca.indeed.com	FALSE	/	FALSE	1815427998	LV	LA=1780867930:CV=1780867930:TS=1780867930
