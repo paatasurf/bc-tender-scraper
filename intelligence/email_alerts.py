@@ -150,7 +150,13 @@ def _render_competitors_section(competitors: list[dict[str, Any]]) -> str:
 
 def _render_early_signals_section(signals: list[dict[str, Any]]) -> str:
     if not signals:
-        return "<p><em>No new permit applications matched your regions this week.</em></p>"
+        return "<p><em>No early signals matched your regions this week.</em></p>"
+
+    type_labels = {
+        "permit_application": "Permit application",
+        "development_permit_application": "Development permit",
+        "rezoning_application": "Rezoning",
+    }
 
     items: list[str] = []
     for signal in signals[:MAX_EARLY_SIGNALS]:
@@ -160,14 +166,21 @@ def _render_early_signals_section(signals: list[dict[str, Any]]) -> str:
         applied = html.escape(str(signal.get("application_date") or "—"))
         issued = html.escape(str(signal.get("issue_date") or "—"))
         contractor = html.escape(str(signal.get("contractor") or ""))
-        permit_type = html.escape(str(signal.get("permit_type") or "Permit"))
+        signal_type = str(signal.get("signal_type") or "permit_application")
+        label = html.escape(type_labels.get(signal_type, "Early signal"))
+        title = html.escape(str(signal.get("title") or signal.get("permit_type") or label))
         lag = signal.get("pipeline_lag_days")
         lag_label = f" · {lag}d application lead" if lag else ""
         contractor_line = f"<br>Contractor: {contractor}" if contractor else ""
+        date_line = (
+            f"Applied {applied} · Issued {issued} · Value {value_label}"
+            if signal_type == "permit_application"
+            else f"Tracked {applied}"
+        )
         items.append(
             "<li>"
-            f"<strong>{permit_type}</strong> · {html.escape(str(area))}{lag_label}<br>"
-            f"Applied {applied} · Issued {issued} · Value {value_label}"
+            f"<strong>{label}</strong> · {title} · {html.escape(str(area))}{lag_label}<br>"
+            f"{date_line}"
             f"{contractor_line}"
             "</li>"
         )
@@ -201,7 +214,7 @@ def generate_digest(session: Session, profile: ClientProfile) -> dict[str, str]:
   <p>{html.escape(summary)}</p>
 
   <h2 style="font-size: 16px; border-bottom: 1px solid #e5e5e5; padding-bottom: 4px;">
-    Early Permit Signals ({html.escape(regions)})
+    Early Signals ({html.escape(regions)})
   </h2>
   {_render_early_signals_section(early_signals)}
 
