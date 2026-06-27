@@ -73,6 +73,22 @@ class EarlySignalEvent(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ProjectContact(Base):
+    """Project participant contact for Project Intelligence."""
+
+    __tablename__ = "project_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    project_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    company_name: Mapped[str] = mapped_column(String(300), default="")
+    contact_name: Mapped[str] = mapped_column(String(300), default="")
+    phone: Mapped[str] = mapped_column(String(50), default="")
+    email: Mapped[str] = mapped_column(String(320), default="")
+    source: Mapped[str] = mapped_column(String(100), default="")
+
+
 class RedditSignal(Base):
     __tablename__ = "reddit"
 
