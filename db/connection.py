@@ -704,6 +704,10 @@ def _ensure_early_signal_events_table(engine) -> None:
             region           VARCHAR(100) NOT NULL DEFAULT '',
             property_type    VARCHAR(300) NOT NULL DEFAULT '',
             signal_type      VARCHAR(50) NOT NULL DEFAULT '',
+            url_link         VARCHAR(500) NOT NULL DEFAULT '',
+            address          VARCHAR(300) NOT NULL DEFAULT '',
+            applicant        VARCHAR(300) NOT NULL DEFAULT '',
+            project_value    VARCHAR(50) NOT NULL DEFAULT '',
             scraped_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
@@ -715,6 +719,12 @@ def _ensure_early_signal_events_table(engine) -> None:
         "ON early_signal_events (transaction_date) WHERE transaction_date <> ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_early_signal_events_source_external_id "
         "ON early_signal_events (source, external_id) WHERE external_id <> ''",
+        "ALTER TABLE early_signal_events ADD COLUMN IF NOT EXISTS url_link VARCHAR(500) NOT NULL DEFAULT ''",
+        "ALTER TABLE early_signal_events ADD COLUMN IF NOT EXISTS address VARCHAR(300) NOT NULL DEFAULT ''",
+        "ALTER TABLE early_signal_events ADD COLUMN IF NOT EXISTS applicant VARCHAR(300) NOT NULL DEFAULT ''",
+        "ALTER TABLE early_signal_events ADD COLUMN IF NOT EXISTS project_value VARCHAR(50) NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_early_signal_events_url_link "
+        "ON early_signal_events (url_link) WHERE url_link <> ''",
     )
     with engine.begin() as conn:
         for statement in statements:

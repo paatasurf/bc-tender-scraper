@@ -42,6 +42,14 @@ VANCOUVER_CITY_PROJECTS_API = (
     "https://opendata.vancouver.ca/api/explore/v2.1/catalog/datasets/"
     "city-projects-package-site/records"
 )
+VANCOUVER_DEVELOPMENT_APPLICATIONS_URL = (
+    "https://vancouver.ca/home-property-development/development-applications.aspx"
+)
+SHAPEYOURCITY_PROJECTFINDER_UID = "b5013237-6ca5-45c4-912f-496c0b382528"
+SHAPEYOURCITY_PROJECTFINDER_URL = (
+    "https://www.shapeyourcity.ca/embeds/projectfinder/"
+    f"{SHAPEYOURCITY_PROJECTFINDER_UID}"
+)
 VANCOUVER_OPEN_DATA_SOURCE = "vancouver_open_data"
 VANCOUVER_MUNICIPALITY = "Vancouver"
 

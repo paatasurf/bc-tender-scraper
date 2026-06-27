@@ -81,7 +81,8 @@ def classify_city_project(project_title: str | None) -> SignalType | None:
 
 
 def _format_event(record: dict[str, Any], *, signal_type: SignalType) -> dict[str, str] | None:
-    project_id = extract_project_id(record.get("url_link"))
+    url_link = clean_text(record.get("url_link"))
+    project_id = extract_project_id(url_link)
     if not project_id:
         return None
 
@@ -93,6 +94,7 @@ def _format_event(record: dict[str, Any], *, signal_type: SignalType) -> dict[st
         "region": clean_text(record.get("geo_local_area")),
         "property_type": clean_text(record.get("project_title")),
         "signal_type": signal_type,
+        "url_link": url_link,
     }
 
 

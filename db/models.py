@@ -66,6 +66,10 @@ class EarlySignalEvent(Base):
     region: Mapped[str] = mapped_column(String(100), default="")
     property_type: Mapped[str] = mapped_column(String(300), default="")
     signal_type: Mapped[str] = mapped_column(String(50), default="", index=True)
+    url_link: Mapped[str] = mapped_column(String(500), default="")
+    address: Mapped[str] = mapped_column(String(300), default="")
+    applicant: Mapped[str] = mapped_column(String(300), default="")
+    project_value: Mapped[str] = mapped_column(String(50), default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

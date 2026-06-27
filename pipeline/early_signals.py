@@ -302,21 +302,26 @@ def _event_payload(event: EarlySignalEvent, *, score: int, reasons: list[str]) -
         scraped_at = event.scraped_at.astimezone(timezone.utc).isoformat()
         observed = event.scraped_at.astimezone(timezone.utc).date().isoformat()
     application_date = event.transaction_date or observed
+    value = _parse_value(getattr(event, "project_value", "") or "")
+    title = event.property_type or SIGNAL_TYPE_LABELS.get(event.signal_type, "Early signal")
+    if event.address:
+        title = event.address
     return {
         "id": event.id,
         "signal_type": event.signal_type,
         "external_id": event.external_id,
         "city": event.municipality or "Vancouver",
         "local_area": event.region or "",
-        "title": event.property_type or SIGNAL_TYPE_LABELS.get(event.signal_type, "Early signal"),
-        "address": "",
+        "title": title,
+        "address": event.address or "",
         "permit_type": event.property_type or "",
-        "estimated_value": None,
+        "estimated_value": value if value > 0 else None,
         "application_date": application_date,
         "scraped_at": scraped_at,
         "issue_date": "",
         "contractor": "",
-        "applicant": "",
+        "applicant": event.applicant or "",
+        "url_link": getattr(event, "url_link", "") or "",
         "pipeline_lag_days": None,
         "score": score,
         "reasons": reasons,

@@ -111,6 +111,12 @@ def run_vancouver_early_signal_events_scraper() -> dict[str, Any]:
     return scrape_vancouver_early_signal_events(persist=True)
 
 
+def run_vancouver_early_signal_enrichment_scraper(*, limit: int | None = None) -> dict[str, Any]:
+    from scraper.vancouver_early_signal_enrichment import run_early_signal_enrichment
+
+    return run_early_signal_enrichment(limit=limit, force=False, fetch_details=True, persist=True)
+
+
 def run_reddit_scraper() -> dict[str, Any]:
     signals = scrape_reddit_signals()
     return {"signals_saved": len(signals)}

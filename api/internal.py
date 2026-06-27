@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from db.connection import get_session
@@ -33,6 +33,7 @@ from scraper.runners import (
     run_merx_scraper,
     run_news_scraper,
     run_reddit_scraper,
+    run_vancouver_early_signal_enrichment_scraper,
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -49,6 +50,15 @@ class InternalRunRequest(BaseModel):
 def _require_manual_pipeline() -> None:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
+
+
+def _require_internal_key(request: Request) -> None:
+    expected = os.getenv("INTERNAL_API_KEY")
+    if not expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    key = request.headers.get("X-Internal-Key")
+    if key != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _step_status_path(pipeline_run_id: int) -> str:
@@ -220,6 +230,21 @@ def scrape_linkedin(
         background_tasks,
         "scrape-linkedin",
         run_linkedin_scraper,
+        body.run_id if body else None,
+    )
+
+
+@router.post("/enrich-early-signals")
+def enrich_early_signals(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: InternalRunRequest | None = None,
+) -> dict[str, Any]:
+    _require_internal_key(request)
+    return _enqueue_step(
+        background_tasks,
+        "enrich-early-signals",
+        run_vancouver_early_signal_enrichment_scraper,
         body.run_id if body else None,
     )
 

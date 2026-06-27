@@ -44,3 +44,15 @@ def test_background_internal_routes_allow_non_string_response_fields():
         assert hints["return"] != dict[str, str], (
             f"{name} must return dict[str, Any] because _enqueue_step includes int pipeline_run_id"
         )
+
+
+def test_enrich_early_signals_requires_internal_key():
+    request = MagicMock()
+    request.headers.get.return_value = None
+
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
+        try:
+            internal_api.enrich_early_signals(request, MagicMock(), None)
+            assert False, "expected HTTPException"
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 403

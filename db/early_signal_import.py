@@ -27,7 +27,7 @@ def upsert_early_signal_events(session: Session, rows: list[dict[str, str]]) -> 
 
     table = EarlySignalEvent.__table__
     imported = 0
-    skip_on_update = {"id", "scraped_at"}
+    skip_on_update = {"id", "scraped_at", "address", "applicant", "project_value"}
 
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start : start + BATCH_SIZE]
