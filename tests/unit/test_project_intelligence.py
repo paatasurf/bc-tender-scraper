@@ -117,3 +117,24 @@ def test_get_company_project_contacts_excludes_self(monkeypatch):
     assert result["total"] == 1
     assert result["data"][0]["role"] == "architect"
     assert result["data"][0]["company_name"] == "Vincent Wan Design"
+
+
+def test_get_project_team_contacts_returns_all_roles():
+    from pipeline import project_intelligence as pi
+
+    contacts = [
+        type("Contact", (), {"id": 1, "project_id": 5, "project_type": "permit", "role": "architect", "company_name": "A Design", "contact_name": "Ann", "phone": "604-555-0100", "email": "ann@a.ca", "source": "vancouver"})(),
+        type("Contact", (), {"id": 2, "project_id": 5, "project_type": "permit", "role": "gc", "company_name": "Build Co", "contact_name": "", "phone": "", "email": "", "source": "vancouver"})(),
+    ]
+
+    class _Session:
+        def scalars(self, _query):
+            class _Result:
+                def all(self):
+                    return contacts
+
+            return _Result()
+
+    result = pi.get_project_team_contacts(_Session(), "permit", 5)
+    assert result["total"] == 2
+    assert [row["role"] for row in result["data"]] == ["architect", "gc"]

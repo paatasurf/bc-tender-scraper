@@ -301,3 +301,44 @@ def get_company_project_contacts(
         "offset": offset,
         "data": page,
     }
+
+
+def _contact_payload(contact: ProjectContact) -> dict[str, Any]:
+    return {
+        "id": contact.id,
+        "project_id": contact.project_id,
+        "project_type": contact.project_type,
+        "role": contact.role,
+        "company_name": contact.company_name,
+        "contact_name": contact.contact_name,
+        "phone": contact.phone,
+        "email": contact.email,
+        "source": contact.source,
+    }
+
+
+def get_project_team_contacts(
+    session: Session,
+    project_type: ProjectType,
+    project_id: int,
+) -> dict[str, Any]:
+    """Return all project_contacts participants for a single project."""
+    contacts = session.scalars(
+        select(ProjectContact)
+        .where(
+            ProjectContact.project_type == project_type,
+            ProjectContact.project_id == project_id,
+        )
+        .order_by(ProjectContact.role, ProjectContact.id)
+    ).all()
+
+    role_order = {"architect": 0, "gc": 1, "developer": 2}
+    rows = [_contact_payload(contact) for contact in contacts]
+    rows.sort(key=lambda row: (role_order.get(row["role"], 9), row["company_name"].lower()))
+
+    return {
+        "project_id": project_id,
+        "project_type": project_type,
+        "total": len(rows),
+        "data": rows,
+    }

@@ -625,6 +625,20 @@ def company_project_contacts(
         session.close()
 
 
+@app.get("/api/projects/{project_type}/{project_id}/contacts")
+def project_team_contacts(
+    project_type: Literal["tender", "permit", "early_signal"],
+    project_id: int,
+) -> dict[str, Any]:
+    from pipeline.project_intelligence import get_project_team_contacts
+
+    session = get_session()
+    try:
+        return get_project_team_contacts(session, project_type, project_id)
+    finally:
+        session.close()
+
+
 @app.get("/api/early-signals")
 def early_signals(
     company_id: int | None = Query(None, ge=1),
