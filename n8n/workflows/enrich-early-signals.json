@@ -1,0 +1,142 @@
+{
+  "name": "TenderScope — Enrich Early Signals",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * 3"
+            }
+          ]
+        },
+        "timezone": "America/Vancouver"
+      },
+      "id": "e1a2b3c4-1111-4000-8000-000000000001",
+      "name": "Wednesday 07:30 Vancouver",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Runs every Wednesday at 07:30 America/Vancouver."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e1a2b3c4-1111-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/internal/enrich-early-signals",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Key",
+              "value": "={{ $env.INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "e1a2b3c4-1111-4000-8000-000000000003",
+      "name": "Start Early Signals Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Background job — poll GET /internal/steps/{pipeline_run_id} for completion. Requires INTERNAL_API_KEY on Railway and in n8n env."
+    },
+    {
+      "parameters": {
+        "chatId": "7780209268",
+        "text": "=🚀 Early Signals enrichment started\n\nStep: {{ $json.step }}\nStatus: {{ $json.status }}\nRun ID: {{ $json.run_id }}\nPipeline run ID: {{ $json.pipeline_run_id }}\nPoll: {{ $('Set API Base URL').item.json.baseUrl }}{{ $json.poll_url }}\nRun poll: {{ $('Set API Base URL').item.json.baseUrl }}{{ $json.run_poll_url }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "e1a2b3c4-1111-4000-8000-000000000004",
+      "name": "Telegram — Enrichment Started",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notifies immediately after POST /internal/enrich-early-signals returns the started payload."
+    }
+  ],
+  "connections": {
+    "Wednesday 07:30 Vancouver": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "Start Early Signals Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Early Signals Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Telegram — Enrichment Started",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "REPLACE_WITH_ERROR_WORKFLOW_ID"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "triggerCount": 1,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Weekly Wed 07:30 America/Vancouver: POST /internal/enrich-early-signals with X-Internal-Key, then Telegram start notification."
+  }
+}
