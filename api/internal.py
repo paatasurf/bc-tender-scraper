@@ -13,6 +13,7 @@ from pipeline.internal_steps import (
     run_company_intelligence_step,
     run_import_contract_awards_step,
     run_import_step,
+    run_populate_project_contacts_step,
 )
 from pipeline.runs import (
     execute_tracked_step,
@@ -245,6 +246,21 @@ def enrich_early_signals(
         background_tasks,
         "enrich-early-signals",
         run_vancouver_early_signal_enrichment_scraper,
+        body.run_id if body else None,
+    )
+
+
+@router.post("/populate-project-contacts")
+def populate_project_contacts(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: InternalRunRequest | None = None,
+) -> dict[str, Any]:
+    _require_internal_key(request)
+    return _enqueue_step(
+        background_tasks,
+        "populate-project-contacts",
+        run_populate_project_contacts_step,
         body.run_id if body else None,
     )
 

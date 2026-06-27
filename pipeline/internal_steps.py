@@ -9,6 +9,7 @@ from db.import_csv import import_all_csvs
 from pipeline.ai_scoring import score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
 from pipeline.company_intelligence import run_company_intelligence
+from pipeline.project_intelligence import rebuild_project_contacts
 
 
 def run_import_step() -> dict[str, Any]:
@@ -52,5 +53,14 @@ def run_arch_company_intelligence_step() -> dict[str, Any]:
     session = get_session()
     try:
         return run_arch_company_intelligence(session)
+    finally:
+        session.close()
+
+
+def run_populate_project_contacts_step() -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        return rebuild_project_contacts(session)
     finally:
         session.close()
