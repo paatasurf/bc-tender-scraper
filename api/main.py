@@ -27,6 +27,7 @@ from pipeline.opportunity_discovery import ARCHITECTURE_DEFAULT_MIN_SCORE, CONST
 from db.models import (
     ArchCompany,
     ArchTender,
+    ClientProfile,
     CommercialTender,
     Company,
     ContractAward,
@@ -504,6 +505,58 @@ def list_companies(
             query.order_by(Company.total_value.desc()).offset(offset).limit(limit)
         ).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+    finally:
+        session.close()
+
+
+@app.get("/api/companies/id/{company_id}")
+def get_company_by_id(company_id: int) -> dict[str, Any]:
+    session = get_session()
+    try:
+        company = session.get(Company, company_id)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
+        return _row_to_dict(company)
+    finally:
+        session.close()
+
+
+@app.get("/api/client-profile")
+def get_client_profile(request: Request) -> dict[str, Any]:
+    from api.clerk_plan import (
+        _fetch_clerk_user_primary_email,
+        _require_bearer_token,
+        _verify_jwt,
+        assert_company_intelligence_access,
+    )
+
+    assert_company_intelligence_access(request)
+    token = _require_bearer_token(request)
+    payload = _verify_jwt(token)
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not sub:
+        raise HTTPException(status_code=401, detail="Invalid authorization token")
+
+    session = get_session()
+    try:
+        profile = session.scalar(
+            select(ClientProfile).where(ClientProfile.clerk_user_id == sub)
+        )
+        if profile is None:
+            email = _fetch_clerk_user_primary_email(sub)
+            if email:
+                profile = session.scalar(
+                    select(ClientProfile).where(ClientProfile.email == email)
+                )
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Client profile not found")
+        return {
+            "company_id": profile.company_id,
+            "company_name": profile.company_name,
+            "email": profile.email,
+            "regions": list(profile.regions or []),
+            "specializations": list(profile.specializations or []),
+        }
     finally:
         session.close()
 

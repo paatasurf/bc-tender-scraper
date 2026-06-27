@@ -21,6 +21,7 @@ COMPANY_INTEL_PATH_PREFIXES = (
     "/api/arch-companies",
     "/api/competitive-intelligence",
     "/api/company-wiki",
+    "/api/client-profile",
 )
 
 PUBLIC_GET_PATH_PREFIXES = (
@@ -373,6 +374,49 @@ def _fetch_clerk_public_metadata(user_id: str) -> dict[str, Any]:
         _plan_from_metadata(metadata),
     )
     return metadata
+
+
+def _fetch_clerk_user_primary_email(user_id: str) -> str | None:
+    secret = _get_sk_secret()
+    if not secret:
+        return None
+
+    try:
+        resp = requests.get(
+            f"https://api.clerk.com/v1/users/{user_id}",
+            headers={"Authorization": f"Bearer {secret}"},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Clerk user lookup failed for %s: %s", user_id, exc)
+        return None
+
+    if resp.status_code != 200:
+        return None
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    primary_id = payload.get("primary_email_address_id")
+    emails = payload.get("email_addresses")
+    if isinstance(emails, list):
+        for entry in emails:
+            if not isinstance(entry, dict):
+                continue
+            if primary_id and entry.get("id") == primary_id:
+                email = entry.get("email_address")
+                return email if isinstance(email, str) and email else None
+        for entry in emails:
+            if isinstance(entry, dict):
+                email = entry.get("email_address")
+                if isinstance(email, str) and email:
+                    return email
+    return None
 
 
 def get_user_plan(request: Request) -> str:
