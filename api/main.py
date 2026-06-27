@@ -599,6 +599,32 @@ def company_opportunities(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/companies/{company_id}/contacts")
+@app.get("/api/companies/id/{company_id}/contacts")
+def company_project_contacts(
+    company_id: int,
+    role: Literal["architect", "gc", "developer"] | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    from pipeline.project_intelligence import get_company_project_contacts
+
+    session = get_session()
+    try:
+        try:
+            return get_company_project_contacts(
+                session,
+                company_id,
+                role=role,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
 @app.get("/api/early-signals")
 def early_signals(
     company_id: int | None = Query(None, ge=1),

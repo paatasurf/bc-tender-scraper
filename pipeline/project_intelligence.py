@@ -5,13 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from db.constants import BATCH_SIZE
-from db.models import EarlySignalEvent, Permit, ProjectContact
+from db.models import Company, EarlySignalEvent, Permit, ProjectContact
+from pipeline.company_matching import normalize_vendor_name
 from pipeline.company_classification import parse_name
+from pipeline.opportunity_discovery import _applicant_search_tokens
 
 ProjectType = Literal["tender", "permit", "early_signal"]
 ContactRole = Literal["architect", "gc", "developer"]
@@ -162,3 +164,140 @@ def sync_permit_project_contacts(session: Session) -> dict[str, int]:
     session.commit()
     persisted = _insert_contacts(session, rows)
     return {"contacts_built": len(rows), "contacts_persisted": persisted}
+
+
+def _company_normalized_name(company: Company) -> str:
+    for candidate in (company.name, company.canonical_vendor_name or ""):
+        normalized = normalize_vendor_name(candidate)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _company_permit_ids(
+    session: Session,
+    company: Company,
+    *,
+    max_permits: int = 1000,
+) -> set[int]:
+    normalized = _company_normalized_name(company)
+    if not normalized:
+        return set()
+
+    query = select(Permit.id, Permit.applicant, Permit.contractor)
+    tokens = _applicant_search_tokens(company.name)
+    if tokens:
+        clauses = []
+        for token in tokens:
+            pattern = f"%{token}%"
+            clauses.append(Permit.applicant.ilike(pattern))
+            clauses.append(Permit.contractor.ilike(pattern))
+        query = query.where(or_(*clauses))
+
+    ids: set[int] = set()
+    for permit_id, applicant, contractor in session.execute(
+        query.order_by(Permit.id.desc()).limit(max_permits * 8)
+    ).all():
+        if (
+            normalize_vendor_name(applicant) == normalized
+            or normalize_vendor_name(contractor) == normalized
+        ):
+            ids.add(int(permit_id))
+        if len(ids) >= max_permits:
+            break
+    return ids
+
+
+def _permit_project_payload(permit: Permit) -> dict[str, str]:
+    return {
+        "address": _clean(permit.address),
+        "permit_type": _clean(permit.permit_type),
+        "issue_date": _clean(permit.issue_date),
+        "project_value": _clean(permit.project_value),
+        "city": _clean(permit.city),
+    }
+
+
+def get_company_project_contacts(
+    session: Session,
+    company_id: int,
+    *,
+    role: ContactRole | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Return architect/GC contacts from shared permit projects for a company."""
+    company = session.get(Company, company_id)
+    if company is None:
+        raise ValueError(f"Company {company_id} not found")
+
+    normalized = _company_normalized_name(company)
+    permit_ids = _company_permit_ids(session, company)
+    if not permit_ids:
+        return {
+            "company_id": company_id,
+            "company_name": company.name,
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "data": [],
+        }
+
+    roles = (role,) if role else ("architect", "gc")
+    contacts = session.scalars(
+        select(ProjectContact)
+        .where(
+            ProjectContact.project_type == "permit",
+            ProjectContact.project_id.in_(permit_ids),
+            ProjectContact.role.in_(roles),
+        )
+        .order_by(ProjectContact.id.desc())
+    ).all()
+
+    permits_by_id = {
+        permit.id: permit
+        for permit in session.scalars(select(Permit).where(Permit.id.in_(permit_ids))).all()
+    }
+
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[int, str, str]] = set()
+    for contact in contacts:
+        partner_key = normalize_vendor_name(contact.company_name)
+        if not partner_key or partner_key == normalized:
+            continue
+
+        dedupe_key = (contact.project_id, contact.role, partner_key)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        permit = permits_by_id.get(contact.project_id)
+        rows.append(
+            {
+                "id": contact.id,
+                "project_id": contact.project_id,
+                "project_type": contact.project_type,
+                "role": contact.role,
+                "company_name": contact.company_name,
+                "contact_name": contact.contact_name,
+                "phone": contact.phone,
+                "email": contact.email,
+                "source": contact.source,
+                "project": _permit_project_payload(permit) if permit else None,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (row.get("project") or {}).get("issue_date", ""),
+        reverse=True,
+    )
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    return {
+        "company_id": company_id,
+        "company_name": company.name,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "data": page,
+    }
