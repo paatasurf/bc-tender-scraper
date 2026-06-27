@@ -53,6 +53,22 @@ class Permit(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EarlySignalEvent(Base):
+    """Pre-tender market signals: rezoning and development permit applications."""
+
+    __tablename__ = "early_signal_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    external_id: Mapped[str] = mapped_column(String(100), default="", index=True)
+    source: Mapped[str] = mapped_column(String(100), default="", index=True)
+    transaction_date: Mapped[str] = mapped_column(String(20), default="")
+    municipality: Mapped[str] = mapped_column(String(100), default="")
+    region: Mapped[str] = mapped_column(String(100), default="")
+    property_type: Mapped[str] = mapped_column(String(300), default="")
+    signal_type: Mapped[str] = mapped_column(String(50), default="", index=True)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class RedditSignal(Base):
     __tablename__ = "reddit"
 

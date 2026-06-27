@@ -8,6 +8,7 @@ from scraper.runners import (
     run_merx_arch_scraper,
     run_news_scraper,
     run_reddit_scraper,
+    run_vancouver_early_signal_events_scraper,
 )
 
 
@@ -22,6 +23,7 @@ def run() -> int:
         ("MERX architecture tenders", run_merx_arch_scraper),
         ("Commercial tenders", run_commercial_scraper),
         ("Building permits", run_building_permits_scraper),
+        ("Vancouver early signal events", run_vancouver_early_signal_events_scraper),
         ("Reddit signals", run_reddit_scraper),
         ("News signals", run_news_scraper),
         ("LinkedIn signals", run_linkedin_scraper),

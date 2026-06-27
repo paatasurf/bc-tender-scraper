@@ -105,6 +105,12 @@ def run_building_permits_scraper() -> dict[str, Any]:
     return scrape_vancouver_permits(days=DEFAULT_DAILY_LOOKBACK_DAYS, persist=True)
 
 
+def run_vancouver_early_signal_events_scraper() -> dict[str, Any]:
+    from scraper.vancouver_early_signal_events import scrape_vancouver_early_signal_events
+
+    return scrape_vancouver_early_signal_events(persist=True)
+
+
 def run_reddit_scraper() -> dict[str, Any]:
     signals = scrape_reddit_signals()
     return {"signals_saved": len(signals)}

@@ -38,6 +38,13 @@ VANCOUVER_PERMITS_API = (
 )
 BUILDING_PERMITS_CSV = "building_permits.csv"
 
+VANCOUVER_CITY_PROJECTS_API = (
+    "https://opendata.vancouver.ca/api/explore/v2.1/catalog/datasets/"
+    "city-projects-package-site/records"
+)
+VANCOUVER_OPEN_DATA_SOURCE = "vancouver_open_data"
+VANCOUVER_MUNICIPALITY = "Vancouver"
+
 SURREY_PERMITS_API = (
     "https://services5.arcgis.com/YRpe0VKTJytZSSIB/arcgis/rest/services/"
     "IssuedBuildingPermits/FeatureServer/0"
