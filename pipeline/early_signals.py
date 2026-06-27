@@ -1,4 +1,4 @@
-"""Early permit signals — application-date lead time from Vancouver Open Data."""
+"""Market early signals — development and rezoning activity in a company's regions."""
 
 from __future__ import annotations
 
@@ -8,11 +8,9 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import ArchCompany, Company, EarlySignalEvent, Permit
+from db.models import ArchCompany, ClientProfile, Company, EarlySignalEvent, Permit
 from pipeline.opportunity_discovery import (
     CompanySignals,
-    _company_keywords,
-    _keyword_points,
     _overlap_points,
     _parse_value,
     _score_architecture_permit,
@@ -28,7 +26,7 @@ SignalType = Literal[
 ]
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_MIN_SCORE = 50
-DATA_SCOPE = "vancouver_permits_and_early_signal_events"
+DATA_SCOPE = "market_early_signal_events"
 
 EVENT_SIGNAL_TYPES = (
     "development_permit_application",
@@ -73,6 +71,90 @@ def _event_matches_regions(event: EarlySignalEvent, regions: list[str]) -> bool:
     return any(region.lower() in blob for region in regions if region)
 
 
+def _matches_project_types(haystack: str, project_types: list[str]) -> bool:
+    if not project_types:
+        return True
+    _, matched = _overlap_points(haystack, project_types, 1)
+    return bool(matched)
+
+
+def _event_matches_project_types(event: EarlySignalEvent, project_types: list[str]) -> bool:
+    return _matches_project_types(_event_haystack(event), project_types)
+
+
+def _permit_haystack(permit: Permit) -> str:
+    return " ".join(
+        filter(
+            None,
+            [permit.permit_type, permit.description, permit.local_area, permit.city],
+        )
+    )
+
+
+def _permit_matches_project_types(permit: Permit, project_types: list[str]) -> bool:
+    return _matches_project_types(_permit_haystack(permit), project_types)
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        if not raw:
+            continue
+        key = raw.strip()
+        if not key:
+            continue
+        lower = key.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        out.append(key)
+    return out
+
+
+def _resolve_market_regions(
+    session: Session,
+    *,
+    company_id: int | None,
+    signals_model: CompanySignals | None,
+    explicit_regions: list[str] | None,
+) -> list[str]:
+    """Company operating regions from profile, neighborhoods, and primary city."""
+    candidates: list[str] = list(explicit_regions or [])
+    if signals_model is not None:
+        candidates.append(signals_model.primary_city)
+        candidates.extend(signals_model.neighborhoods)
+        candidates.extend(signals_model.houzz_service_areas)
+    if company_id is not None:
+        profiles = session.scalars(
+            select(ClientProfile).where(ClientProfile.company_id == company_id)
+        ).all()
+        for profile in profiles:
+            candidates.extend(profile.regions or [])
+    return _dedupe_strings(candidates)
+
+
+def _resolve_market_project_types(
+    session: Session,
+    *,
+    company_id: int | None,
+    signals_model: CompanySignals | None,
+) -> list[str]:
+    """Project types / specializations used to filter market opportunities."""
+    candidates: list[str] = []
+    if signals_model is not None:
+        candidates.extend(signals_model.project_types)
+        candidates.extend(signals_model.award_categories)
+        candidates.extend(signals_model.houzz_project_types)
+    if company_id is not None:
+        profiles = session.scalars(
+            select(ClientProfile).where(ClientProfile.company_id == company_id)
+        ).all()
+        for profile in profiles:
+            candidates.extend(profile.specializations or [])
+    return _dedupe_strings(candidates)
+
+
 def _permit_matches_value_band(
     permit: Permit,
     *,
@@ -104,33 +186,26 @@ def _event_haystack(event: EarlySignalEvent) -> str:
 def _score_early_signal_event(
     signals: CompanySignals | None,
     event: EarlySignalEvent,
+    *,
+    market_project_types: list[str] | None = None,
 ) -> tuple[int, list[str]]:
     haystack = _event_haystack(event)
     base = 55 if event.signal_type == "rezoning_application" else 50
-    reasons = [SIGNAL_TYPE_LABELS.get(event.signal_type, "Early market signal")]
+    reasons = [SIGNAL_TYPE_LABELS.get(event.signal_type, "Market opportunity")]
 
-    if signals is None:
-        if event.region:
-            reasons.append(f"Region: {event.region}")
-        return min(100, base + (5 if event.region else 0)), reasons
-
-    keywords = _company_keywords(signals)
-    kw_pts, kw_matched = _keyword_points(haystack, keywords)
-    cat_pts, cat_matched = _overlap_points(haystack, signals.project_types, 20)
-    loc_pts, loc_matched = _overlap_points(
-        haystack,
-        signals.neighborhoods + [signals.google_address],
-        15,
-    )
-    score = min(100, base + kw_pts + cat_pts + loc_pts)
+    project_types = market_project_types or (signals.project_types if signals else [])
+    _, cat_matched = _overlap_points(haystack, project_types, 20)
     if cat_matched:
         reasons.append(f"Project type fit: {', '.join(cat_matched[:3])}")
-    if loc_matched:
-        reasons.append(f"Area overlap: {', '.join(loc_matched[:3])}")
-    if kw_matched:
-        reasons.append(f"Trade keyword match: {', '.join(kw_matched[:3])}")
-    elif event.region:
+    elif event.property_type:
+        reasons.append(event.property_type[:120])
+
+    if event.region:
         reasons.append(f"Region: {event.region}")
+    elif event.municipality:
+        reasons.append(f"Municipality: {event.municipality}")
+
+    score = min(100, base + (10 if cat_matched else 0) + (5 if event.region else 0))
     return score, reasons
 
 
@@ -206,7 +281,9 @@ def _signal_payload(permit: Permit, *, score: int, reasons: list[str]) -> dict[s
 
 def _event_payload(event: EarlySignalEvent, *, score: int, reasons: list[str]) -> dict[str, Any]:
     observed = ""
+    scraped_at = ""
     if event.scraped_at:
+        scraped_at = event.scraped_at.astimezone(timezone.utc).isoformat()
         observed = event.scraped_at.astimezone(timezone.utc).date().isoformat()
     application_date = event.transaction_date or observed
     return {
@@ -220,6 +297,7 @@ def _event_payload(event: EarlySignalEvent, *, score: int, reasons: list[str]) -
         "permit_type": event.property_type or "",
         "estimated_value": None,
         "application_date": application_date,
+        "scraped_at": scraped_at,
         "issue_date": "",
         "contractor": "",
         "applicant": "",
@@ -257,10 +335,10 @@ def _collect_permit_signals(
     since: str,
     signals_model: CompanySignals | None,
     kind: Kind,
-    profile_regions: list[str],
+    market_regions: list[str],
+    market_project_types: list[str],
     min_value: float | None,
     max_value: float | None,
-    min_score: int,
     fetch_limit: int,
 ) -> list[dict[str, Any]]:
     query = (
@@ -278,29 +356,30 @@ def _collect_permit_signals(
 
     scored: list[dict[str, Any]] = []
     for permit in rows:
-        if profile_regions and not _permit_matches_regions(permit, profile_regions):
+        if market_regions and not _permit_matches_regions(permit, market_regions):
+            continue
+        if not _permit_matches_project_types(permit, market_project_types):
             continue
         if not _permit_matches_value_band(permit, min_value=min_value, max_value=max_value):
             continue
 
-        own = False
-        if signals_model is not None and signals_model.normalized_name:
-            applicant_key = (permit.applicant or "").lower().replace(" ", "")
-            own = signals_model.normalized_name in applicant_key
-
         if signals_model is not None:
-            score, reasons = score_fn(signals_model, permit, own=own)
+            score, reasons = score_fn(signals_model, permit, own=False)
         else:
             value = _parse_value(permit.project_value)
-            score = min(100, 40 + (20 if value >= 250_000 else 0) + (15 if permit.contractor else 0))
-            reasons = ["Recent Vancouver permit application"]
+            score = min(100, 45 + (15 if value >= 250_000 else 0))
+            reasons = ["Recent permit application in your market"]
             lag = pipeline_lag_days(permit)
             if lag:
                 reasons.append(f"{lag}-day application-to-issue pipeline")
 
-        if score < min_score:
-            continue
-        scored.append(_signal_payload(permit, score=score, reasons=reasons))
+        payload = _signal_payload(permit, score=score, reasons=reasons)
+        payload["scraped_at"] = (
+            permit.scraped_at.astimezone(timezone.utc).isoformat()
+            if permit.scraped_at
+            else permit.application_date
+        )
+        scored.append(payload)
     return scored
 
 
@@ -309,8 +388,8 @@ def _collect_event_signals(
     *,
     since_dt: datetime,
     signals_model: CompanySignals | None,
-    profile_regions: list[str],
-    min_score: int,
+    market_regions: list[str],
+    market_project_types: list[str],
     fetch_limit: int,
 ) -> list[dict[str, Any]]:
     query = (
@@ -324,17 +403,21 @@ def _collect_event_signals(
 
     scored: list[dict[str, Any]] = []
     for event in rows:
-        if profile_regions and not _event_matches_regions(event, profile_regions):
+        if market_regions and not _event_matches_regions(event, market_regions):
             continue
-        score, reasons = _score_early_signal_event(signals_model, event)
-        if score < min_score:
+        if not _event_matches_project_types(event, market_project_types):
             continue
+        score, reasons = _score_early_signal_event(
+            signals_model,
+            event,
+            market_project_types=market_project_types,
+        )
         scored.append(_event_payload(event, score=score, reasons=reasons))
     return scored
 
 
-def _sort_key(row: dict[str, Any]) -> tuple[int, str]:
-    return (int(row.get("score") or 0), str(row.get("application_date") or ""))
+def _market_sort_key(row: dict[str, Any]) -> str:
+    return str(row.get("scraped_at") or row.get("application_date") or "")
 
 
 def get_early_signals(
@@ -354,30 +437,40 @@ def get_early_signals(
     fetch_limit = max(limit * 8, 120)
 
     signals_model, _company = _load_company_signals(session, company_id=company_id, kind=kind)
-    profile_regions = list(regions or [])
+    market_regions = _resolve_market_regions(
+        session,
+        company_id=company_id,
+        signals_model=signals_model,
+        explicit_regions=regions,
+    )
+    market_project_types = _resolve_market_project_types(
+        session,
+        company_id=company_id,
+        signals_model=signals_model,
+    )
 
     permit_signals = _collect_permit_signals(
         session,
         since=since,
         signals_model=signals_model,
         kind=kind,
-        profile_regions=profile_regions,
+        market_regions=market_regions,
+        market_project_types=market_project_types,
         min_value=min_value,
         max_value=max_value,
-        min_score=min_score,
         fetch_limit=fetch_limit,
     )
     event_signals = _collect_event_signals(
         session,
         since_dt=since_dt,
         signals_model=signals_model,
-        profile_regions=profile_regions,
-        min_score=min_score,
+        market_regions=market_regions,
+        market_project_types=market_project_types,
         fetch_limit=fetch_limit,
     )
 
     merged = permit_signals + event_signals
-    merged.sort(key=_sort_key, reverse=True)
+    merged.sort(key=_market_sort_key, reverse=True)
     matches = merged[:limit]
 
     type_counts = {
@@ -395,6 +488,8 @@ def get_early_signals(
         "company_id": company_id,
         "kind": kind,
         "total": len(matches),
+        "market_regions": market_regions,
+        "market_project_types": market_project_types,
         "signal_types": type_counts,
         "signals": matches,
     }

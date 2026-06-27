@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pipeline.early_signals import (
+    _event_matches_project_types,
     _event_matches_regions,
+    _matches_project_types,
     _permit_matches_regions,
     _permit_matches_value_band,
     _score_early_signal_event,
@@ -56,3 +58,19 @@ def test_score_early_signal_event_without_company():
     score, reasons = _score_early_signal_event(None, event)
     assert score >= 50
     assert reasons
+
+
+def test_event_matches_project_types():
+    event = _EventStub(
+        signal_type="development_permit_application",
+        region="Downtown",
+        municipality="Vancouver",
+        property_type="New Building - Commercial Development",
+    )
+    assert _event_matches_project_types(event, ["Commercial"])
+    assert _event_matches_project_types(event, ["New Building"])
+    assert not _event_matches_project_types(event, ["Demolition"])
+
+
+def test_matches_project_types_empty_list_allows_all():
+    assert _matches_project_types("Commercial tower", [])
