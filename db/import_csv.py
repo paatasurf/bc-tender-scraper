@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
 from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, RedditSignal, Tender
 from db.permit_import import upsert_city_permits
 from scraper.config import (
@@ -18,10 +19,6 @@ from scraper.config import (
     OUTPUT_CSV,
     REDDIT_SIGNALS_CSV,
 )
-
-BATCH_SIZE = 500
-COMMERCIAL_BATCH_SIZE = 50
-
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():

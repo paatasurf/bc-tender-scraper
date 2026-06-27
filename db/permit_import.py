@@ -6,7 +6,7 @@ from sqlalchemy import delete, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from db.import_csv import BATCH_SIZE
+from db.constants import BATCH_SIZE
 from db.models import Permit
 
 
