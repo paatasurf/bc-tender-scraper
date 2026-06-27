@@ -3,11 +3,11 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, Permit, RedditSignal, Tender
+from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, RedditSignal, Tender
+from db.permit_import import upsert_city_permits
 from scraper.config import (
     ARCH_TENDERS_CSV,
     BUILDING_PERMITS_CSV,
@@ -94,41 +94,30 @@ def import_permits(session: Session, path: Path | None = None) -> int:
         print(f"[Import] Skipping missing file: {csv_path}")
         return 0
 
-    session.execute(delete(Permit).where(Permit.source == "vancouver"))
-    session.commit()
-
-    imported = 0
-    batch: list[dict[str, str]] = []
-
+    rows: list[dict[str, str]] = []
     with csv_path.open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
-            if not row.get("address"):
+            if not row.get("address") or not row.get("external_id"):
                 continue
-            batch.append(
+            rows.append(
                 {
+                    "external_id": row.get("external_id", ""),
                     "address": row.get("address", ""),
                     "permit_type": row.get("permit_type", ""),
                     "project_value": row.get("project_value", ""),
                     "applicant": row.get("applicant", ""),
                     "issue_date": row.get("issue_date", ""),
+                    "application_date": row.get("application_date", ""),
                     "description": row.get("description", ""),
+                    "contractor": row.get("contractor", ""),
+                    "local_area": row.get("local_area", ""),
                     "source": "vancouver",
                     "city": "Vancouver",
-                    "external_id": "",
                 }
             )
-            if len(batch) >= BATCH_SIZE:
-                session.execute(insert(Permit.__table__), batch)
-                session.commit()
-                imported += len(batch)
-                batch = []
 
-    if batch:
-        session.execute(insert(Permit.__table__), batch)
-        session.commit()
-        imported += len(batch)
-
-    print(f"[Import] Permits: {imported} rows (full refresh)")
+    imported = upsert_city_permits(session, rows, source="vancouver", full_refresh=False)
+    print(f"[Import] Permits: {imported} rows (upsert)")
     return imported
 
 

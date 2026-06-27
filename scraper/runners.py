@@ -5,7 +5,7 @@ from typing import Any
 
 from config.env import env_flag
 from db.import_contract_awards import import_contract_awards
-from scraper.building_permits import scrape_building_permits
+from scraper.building_permits import DEFAULT_DAILY_LOOKBACK_DAYS, scrape_vancouver_permits
 from scraper.commercial import scrape_commercial_tenders
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.federal import scrape_federal_tenders
@@ -102,8 +102,7 @@ def run_burnaby_permits_scraper(*, days: int | None = None) -> dict[str, Any]:
 def run_building_permits_scraper() -> dict[str, Any]:
     if env_flag("PIPELINE_SKIP_BUILDING_PERMITS"):
         return {"skipped": True, "reason": "PIPELINE_SKIP_BUILDING_PERMITS=true"}
-    permits_saved = scrape_building_permits()
-    return {"permits_saved": permits_saved}
+    return scrape_vancouver_permits(days=DEFAULT_DAILY_LOOKBACK_DAYS, persist=True)
 
 
 def run_reddit_scraper() -> dict[str, Any]:
