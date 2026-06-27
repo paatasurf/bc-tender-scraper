@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from db.models import ArchCompany, ClientProfile, Company, EarlySignalEvent, Permit
 from pipeline.opportunity_discovery import (
     CompanySignals,
+    _company_operating_geo,
+    _is_street_level_text,
     _overlap_points,
     _parse_value,
     _score_architecture_permit,
@@ -119,18 +121,32 @@ def _resolve_market_regions(
     signals_model: CompanySignals | None,
     explicit_regions: list[str] | None,
 ) -> list[str]:
-    """Company operating regions from profile, neighborhoods, and primary city."""
+    """City and neighborhood regions for market-signal filtering.
+
+    Street-level permit neighborhoods (e.g. "W 41ST AVENUE") rarely match
+    early_signal_events municipality/region fields. Prefer gazetteer cities
+    parsed from primary_city, google_address, and geographic_reach.
+    """
     candidates: list[str] = list(explicit_regions or [])
+
     if signals_model is not None:
-        candidates.append(signals_model.primary_city)
-        candidates.extend(signals_model.neighborhoods)
-        candidates.extend(signals_model.houzz_service_areas)
+        cities, _geo_regions = _company_operating_geo(signals_model)
+        candidates.extend(cities)
+
+        for neighborhood in signals_model.neighborhoods:
+            if neighborhood and not _is_street_level_text(str(neighborhood)):
+                candidates.append(neighborhood)
+        for area in signals_model.houzz_service_areas:
+            if area and not _is_street_level_text(str(area)):
+                candidates.append(area)
+
     if company_id is not None:
         profiles = session.scalars(
             select(ClientProfile).where(ClientProfile.company_id == company_id)
         ).all()
         for profile in profiles:
             candidates.extend(profile.regions or [])
+
     return _dedupe_strings(candidates)
 
 

@@ -45,7 +45,38 @@ class _EventStub:
 def test_event_matches_regions():
     event = _EventStub(region="Downtown", municipality="Vancouver", property_type="Mixed-use")
     assert _event_matches_regions(event, ["Downtown"])
+    assert _event_matches_regions(event, ["vancouver"])
     assert not _event_matches_regions(event, ["Burnaby"])
+
+
+def test_resolve_market_regions_uses_city_from_google_address():
+    from pipeline.early_signals import _resolve_market_regions
+    from pipeline.opportunity_discovery import CompanySignals
+
+    signals = CompanySignals(
+        name="Example GC",
+        project_types=["New Building"],
+        neighborhoods=["E 1ST AVENUE", "Downtown"],
+        google_address="63 W 6th Ave Suite 309, Vancouver, BC V5Y 1K2, Canada",
+        primary_city="",
+        primary_address="",
+        geographic_reach="",
+        avg_project_value=0,
+        avg_award_value=0,
+        award_categories=[],
+        award_clients=[],
+        buyer_levels=[],
+        ai_reliability_score=None,
+    )
+    regions = _resolve_market_regions(
+        session=type("S", (), {"scalars": lambda *a, **k: type("R", (), {"all": lambda: []})()})(),
+        company_id=None,
+        signals_model=signals,
+        explicit_regions=None,
+    )
+    assert "vancouver" in {r.lower() for r in regions}
+    assert "Downtown" in regions
+    assert "E 1ST AVENUE" not in regions
 
 
 def test_score_early_signal_event_without_company():
