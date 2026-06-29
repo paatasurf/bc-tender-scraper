@@ -10,7 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import Float, func, select
+from sqlalchemy import Float, func, or_, select
 from sqlalchemy.exc import DBAPIError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -213,6 +213,7 @@ def list_permits(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     city: str | None = Query(None, max_length=100),
+    applicant: str | None = Query(None, max_length=300),
 ) -> dict[str, Any]:
     session = get_session()
     try:
@@ -222,6 +223,14 @@ def list_permits(
             city_value = city.strip().title()
             query = query.where(Permit.city == city_value)
             count_query = count_query.where(Permit.city == city_value)
+        if applicant and applicant.strip():
+            applicant_value = applicant.strip()
+            applicant_filter = or_(
+                Permit.applicant.ilike(f"%{applicant_value}%"),
+                Permit.contractor.ilike(f"%{applicant_value}%"),
+            )
+            query = query.where(applicant_filter)
+            count_query = count_query.where(applicant_filter)
         total = session.scalar(count_query) or 0
         rows = session.scalars(query.order_by(Permit.id.desc()).offset(offset).limit(limit)).all()
         return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
