@@ -21,9 +21,8 @@ from db.models import Company
 from intelligence.resend import send_email
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_VOICE_AGENT_URL = "https://voice-n8n-agent-production.up.railway.app"
 VANCOUVER_TZ = ZoneInfo("America/Vancouver")
+DEFAULT_VOICE_AGENT_URL = "https://voice-n8n-agent-production.up.railway.app"
 
 
 @dataclass(frozen=True)
@@ -103,6 +102,7 @@ def _fetch_morning_brief(company_id: int, company_name: str) -> dict[str, Any]:
         "response": response_text,
         "investigation_id": data.get("investigation_id"),
         "playbook_id": data.get("playbook_id"),
+        "executive_decision_brief": data.get("executive_decision_brief"),
     }
 
 
@@ -253,14 +253,179 @@ def _company_display_name(company_id: int) -> str:
     return f"Company #{company_id}"
 
 
+def _format_ranked_items(items: list[dict[str, Any]] | None) -> list[str]:
+    lines: list[str] = []
+    if not items:
+        return lines
+    for item in items:
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        summary = str(item.get("summary") or "").strip()
+        rank = item.get("rank")
+        prefix = f"{rank}. " if rank else "- "
+        if summary:
+            lines.append(f"{prefix}{label} — {summary}")
+        else:
+            lines.append(f"{prefix}{label}")
+    return lines
+
+
+def sections_from_executive_brief(
+    executive_brief: dict[str, Any],
+    *,
+    narrative_summary: str | None = None,
+) -> dict[str, list[str]]:
+    """Map canonical ExecutiveDecisionBrief fields to CEO dashboard sections."""
+    from intelligence.canonical_brief import opportunity_labels_by_disposition
+
+    sections: dict[str, list[str]] = {spec.key: [] for spec in _BRIEF_SECTIONS}
+    buckets = opportunity_labels_by_disposition(executive_brief)
+
+    summary_bits: list[str] = []
+    if narrative_summary:
+        summary_bits.append(narrative_summary.strip())
+    primary = str(executive_brief.get("primary_objective") or "").strip()
+    if primary:
+        summary_bits.append(primary)
+    health = executive_brief.get("company_health") or {}
+    health_summary = str(health.get("summary") or "").strip()
+    if health_summary:
+        summary_bits.append(health_summary)
+    sections["executive_summary"] = summary_bits
+
+    top = executive_brief.get("top_opportunities") or {}
+    pursue_items = [
+        i
+        for i in (top.get("items") or [])
+        if str(i.get("disposition") or "").lower() == "pursue"
+    ]
+    prepare_items = [
+        i
+        for i in (top.get("items") or [])
+        if str(i.get("disposition") or "").lower() == "prepare"
+    ]
+    monitor_items = [
+        i
+        for i in (top.get("items") or [])
+        if str(i.get("disposition") or "").lower() == "monitor"
+    ]
+    sections["pursue_now"] = _format_ranked_items(pursue_items) or [
+        f"- {label}" for label in buckets.get("pursue", [])
+    ]
+    sections["prepare_next"] = _format_ranked_items(prepare_items) or [
+        f"- {label}" for label in buckets.get("prepare", [])
+    ]
+    sections["monitor"] = _format_ranked_items(monitor_items) or [
+        f"- {label}" for label in buckets.get("monitor", [])
+    ]
+    sections["ignore"] = _format_ranked_items(
+        list(top.get("items_ignored") or [])
+        + list(executive_brief.get("ignored_opportunities") or [])
+    ) or [f"- {label}" for label in buckets.get("ignore", [])]
+
+    comp = executive_brief.get("competitive_threats") or {}
+    sections["top_competitor"] = _format_ranked_items(comp.get("items"))
+
+    permit = executive_brief.get("permit_pipeline") or {}
+    sections["top_permit_pipeline"] = _format_ranked_items(permit.get("items"))
+
+    risks = executive_brief.get("top_risks") or {}
+    risk_lines = _format_ranked_items(risks.get("items"))
+    priorities = executive_brief.get("executive_priorities") or {}
+    if not risk_lines:
+        risk_lines = _format_ranked_items(priorities.get("business_risks"))
+    sections["biggest_risk"] = risk_lines[:1]
+
+    ceo_actions = _format_ranked_items(priorities.get("immediate_actions"))
+    if not ceo_actions:
+        ceo_actions = _format_ranked_items(priorities.get("ceo_decisions"))
+    sections["ceo_action_plan"] = ceo_actions
+
+    why_bits: list[str] = []
+    missing = executive_brief.get("missing_information") or []
+    if missing:
+        why_bits.append("Missing information: " + "; ".join(str(m) for m in missing[:3]))
+    why_bits.append(
+        f"Overall confidence: {executive_brief.get('overall_confidence', 'unknown')}."
+    )
+    why_bits.append(
+        f"Engine version: {executive_brief.get('engine_version', 'unknown')}."
+    )
+    sections["why"] = why_bits
+
+    return sections
+
+
+def render_morning_brief_html_from_executive_brief(
+    *,
+    company_id: int,
+    company_name: str,
+    executive_brief: dict[str, Any],
+    narrative_summary: str | None = None,
+    brief_date: datetime | None = None,
+) -> str:
+    """Render CEO dashboard email from canonical ExecutiveDecisionBrief."""
+    when = brief_date or datetime.now(VANCOUVER_TZ)
+    date_label = when.strftime("%A, %B %d, %Y")
+    sections = sections_from_executive_brief(
+        executive_brief,
+        narrative_summary=narrative_summary,
+    )
+    rendered: list[str] = []
+    for spec in _BRIEF_SECTIONS:
+        content_lines = sections.get(spec.key) or []
+        if not content_lines:
+            continue
+        rendered.append(_render_section_box(spec, content_lines))
+
+    section_blocks = "".join(rendered) if rendered else _lines_to_html([])
+
+    return f"""\
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#050505;">
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+            max-width:640px;margin:0 auto;padding:32px 24px;color:#e5e5e5;background:#0a0a0a;">
+  <div style="border-bottom:1px solid #262626;padding-bottom:20px;margin-bottom:28px;">
+    <p style="margin:0 0 6px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#737373;">
+      TenderScope CEO Dashboard
+    </p>
+    <h1 style="margin:0;font-size:24px;font-weight:600;color:#fafafa;">
+      {html.escape(company_name)}
+    </h1>
+    <p style="margin:8px 0 0;color:#a3a3a3;font-size:14px;">{html.escape(date_label)}</p>
+  </div>
+{section_blocks}
+  <div style="border-top:1px solid #262626;padding-top:20px;margin-top:8px;">
+    <p style="margin:0;font-size:12px;color:#525252;text-align:center;">
+      Powered by TenderScope · <a href="https://tenderscope.ca" style="color:#737373;text-decoration:none;">tenderscope.ca</a>
+    </p>
+  </div>
+</div>
+</body>
+</html>"""
+
+
 def render_morning_brief_html(
     *,
     company_id: int,
     company_name: str,
     brief_text: str,
     brief_date: datetime | None = None,
+    executive_brief: dict[str, Any] | None = None,
 ) -> str:
     """Render a dark-themed CEO dashboard email body for the morning brief."""
+    if executive_brief:
+        narrative = brief_text.splitlines()[0].strip() if brief_text else None
+        return render_morning_brief_html_from_executive_brief(
+            company_id=company_id,
+            company_name=company_name,
+            executive_brief=executive_brief,
+            narrative_summary=narrative,
+            brief_date=brief_date,
+        )
+
     when = brief_date or datetime.now(VANCOUVER_TZ)
     date_label = when.strftime("%A, %B %d, %Y")
     section_blocks = _lines_to_html(brief_text.splitlines())
@@ -297,11 +462,13 @@ def send_morning_brief(*, company_id: int, email: str) -> dict[str, Any]:
     agent_result = _fetch_morning_brief(company_id, company_name)
     brief_date = datetime.now(VANCOUVER_TZ)
     subject = f"TenderScope Morning Brief — {brief_date.strftime('%B %d, %Y')}"
+    executive_brief = agent_result.get("executive_decision_brief")
     html_body = render_morning_brief_html(
         company_id=company_id,
         company_name=company_name,
         brief_text=agent_result["response"],
         brief_date=brief_date,
+        executive_brief=executive_brief if isinstance(executive_brief, dict) else None,
     )
 
     resend_result = send_email(to=email, subject=subject, html=html_body)
@@ -321,4 +488,5 @@ def send_morning_brief(*, company_id: int, email: str) -> dict[str, Any]:
         "resend_id": resend_result.get("id"),
         "investigation_id": agent_result.get("investigation_id"),
         "playbook_id": agent_result.get("playbook_id"),
+        "used_executive_brief": bool(executive_brief),
     }

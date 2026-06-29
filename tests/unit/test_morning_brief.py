@@ -1,40 +1,61 @@
-"""Unit tests for morning brief HTML parsing and formatting."""
+"""Unit tests for morning brief CEO dashboard HTML formatting."""
 
 from intelligence.morning_brief import parse_brief_sections, render_morning_brief_html
 
 
-def test_parse_brief_sections_splits_headers() -> None:
+def test_parse_brief_sections_splits_ceo_headers() -> None:
     text = """\
-PURSUE NOW
-- Bid on Surrey civic centre package
-- Follow up on Burnaby RFP
+EXECUTIVE SUMMARY: Pontem is well positioned in Vancouver civic work.
 
-MONITOR
-- Vancouver school board tender closing Friday
+PURSUE NOW:
+- Surrey civic centre — deadline Apr 15, $12M, score 82
 
-COMPETITOR ALERTS
-- Acme Construction won 2 awards this week
+TOP COMPETITOR:
+Kevin To threat score 76 — winning school board packages.
 
-EARLY SIGNALS
-- Rezoning application at Main & 12th
+CEO ACTION PLAN:
+1. Call Surrey project manager
+2. Review Burnaby RFP draft
+3. Brief estimating team
 """
-    sections = parse_brief_sections(text)
-    assert any("Surrey" in line for line in sections["pursue"])
-    assert any("Vancouver school" in line for line in sections["monitor"])
-    assert any("Acme" in line for line in sections["competitor_alerts"])
-    assert any("Rezoning" in line for line in sections["early_signals"])
+    sections = parse_brief_sections(text.splitlines())
+    assert any("Pontem" in line for line in sections["executive_summary"])
+    assert any("Surrey civic" in line for line in sections["pursue_now"])
+    assert any("Kevin To" in line for line in sections["top_competitor"])
+    assert any("Call Surrey" in line for line in sections["ceo_action_plan"])
 
 
-def test_render_morning_brief_html_includes_sections_and_footer() -> None:
+def test_render_morning_brief_html_renders_styled_section_boxes() -> None:
     html_body = render_morning_brief_html(
         company_id=8638,
         company_name="Pontem Group",
-        brief_text="PURSUE NOW\n- Test opportunity",
+        brief_text=(
+            "EXECUTIVE SUMMARY: Strong pipeline in Lower Mainland.\n\n"
+            "PURSUE NOW:\n"
+            "- Surrey civic centre package\n\n"
+            "TOP COMPETITOR:\n"
+            "Kevin To threat score 76\n\n"
+            "CEO ACTION PLAN:\n"
+            "1. Review Surrey bid\n"
+        ),
     )
+    assert "CEO Dashboard" in html_body or "CEO ACTION PLAN" in html_body
+    assert "EXECUTIVE SUMMARY" in html_body
     assert "PURSUE NOW" in html_body
-    assert "MONITOR" in html_body
-    assert "COMPETITOR ALERTS" in html_body
-    assert "EARLY SIGNALS" in html_body
+    assert "TOP COMPETITOR" in html_body
+    assert "Kevin To threat score 76" in html_body
+    assert "Surrey civic centre" in html_body
     assert "Pontem Group" in html_body
+    assert "#22c55e" in html_body
+    assert "#ef4444" in html_body
     assert "Powered by TenderScope" in html_body
-    assert "tenderscope.ca" in html_body
+
+
+def test_render_morning_brief_html_fallback_without_headers() -> None:
+    html_body = render_morning_brief_html(
+        company_id=8638,
+        company_name="Pontem Group",
+        brief_text="Unstructured agent output with no section headers.",
+    )
+    assert "Unstructured agent output" in html_body
+    assert "EXECUTIVE SUMMARY" in html_body

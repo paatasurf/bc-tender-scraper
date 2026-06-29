@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from db.connection import get_session
 from db.models import ClientProfile, TenderMatch
+from intelligence.canonical_brief import disposition_for_entity, fetch_company_executive_brief
 from intelligence.resend import send_email
 from pipeline.ai_matching import _load_tender_row
 from pipeline.opportunity_discovery import _is_tender_open, _parse_date
@@ -40,6 +41,7 @@ class DeadlineAlert:
     budget_label: str
     match_score: int
     tender_url: str
+    executive_disposition: str | None = None
 
 
 def _days_until_close(deadline: str) -> int | None:
@@ -68,6 +70,7 @@ def _collect_profile_alerts(
     profile: ClientProfile,
     *,
     min_match_score: int = DEFAULT_MIN_MATCH_SCORE,
+    canonical_brief: dict[str, Any] | None = None,
 ) -> list[DeadlineAlert]:
     rows = session.scalars(
         select(TenderMatch)
@@ -110,6 +113,14 @@ def _collect_profile_alerts(
         if not tender_url:
             continue
 
+        exec_disp: str | None = None
+        if canonical_brief is not None:
+            exec_disp = disposition_for_entity(
+                canonical_brief,
+                entity_type="tender",
+                entity_id=row.tender_id,
+            )
+
         alerts.append(
             DeadlineAlert(
                 profile_id=profile.id,
@@ -124,6 +135,7 @@ def _collect_profile_alerts(
                 budget_label=_budget_label(tender),
                 match_score=int(row.score),
                 tender_url=tender_url,
+                executive_disposition=exec_disp,
             )
         )
 
@@ -136,6 +148,13 @@ def render_deadline_alert_html(alert: DeadlineAlert) -> str:
     budget = html.escape(alert.budget_label)
     company = html.escape(alert.company_name)
     tender_url = html.escape(alert.tender_url, quote=True)
+    disposition_line = ""
+    if alert.executive_disposition:
+        disp = html.escape(alert.executive_disposition.upper())
+        disposition_line = (
+            f'<p style="margin:0 0 8px;color:#fafafa;">'
+            f"<strong>Executive disposition:</strong> {disp}</p>"
+        )
 
     return f"""\
 <!DOCTYPE html>
@@ -157,6 +176,7 @@ def render_deadline_alert_html(alert: DeadlineAlert) -> str:
     </p>
     <p style="margin:0 0 8px;color:#fafafa;"><strong>Budget range:</strong> {budget}</p>
     <p style="margin:0;color:#fafafa;"><strong>Match score:</strong> {alert.match_score}</p>
+    {disposition_line}
   </div>
   <p style="margin:0 0 16px;color:#d4d4d4;">Submit your proposal now before the window closes.</p>
   <a href="{tender_url}"
@@ -184,6 +204,7 @@ def send_deadline_alert(alert: DeadlineAlert) -> dict[str, Any]:
         "tender_id": alert.tender_id,
         "days_left": alert.days_left,
         "title": alert.title,
+        "executive_disposition": alert.executive_disposition,
         "resend_id": result.get("id"),
     }
 
@@ -205,10 +226,12 @@ def send_all_deadline_alerts(
         ).all()
 
         for profile in profiles:
+            canonical_brief = fetch_company_executive_brief(profile.company_id)
             alerts = _collect_profile_alerts(
                 session,
                 profile,
                 min_match_score=min_match_score,
+                canonical_brief=canonical_brief,
             )
             alerts_found += len(alerts)
 
