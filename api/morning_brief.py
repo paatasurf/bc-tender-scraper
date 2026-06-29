@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 from intelligence.morning_brief import send_morning_brief
 
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 
 class MorningBriefRequest(BaseModel):
     company_id: int = Field(..., ge=1, description="companies.id for the brief target")
-    email: EmailStr = Field(..., description="Recipient email address")
+    email: str = Field(..., min_length=3, description="Recipient email address")
 
 
 @router.post("/morning-brief")
