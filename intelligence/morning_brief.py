@@ -8,6 +8,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -23,25 +24,58 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_VOICE_AGENT_URL = "https://voice-n8n-agent-production.up.railway.app"
 VANCOUVER_TZ = ZoneInfo("America/Vancouver")
-BRIEF_HEADING = "INTELLIGENCE BRIEF"
-BRIEF_ACCENT = "#3b82f6"
+
+
+@dataclass(frozen=True)
+class BriefSectionSpec:
+    key: str
+    label: str
+    color: str
+    italic_header: bool = False
+
+
+_BRIEF_SECTIONS: tuple[BriefSectionSpec, ...] = (
+    BriefSectionSpec("executive_summary", "EXECUTIVE SUMMARY", "#737373"),
+    BriefSectionSpec("pursue_now", "PURSUE NOW", "#22c55e"),
+    BriefSectionSpec("prepare_next", "PREPARE NEXT", "#eab308"),
+    BriefSectionSpec("monitor", "MONITOR", "#3b82f6"),
+    BriefSectionSpec("ignore", "IGNORE", "#737373"),
+    BriefSectionSpec("top_competitor", "TOP COMPETITOR", "#ef4444"),
+    BriefSectionSpec("top_permit_pipeline", "TOP PERMIT PIPELINE", "#f97316"),
+    BriefSectionSpec("biggest_risk", "BIGGEST RISK", "#ef4444"),
+    BriefSectionSpec("ceo_action_plan", "CEO ACTION PLAN", "#f59e0b"),
+    BriefSectionSpec("why", "WHY", "#737373", italic_header=True),
+)
+
+_SECTION_LABELS = {spec.label.upper(): spec for spec in _BRIEF_SECTIONS}
 
 
 def _voice_agent_url() -> str:
     return get_env("VOICE_AGENT_URL", DEFAULT_VOICE_AGENT_URL).rstrip("/")
 
 
+def _build_agent_message(company_name: str, company_id: int) -> str:
+    return (
+        f"Generate morning brief for {company_name} (company_id={company_id}). "
+        f"You MUST structure your response with these exact sections in this order:\n\n"
+        f"EXECUTIVE SUMMARY: 2-3 sentences on company position today.\n\n"
+        f"PURSUE NOW: Top 2-3 opportunities to bid immediately. For each: name, deadline, budget, score, one reason why.\n\n"
+        f"PREPARE NEXT: 1-2 opportunities coming soon that need preparation now.\n\n"
+        f"MONITOR: 2-3 tenders or signals to watch but not act on yet.\n\n"
+        f"IGNORE: 1-2 opportunities to skip and why.\n\n"
+        f"TOP COMPETITOR: The single biggest threat this week with threat score and what they're winning.\n\n"
+        f"TOP PERMIT PIPELINE: The most promising early signal that may become a tender in 30-90 days.\n\n"
+        f"BIGGEST RISK: One strategic risk for the company this month.\n\n"
+        f"CEO ACTION PLAN: Exactly 3 actions the CEO should take today, numbered 1-2-3.\n\n"
+        f"WHY: One paragraph explaining the data sources and confidence level behind this brief."
+    )
+
+
 def _fetch_morning_brief(company_id: int, company_name: str) -> dict[str, Any]:
     """Call voice-n8n-agent /api/chat for the morning brief narrative."""
     url = f"{_voice_agent_url()}/api/chat"
-    message = (
-        f"Generate morning brief for {company_name} (company_id={company_id}). "
-        f"Structure your response with these exact sections: "
-        f"PURSUE NOW, MONITOR, COMPETITOR ALERTS, EARLY SIGNALS. "
-        f"Each section must have content."
-    )
     payload = {
-        "message": message,
+        "message": _build_agent_message(company_name, company_id),
         "session_id": f"morning-brief-{company_id}",
         "context": {"company_id": company_id},
     }
@@ -72,9 +106,62 @@ def _fetch_morning_brief(company_id: int, company_name: str) -> dict[str, Any]:
     }
 
 
-def _lines_to_html(lines: list[str]) -> str:
+def _match_section_header(line: str) -> tuple[BriefSectionSpec, str] | None:
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    normalized = re.sub(r"^\s*(?:#{1,3}\s*)", "", stripped)
+    normalized = normalized.removeprefix("**").removesuffix("**").strip()
+
+    for label, spec in _SECTION_LABELS.items():
+        pattern = re.compile(
+            rf"^{re.escape(label)}\s*:?\s*(.*)$",
+            re.IGNORECASE,
+        )
+        match = pattern.match(normalized)
+        if match:
+            return spec, match.group(1).strip()
+    return None
+
+
+def parse_brief_sections(lines: list[str]) -> dict[str, list[str]]:
+    """Split agent response lines into CEO dashboard sections by header."""
+    sections: dict[str, list[str]] = {spec.key: [] for spec in _BRIEF_SECTIONS}
+    current: str | None = None
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if not line.strip():
+            if current:
+                sections[current].append("")
+            continue
+
+        matched = _match_section_header(line)
+        if matched:
+            spec, remainder = matched
+            current = spec.key
+            if remainder:
+                sections[current].append(remainder)
+            continue
+
+        if current:
+            sections[current].append(line)
+        else:
+            sections["executive_summary"].append(line)
+
+    return sections
+
+
+def _inline_format(text: str) -> str:
+    escaped = html.escape(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    return escaped
+
+
+def _content_lines_to_html(lines: list[str]) -> str:
     if not lines:
-        return '<p style="color:#888;margin:0;">No brief content returned.</p>'
+        return '<p style="color:#a3a3a3;margin:0;">No content for this section.</p>'
 
     blocks: list[str] = []
     list_items: list[str] = []
@@ -83,7 +170,7 @@ def _lines_to_html(lines: list[str]) -> str:
         nonlocal list_items
         if list_items:
             blocks.append(
-                '<ul style="margin:8px 0 0;padding-left:20px;">'
+                '<ul style="margin:8px 0 0;padding-left:20px;color:#fafafa;">'
                 + "".join(list_items)
                 + "</ul>"
             )
@@ -106,17 +193,53 @@ def _lines_to_html(lines: list[str]) -> str:
         else:
             flush_list()
             blocks.append(
-                f'<p style="margin:8px 0 0;line-height:1.5;">{_inline_format(stripped)}</p>'
+                f'<p style="margin:8px 0 0;line-height:1.6;color:#fafafa;">'
+                f"{_inline_format(stripped)}</p>"
             )
 
     flush_list()
-    return "".join(blocks) if blocks else '<p style="color:#888;margin:0;">—</p>'
+    return "".join(blocks) if blocks else '<p style="color:#a3a3a3;margin:0;">—</p>'
 
 
-def _inline_format(text: str) -> str:
-    escaped = html.escape(text)
-    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
-    return escaped
+def _render_section_box(spec: BriefSectionSpec, lines: list[str]) -> str:
+    content = _content_lines_to_html(lines)
+    italic = "italic" if spec.italic_header else "normal"
+    return f"""
+  <div style="margin-bottom:20px;">
+    <h2 style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;
+               color:{spec.color};margin:0 0 10px;font-weight:600;font-style:{italic};">
+      {spec.label}
+    </h2>
+    <div style="background:#141414;border:1px solid #262626;border-radius:8px;padding:16px 18px;">
+      {content}
+    </div>
+  </div>"""
+
+
+def _lines_to_html(lines: list[str]) -> str:
+    """Detect CEO dashboard section headers and render each in a styled box."""
+    if not lines:
+        return '<p style="color:#888;margin:0;">No brief content returned.</p>'
+
+    sections = parse_brief_sections(lines)
+    rendered: list[str] = []
+    matched_any = any(sections[spec.key] for spec in _BRIEF_SECTIONS[1:])
+
+    for spec in _BRIEF_SECTIONS:
+        content_lines = sections[spec.key]
+        if not content_lines:
+            continue
+        if not matched_any and spec.key != "executive_summary":
+            continue
+        rendered.append(_render_section_box(spec, content_lines))
+
+    if rendered:
+        return "".join(rendered)
+
+    return _render_section_box(
+        BriefSectionSpec("executive_summary", "EXECUTIVE SUMMARY", "#737373"),
+        lines,
+    )
 
 
 def _company_display_name(company_id: int) -> str:
@@ -137,20 +260,10 @@ def render_morning_brief_html(
     brief_text: str,
     brief_date: datetime | None = None,
 ) -> str:
-    """Render a dark-themed HTML email body for the morning brief."""
+    """Render a dark-themed CEO dashboard email body for the morning brief."""
     when = brief_date or datetime.now(VANCOUVER_TZ)
     date_label = when.strftime("%A, %B %d, %Y")
-    body = _lines_to_html(brief_text.splitlines())
-    brief_block = f"""
-  <div style="margin-bottom:28px;">
-    <h2 style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;
-               color:{BRIEF_ACCENT};margin:0 0 10px;font-weight:600;">
-      {BRIEF_HEADING}
-    </h2>
-    <div style="background:#141414;border:1px solid #262626;border-radius:8px;padding:16px 18px;">
-      {body}
-    </div>
-  </div>"""
+    section_blocks = _lines_to_html(brief_text.splitlines())
 
     return f"""\
 <!DOCTYPE html>
@@ -160,14 +273,14 @@ def render_morning_brief_html(
             max-width:640px;margin:0 auto;padding:32px 24px;color:#e5e5e5;background:#0a0a0a;">
   <div style="border-bottom:1px solid #262626;padding-bottom:20px;margin-bottom:28px;">
     <p style="margin:0 0 6px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#737373;">
-      TenderScope Morning Brief
+      TenderScope CEO Dashboard
     </p>
     <h1 style="margin:0;font-size:24px;font-weight:600;color:#fafafa;">
       {html.escape(company_name)}
     </h1>
     <p style="margin:8px 0 0;color:#a3a3a3;font-size:14px;">{html.escape(date_label)}</p>
   </div>
-{brief_block}
+{section_blocks}
   <div style="border-top:1px solid #262626;padding-top:20px;margin-top:8px;">
     <p style="margin:0;font-size:12px;color:#525252;text-align:center;">
       Powered by TenderScope · <a href="https://tenderscope.ca" style="color:#737373;text-decoration:none;">tenderscope.ca</a>
