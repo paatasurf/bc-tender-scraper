@@ -47,6 +47,7 @@ from api.clerk_plan import (
 from api.deadline_alerts import router as deadline_alerts_router
 from api.internal import router as internal_router
 from api.morning_brief import router as morning_brief_router
+from api.win_loss import router as win_loss_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
 from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
@@ -140,6 +141,7 @@ async def company_intelligence_plan_gate(request: Request, call_next):
 app.include_router(internal_router, dependencies=[Depends(verify_internal_key)])
 app.include_router(morning_brief_router, dependencies=[Depends(verify_internal_key)])
 app.include_router(deadline_alerts_router, dependencies=[Depends(verify_internal_key)])
+app.include_router(win_loss_router)
 app.include_router(admin_router)
 
 

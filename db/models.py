@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -369,6 +369,25 @@ class ClientProfile(Base):
     max_project_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TenderOutcome(Base):
+    """Recorded bid outcome for win/loss tracking (Phase X.1.5)."""
+
+    __tablename__ = "tender_outcomes"
+    __table_args__ = (
+        UniqueConstraint("company_id", "tender_id", name="uq_tender_outcomes_company_tender"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    tender_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    tender_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    bid_amount: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    award_amount: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class ArchTender(Base):

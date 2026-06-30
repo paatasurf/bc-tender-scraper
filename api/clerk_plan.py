@@ -22,6 +22,7 @@ COMPANY_INTEL_PATH_PREFIXES = (
     "/api/competitive-intelligence",
     "/api/company-wiki",
     "/api/client-profile",
+    "/api/win-loss",
 )
 
 PUBLIC_GET_PATH_PREFIXES = (
@@ -34,6 +35,7 @@ PUBLIC_GET_PATH_PREFIXES = (
     "/api/signals",
     "/api/tenders",
     "/api/contract-awards",
+    "/api/win-loss",
 )
 
 UPGRADE_DETAIL = "Company Intelligence requires a Basic or Pro plan."

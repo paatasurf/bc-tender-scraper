@@ -760,6 +760,32 @@ def _ensure_project_contacts_table(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_tender_outcomes_table(engine) -> None:
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS tender_outcomes (
+            id SERIAL PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            tender_id VARCHAR(255) NOT NULL,
+            tender_title VARCHAR(500),
+            outcome VARCHAR(20) CHECK (outcome IN ('won', 'lost', 'withdrew', 'pending')),
+            bid_amount NUMERIC,
+            award_amount NUMERIC,
+            notes TEXT,
+            recorded_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(company_id, tender_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_tender_outcomes_company_id "
+        "ON tender_outcomes (company_id)",
+        "CREATE INDEX IF NOT EXISTS ix_tender_outcomes_recorded_at "
+        "ON tender_outcomes (recorded_at DESC)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -775,6 +801,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_client_profiles_table(engine)
     _ensure_early_signal_events_table(engine)
     _ensure_project_contacts_table(engine)
+    _ensure_tender_outcomes_table(engine)
     _widen_commercial_text_columns(engine)
 
 
