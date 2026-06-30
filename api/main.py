@@ -588,6 +588,35 @@ def get_company(name: str) -> dict[str, Any]:
         session.close()
 
 
+@app.get("/api/companies/{company_id}/opportunities/unified")
+def company_opportunities_unified(
+    company_id: int,
+    kind: Literal["construction", "architecture"] = Query("construction"),
+    limit: int = Query(20, ge=1, le=50),
+) -> dict[str, Any]:
+    from pipeline.unified_opportunities import get_unified_opportunities
+
+    started = time.perf_counter()
+    session = get_session()
+    try:
+        try:
+            result = get_unified_opportunities(
+                session,
+                company_id=company_id,
+                kind=kind,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        print(
+            f"[API] company_opportunities_unified company_id={company_id} kind={kind} "
+            f"total={time.perf_counter() - started:.2f}s items={result.get('total')}"
+        )
+        return result
+    finally:
+        session.close()
+
+
 @app.get("/api/companies/{company_id}/opportunities")
 def company_opportunities(
     company_id: int,
