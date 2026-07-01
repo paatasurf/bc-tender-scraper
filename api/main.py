@@ -30,6 +30,7 @@ from db.models import (
     ClientProfile,
     CommercialTender,
     Company,
+    CompanyWiki,
     ContractAward,
     Job,
     LinkedInSignal,
@@ -532,6 +533,48 @@ def get_company_by_id(company_id: int) -> dict[str, Any]:
         if company is None:
             raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
         return _row_to_dict(company)
+    finally:
+        session.close()
+
+
+@app.get("/api/company-wiki/{company_id}")
+def get_company_wiki(
+    company_id: int,
+    kind: Literal["construction", "architecture"] = Query("construction"),
+) -> dict[str, Any]:
+    """Return the stored AI wiki for a company. 404 if no wiki has been generated yet."""
+    session = get_session()
+    try:
+        wiki = session.scalar(
+            select(CompanyWiki)
+            .where(CompanyWiki.company_id == company_id)
+            .where(CompanyWiki.company_kind == kind)
+        )
+        if wiki is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No wiki found for company_id={company_id} kind={kind}. "
+                    "Use POST /internal/refresh-company-wiki to generate one."
+                ),
+            )
+        return {
+            "company_id": wiki.company_id,
+            "company_kind": wiki.company_kind,
+            "company_name": wiki.company_name,
+            "wiki_markdown": wiki.wiki_markdown,
+            "sections": {
+                "summary": wiki.summary,
+                "specializations": wiki.specializations,
+                "market_position": wiki.market_position,
+                "geographic_focus": wiki.geographic_focus,
+                "competitive_profile": wiki.competitive_profile,
+            },
+            "data_snapshot": wiki.data_snapshot,
+            "model_used": wiki.model_used,
+            "generated_at": wiki.generated_at.isoformat() if wiki.generated_at else None,
+            "updated_at": wiki.updated_at.isoformat() if wiki.updated_at else None,
+        }
     finally:
         session.close()
 
