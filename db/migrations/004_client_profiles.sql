@@ -20,13 +20,16 @@ CREATE INDEX IF NOT EXISTS ix_client_profiles_email ON client_profiles (email);
 CREATE INDEX IF NOT EXISTS ix_client_profiles_alerts_enabled ON client_profiles (alerts_enabled);
 
 -- Test client profile (company_id=1)
-INSERT INTO client_profiles (clerk_user_id, company_id, company_name, email, regions, alerts_enabled)
+INSERT INTO client_profiles (
+    clerk_user_id, company_id, company_name, email, regions, specializations, alerts_enabled
+)
 SELECT
     '',
     1,
     COALESCE(c.name, 'Test Company'),
     'test@tenderscope.ca',
-    ARRAY['Vancouver', 'Burnaby', 'Surrey'],
+    ARRAY['Vancouver', 'Burnaby', 'Surrey']::varchar[],
+    ARRAY[]::varchar[],
     TRUE
 FROM companies c
 WHERE c.id = 1
