@@ -676,9 +676,21 @@ def _ensure_client_profiles_table(engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_client_profiles_alerts_enabled "
             "ON client_profiles (alerts_enabled)"
         ))
+        # Existing Railway tables may lack a DEFAULT on clerk_user_id; seed INSERT omits it.
+        conn.execute(text(
+            "ALTER TABLE client_profiles "
+            "ALTER COLUMN clerk_user_id SET DEFAULT ''"
+        ))
+        conn.execute(text(
+            "UPDATE client_profiles SET clerk_user_id = '' "
+            "WHERE clerk_user_id IS NULL"
+        ))
         conn.execute(text("""
-            INSERT INTO client_profiles (company_id, company_name, email, regions, alerts_enabled)
+            INSERT INTO client_profiles (
+                clerk_user_id, company_id, company_name, email, regions, alerts_enabled
+            )
             SELECT
+                '',
                 1,
                 COALESCE(c.name, 'Test Company'),
                 'test@tenderscope.ca',
