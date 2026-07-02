@@ -11,6 +11,7 @@ LIFECYCLE_STATUS_AWARDED = "awarded"
 LIFECYCLE_STATUS_CANCELLED = "cancelled"
 LIFECYCLE_STATUS_OUTCOME_UNKNOWN = "outcome_unknown"
 LIFECYCLE_STATUS_ARCHIVED = "archived"
+LIFECYCLE_STATUS_DELISTED = "delisted"
 
 LIFECYCLE_STATUSES: tuple[str, ...] = (
     LIFECYCLE_STATUS_NEW,
@@ -21,6 +22,17 @@ LIFECYCLE_STATUSES: tuple[str, ...] = (
     LIFECYCLE_STATUS_CANCELLED,
     LIFECYCLE_STATUS_OUTCOME_UNKNOWN,
     LIFECYCLE_STATUS_ARCHIVED,
+    LIFECYCLE_STATUS_DELISTED,
+)
+
+# Reconciliation / manual states — automatic P2-02 rules do not override these.
+LIFECYCLE_AUTO_TRANSITION_SKIP_STATUSES: frozenset[str] = frozenset(
+    {
+        LIFECYCLE_STATUS_AWARDED,
+        LIFECYCLE_STATUS_CANCELLED,
+        LIFECYCLE_STATUS_ARCHIVED,
+        LIFECYCLE_STATUS_OUTCOME_UNKNOWN,
+    }
 )
 
 # Columns managed by lifecycle engine / manual override — never overwritten by CSV import.

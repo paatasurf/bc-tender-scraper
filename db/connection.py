@@ -863,6 +863,33 @@ def _ensure_tender_presence_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_lifecycle_delisted_status(engine) -> None:
+    """P2-02: extend lifecycle_status CHECK constraints to allow 'delisted'."""
+    statements = [
+        "ALTER TABLE tenders DROP CONSTRAINT IF EXISTS ck_tenders_lifecycle_status",
+        """ALTER TABLE tenders ADD CONSTRAINT ck_tenders_lifecycle_status
+            CHECK (lifecycle_status IN (
+                'new', 'active', 'closing_soon', 'closed', 'awarded',
+                'cancelled', 'outcome_unknown', 'archived', 'delisted'
+            ))""",
+        "ALTER TABLE commercial_tenders DROP CONSTRAINT IF EXISTS ck_commercial_tenders_lifecycle_status",
+        """ALTER TABLE commercial_tenders ADD CONSTRAINT ck_commercial_tenders_lifecycle_status
+            CHECK (lifecycle_status IN (
+                'new', 'active', 'closing_soon', 'closed', 'awarded',
+                'cancelled', 'outcome_unknown', 'archived', 'delisted'
+            ))""",
+        "ALTER TABLE arch_tenders DROP CONSTRAINT IF EXISTS ck_arch_tenders_lifecycle_status",
+        """ALTER TABLE arch_tenders ADD CONSTRAINT ck_arch_tenders_lifecycle_status
+            CHECK (lifecycle_status IN (
+                'new', 'active', 'closing_soon', 'closed', 'awarded',
+                'cancelled', 'outcome_unknown', 'archived', 'delisted'
+            ))""",
+    ]
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_tender_lifecycle_columns(engine) -> None:
     from db.tender_lifecycle_ddl import (
         LIFECYCLE_STATUS_CHECK_SQL,
@@ -902,6 +929,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_tender_outcomes_table(engine)
     _ensure_tender_presence_columns(engine)
     _ensure_tender_lifecycle_columns(engine)
+    _ensure_lifecycle_delisted_status(engine)
     _widen_commercial_text_columns(engine)
 
 

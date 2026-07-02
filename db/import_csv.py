@@ -13,6 +13,7 @@ from db.tender_presence import (
     ARCH_CONTENT_COLUMNS,
     COMMERCIAL_CONTENT_COLUMNS,
     TENDER_CONTENT_COLUMNS,
+    sync_missing_from_source_counts,
     upsert_with_presence,
 )
 from scraper.tender_category import resolve_tender_category
@@ -99,7 +100,12 @@ def import_tenders(session: Session, path: Path | None = None) -> int:
         TENDER_CONTENT_COLUMNS,
         preserve_on_update=AI_PRESERVE_COLUMNS,
     )
-    print(f"[Import] Tenders: {count} rows")
+    presence = sync_missing_from_source_counts(
+        session,
+        Tender,
+        {row["url"] for row in payload},
+    )
+    print(f"[Import] Tenders: {count} rows; missing_from_source reset={presence['reset']} incremented={presence['incremented']}")
     return count
 
 
@@ -249,7 +255,15 @@ def import_commercial_tenders(session: Session, path: Path | None = None) -> int
         preserve_on_update=AI_PRESERVE_COLUMNS,
         batch_size=COMMERCIAL_BATCH_SIZE,
     )
-    print(f"[Import] Commercial tenders: {count} rows")
+    presence = sync_missing_from_source_counts(
+        session,
+        CommercialTender,
+        {row["url"] for row in payload},
+    )
+    print(
+        f"[Import] Commercial tenders: {count} rows; "
+        f"missing_from_source reset={presence['reset']} incremented={presence['incremented']}"
+    )
     return count
 
 
@@ -277,7 +291,15 @@ def import_arch_tenders(session: Session, path: Path | None = None) -> int:
         ARCH_CONTENT_COLUMNS,
         preserve_on_update=AI_PRESERVE_COLUMNS,
     )
-    print(f"[Import] Architecture tenders: {count} rows")
+    presence = sync_missing_from_source_counts(
+        session,
+        ArchTender,
+        {row["url"] for row in payload},
+    )
+    print(
+        f"[Import] Architecture tenders: {count} rows; "
+        f"missing_from_source reset={presence['reset']} incremented={presence['incremented']}"
+    )
     return count
 
 

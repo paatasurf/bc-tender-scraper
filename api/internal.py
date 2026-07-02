@@ -18,6 +18,7 @@ from pipeline.internal_steps import (
     run_populate_project_contacts_step,
 )
 from pipeline.run_coordinator import PipelineOrderError
+from pipeline.lifecycle_resolver import resolve_tender_lifecycle
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
     execute_tracked_step,
@@ -328,6 +329,20 @@ def import_contract_awards_route(
         run_import_contract_awards_step,
         body.run_id if body else None,
     )
+
+
+@router.post("/lifecycle/resolve")
+def resolve_lifecycle(request: Request) -> dict[str, Any]:
+    """Apply deterministic lifecycle transitions (P2-02). Nightly n8n trigger."""
+    _require_internal_key(request)
+    from db.connection import init_db
+
+    init_db()
+    session = get_session()
+    try:
+        return resolve_tender_lifecycle(session)
+    finally:
+        session.close()
 
 
 @router.post("/import")

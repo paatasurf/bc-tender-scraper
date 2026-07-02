@@ -51,6 +51,7 @@ def test_lifecycle_import_skip_columns_protected_from_csv_upsert():
 def test_lifecycle_status_vocabulary_includes_outcome_unknown():
     assert "outcome_unknown" in LIFECYCLE_STATUSES
     assert "active" in LIFECYCLE_STATUSES
+    assert "delisted" in LIFECYCLE_STATUSES
 
 
 def test_ddl_targets_all_tender_tables():

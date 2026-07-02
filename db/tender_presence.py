@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Sequence, Type
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, func, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -118,3 +118,29 @@ def upsert_with_presence(
         imported += len(batch)
 
     return imported
+
+
+def sync_missing_from_source_counts(
+    session: Session,
+    model: Type[Tender] | Type[CommercialTender] | Type[ArchTender],
+    scraped_urls: set[str],
+) -> dict[str, int]:
+    """After a scrape+import cycle: reset present URLs, increment absent rows."""
+    if not scraped_urls:
+        return {"reset": 0, "incremented": 0}
+
+    reset_result = session.execute(
+        update(model)
+        .where(model.url.in_(scraped_urls))
+        .values(missing_from_source_count=0)
+    )
+    incremented_result = session.execute(
+        update(model)
+        .where(model.url.not_in(scraped_urls))
+        .values(missing_from_source_count=model.missing_from_source_count + 1)
+    )
+    session.commit()
+    return {
+        "reset": int(reset_result.rowcount or 0),
+        "incremented": int(incremented_result.rowcount or 0),
+    }

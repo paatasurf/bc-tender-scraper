@@ -35,7 +35,7 @@ BEGIN
         ALTER TABLE {table} ADD CONSTRAINT ck_{table}_lifecycle_status
             CHECK (lifecycle_status IN (
                 'new', 'active', 'closing_soon', 'closed', 'awarded',
-                'cancelled', 'outcome_unknown', 'archived'
+                'cancelled', 'outcome_unknown', 'archived', 'delisted'
             ));
     END IF;
 END $$;
