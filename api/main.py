@@ -146,6 +146,24 @@ app.include_router(win_loss_router)
 app.include_router(admin_router)
 
 
+@app.post(
+    "/internal/lifecycle/reconcile-awards",
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_key)],
+)
+def reconcile_awards_route() -> dict[str, Any]:
+    """Match closed tenders to contract_awards (P2-03). Nightly n8n trigger after resolver."""
+    from db.connection import init_db
+    from pipeline.awards_reconciler import reconcile_awards
+
+    init_db()
+    session = get_session()
+    try:
+        return reconcile_awards(session)
+    finally:
+        session.close()
+
+
 @app.exception_handler(OperationalError)
 @app.exception_handler(DBAPIError)
 def database_unavailable_handler(_request: Request, exc: Exception) -> JSONResponse:

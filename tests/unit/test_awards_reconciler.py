@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
+from fastapi.testclient import TestClient
 
-from api import internal as internal_api
+from api.main import app
 from db.lifecycle_constants import LIFECYCLE_STATUS_AWARDED, LIFECYCLE_STATUS_CLOSED
 from pipeline.awards_reconciler import (
     AWARD_MATCH_CONFIDENCE_HIGH,
@@ -220,10 +220,9 @@ def test_reconcile_awards_idempotent_when_already_awarded():
 
 
 def test_reconcile_awards_endpoint_requires_internal_key():
-    request = MagicMock()
-    request.headers.get.return_value = None
+    client = TestClient(app)
 
     with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
-        with pytest.raises(Exception) as exc:
-            internal_api.reconcile_awards_route(request)
-    assert getattr(exc.value, "status_code", None) == 403
+        response = client.post("/internal/lifecycle/reconcile-awards")
+
+    assert response.status_code == 403

@@ -20,7 +20,6 @@ from pipeline.internal_steps import (
 )
 from pipeline.run_coordinator import PipelineOrderError
 from pipeline.lifecycle_resolver import resolve_tender_lifecycle
-from pipeline.awards_reconciler import reconcile_awards
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
     execute_tracked_step,
@@ -343,20 +342,6 @@ def resolve_lifecycle(request: Request) -> dict[str, Any]:
     session = get_session()
     try:
         return resolve_tender_lifecycle(session)
-    finally:
-        session.close()
-
-
-@router.post("/lifecycle/reconcile-awards")
-def reconcile_awards_route(request: Request) -> dict[str, Any]:
-    """Match closed tenders to contract_awards (P2-03). Nightly n8n trigger after resolver."""
-    _require_internal_key(request)
-    from db.connection import init_db
-
-    init_db()
-    session = get_session()
-    try:
-        return reconcile_awards(session)
     finally:
         session.close()
 
