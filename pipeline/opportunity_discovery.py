@@ -25,6 +25,7 @@ from db.models import (
     Tender,
 )
 from pipeline.company_matching import normalize_vendor_name
+from pipeline.market_normalizer import tender_lifecycle_eligible
 from pipeline.ai_matching import (
     HYBRID_AI_CANDIDATE_LIMIT,
     HYBRID_INLINE_SCORE_CAP,
@@ -366,13 +367,6 @@ def _keyword_points(haystack: str, keywords: set[str]) -> tuple[int, list[str]]:
     if not matched:
         return 0, []
     return min(25, 10 + len(matched) * 3), matched
-
-
-def _is_tender_open(deadline: str) -> bool:
-    parsed = _parse_date(deadline)
-    if parsed is None:
-        return True
-    return parsed >= date.today()
 
 
 def _buyer_relevance_points(signals: CompanySignals, organization: str) -> tuple[int, str | None]:
@@ -845,14 +839,30 @@ def _award_payload(award: ContractAward) -> dict[str, Any]:
     }
 
 
-def _load_tender_candidates(session: Session, kind: Kind, limit: int) -> list[tuple[Any, str]]:
+def _tender_deadline(row: Any) -> str:
+    raw = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
+    return str(raw)
+
+
+def _load_tender_candidates(
+    session: Session,
+    kind: Kind,
+    limit: int,
+    *,
+    include_closed: bool = False,
+) -> list[tuple[Any, str]]:
     rows: list[tuple[Any, str]] = []
     if kind == "construction":
         relevance_v1 = _construction_tender_relevance_v1_enabled()
-        federal = session.scalars(select(Tender).order_by(Tender.id.desc()).limit(limit)).all()
-        commercial = session.scalars(
-            select(CommercialTender).order_by(CommercialTender.id.desc()).limit(limit)
-        ).all()
+        federal_stmt = select(Tender).order_by(Tender.id.desc()).limit(limit)
+        if not include_closed:
+            federal_stmt = federal_stmt.where(Tender.is_open.is_(True))
+        federal = session.scalars(federal_stmt).all()
+
+        commercial_stmt = select(CommercialTender).order_by(CommercialTender.id.desc()).limit(limit)
+        if not include_closed:
+            commercial_stmt = commercial_stmt.where(CommercialTender.is_open.is_(True))
+        commercial = session.scalars(commercial_stmt).all()
         rows.extend((row, "federal") for row in federal)
         rows.extend((row, "commercial") for row in commercial)
         if relevance_v1:
@@ -864,7 +874,10 @@ def _load_tender_candidates(session: Session, kind: Kind, limit: int) -> list[tu
             ]
             logger.info("F005 pool: %d → %d after exclusion filter", before, len(rows))
     else:
-        arch = session.scalars(select(ArchTender).order_by(ArchTender.id.desc()).limit(limit)).all()
+        arch_stmt = select(ArchTender).order_by(ArchTender.id.desc()).limit(limit)
+        if not include_closed:
+            arch_stmt = arch_stmt.where(ArchTender.is_open.is_(True))
+        arch = session.scalars(arch_stmt).all()
         rows.extend((row, "arch") for row in arch)
     return rows
 
@@ -894,6 +907,8 @@ def _load_construction_read_bundle(
     session: Session,
     company_id: int,
     max_candidates: int,
+    *,
+    include_closed: bool = False,
 ) -> DiscoveryReadBundle:
     kind: Kind = "construction"
     started = time.perf_counter()
@@ -907,7 +922,9 @@ def _load_construction_read_bundle(
     _log_discover_step("read.signals", company_id, kind, signals_started)
 
     tender_started = time.perf_counter()
-    tender_rows = _load_tender_candidates(session, "construction", max_candidates)
+    tender_rows = _load_tender_candidates(
+        session, "construction", max_candidates, include_closed=include_closed
+    )
     _log_discover_step(
         "read.tenders", company_id, kind, tender_started, extra=f"rows={len(tender_rows)}"
     )
@@ -952,6 +969,8 @@ def _load_architecture_read_bundle(
     session: Session,
     company_id: int,
     max_candidates: int,
+    *,
+    include_closed: bool = False,
 ) -> DiscoveryReadBundle:
     kind: Kind = "architecture"
     started = time.perf_counter()
@@ -965,7 +984,9 @@ def _load_architecture_read_bundle(
     _log_discover_step("read.signals", company_id, kind, signals_started)
 
     tender_started = time.perf_counter()
-    tender_rows = _load_tender_candidates(session, "architecture", max_candidates)
+    tender_rows = _load_tender_candidates(
+        session, "architecture", max_candidates, include_closed=include_closed
+    )
     _log_discover_step(
         "read.tenders", company_id, kind, tender_started, extra=f"rows={len(tender_rows)}"
     )
@@ -1015,11 +1036,13 @@ def _load_architecture_read_bundle(
 def _scan_construction_rule_tenders_from_rows(
     tender_rows: list[tuple[Any, str]],
     signals: CompanySignals,
+    *,
+    include_closed: bool = False,
 ) -> list[RuleTenderCandidate]:
     results: list[RuleTenderCandidate] = []
     for row, source in tender_rows:
-        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
-        if not _is_tender_open(deadline):
+        deadline = _tender_deadline(row)
+        if not tender_lifecycle_eligible(row, deadline, include_closed=include_closed):
             continue
         payload = _tender_payload(row, source)
         score, reasons = _score_construction_tender_rules(signals, payload)
@@ -1038,11 +1061,13 @@ def _scan_construction_rule_tenders_from_rows(
 def _scan_architecture_rule_tenders_from_rows(
     tender_rows: list[tuple[Any, str]],
     signals: CompanySignals,
+    *,
+    include_closed: bool = False,
 ) -> list[RuleTenderCandidate]:
     results: list[RuleTenderCandidate] = []
     for row, source in tender_rows:
-        deadline = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
-        if not _is_tender_open(deadline):
+        deadline = _tender_deadline(row)
+        if not tender_lifecycle_eligible(row, deadline, include_closed=include_closed):
             continue
         if source != "arch":
             continue
@@ -1070,10 +1095,13 @@ def _scan_construction_rule_tenders(
     session: Session,
     signals: CompanySignals,
     max_candidates: int,
+    *,
+    include_closed: bool = False,
 ) -> list[RuleTenderCandidate]:
     return _scan_construction_rule_tenders_from_rows(
-        _load_tender_candidates(session, "construction", max_candidates),
+        _load_tender_candidates(session, "construction", max_candidates, include_closed=include_closed),
         signals,
+        include_closed=include_closed,
     )
 
 
@@ -1081,10 +1109,13 @@ def _scan_architecture_rule_tenders(
     session: Session,
     signals: CompanySignals,
     max_candidates: int,
+    *,
+    include_closed: bool = False,
 ) -> list[RuleTenderCandidate]:
     return _scan_architecture_rule_tenders_from_rows(
-        _load_tender_candidates(session, "architecture", max_candidates),
+        _load_tender_candidates(session, "architecture", max_candidates, include_closed=include_closed),
         signals,
+        include_closed=include_closed,
     )
 
 
@@ -1375,6 +1406,7 @@ def _cached_ai_tenders_to_opportunity_items(
     ai_stretch_threshold: int | None = None,
     fresh_cache: dict[tuple[str, int], Any] | None = None,
     cached_tender_rows: dict[tuple[str, int], Any] | None = None,
+    include_closed: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Surface fresh tender_matches rows that were not in the rule scan."""
     matches: list[dict[str, Any]] = []
@@ -1404,8 +1436,8 @@ def _cached_ai_tenders_to_opportunity_items(
             continue
         if tender is None:
             continue
-        deadline = getattr(tender, "closing_date", None) or getattr(tender, "deadline", "") or ""
-        if not _is_tender_open(deadline):
+        deadline = _tender_deadline(tender)
+        if not tender_lifecycle_eligible(tender, deadline, include_closed=include_closed):
             continue
 
         payload = _tender_payload(tender, row.tender_source)
@@ -1837,6 +1869,7 @@ def _discover_construction_opportunities(
     max_candidates: int,
     min_score: int = CONSTRUCTION_TENDER_RULES_THRESHOLD,
     metrics: SessionPhaseMetrics | None = None,
+    include_closed: bool = False,
 ) -> dict[str, Any]:
     """Construction Intelligence ranking with phased DB sessions."""
     phase_metrics = metrics or SessionPhaseMetrics()
@@ -1846,7 +1879,9 @@ def _discover_construction_opportunities(
 
     read_started = time.perf_counter()
     with session_scope() as session:
-        bundle = _load_construction_read_bundle(session, company_id, max_candidates)
+        bundle = _load_construction_read_bundle(
+            session, company_id, max_candidates, include_closed=include_closed
+        )
         _finalize_read_bundle(session, bundle)
     phase_metrics.read_ms = (time.perf_counter() - read_started) * 1000
 
@@ -1854,7 +1889,9 @@ def _discover_construction_opportunities(
     signals = bundle.signals
 
     rule_started = time.perf_counter()
-    rule_candidates = _scan_construction_rule_tenders_from_rows(bundle.tender_rows, signals)
+    rule_candidates = _scan_construction_rule_tenders_from_rows(
+        bundle.tender_rows, signals, include_closed=include_closed
+    )
     print(
         f"[OpportunityDiscovery] construction company={company.id} rule_scan "
         f"{time.perf_counter() - rule_started:.2f}s candidates={len(rule_candidates)}"
@@ -2006,6 +2043,7 @@ def _discover_architecture_opportunities(
     max_candidates: int,
     min_score: int = ARCHITECTURE_DEFAULT_MIN_SCORE,
     metrics: SessionPhaseMetrics | None = None,
+    include_closed: bool = False,
 ) -> dict[str, Any]:
     """Architecture discovery with phased DB sessions."""
     phase_metrics = metrics or SessionPhaseMetrics()
@@ -2017,7 +2055,9 @@ def _discover_architecture_opportunities(
 
     read_started = time.perf_counter()
     with session_scope() as session:
-        bundle = _load_architecture_read_bundle(session, company_id, max_candidates)
+        bundle = _load_architecture_read_bundle(
+            session, company_id, max_candidates, include_closed=include_closed
+        )
         _finalize_read_bundle(session, bundle)
     phase_metrics.read_ms = (time.perf_counter() - read_started) * 1000
 
@@ -2025,7 +2065,9 @@ def _discover_architecture_opportunities(
     signals = bundle.signals
 
     rule_started = time.perf_counter()
-    rule_candidates = _scan_architecture_rule_tenders_from_rows(bundle.tender_rows, signals)
+    rule_candidates = _scan_architecture_rule_tenders_from_rows(
+        bundle.tender_rows, signals, include_closed=include_closed
+    )
     print(
         f"[OpportunityDiscovery] arch company={company.id} rule_scan "
         f"{time.perf_counter() - rule_started:.2f}s candidates={len(rule_candidates)}"
@@ -2084,6 +2126,7 @@ def _discover_architecture_opportunities(
         ai_stretch_threshold=ai_tender_stretch_threshold,
         fresh_cache=fresh_cache,
         cached_tender_rows=cached_tender_rows,
+        include_closed=include_closed,
     )
     tender_matches.extend(cached_matches)
     tender_stretch.extend(cached_stretch)
@@ -2176,6 +2219,7 @@ def discover_opportunities(
     min_score: int | None = None,
     limit: int = 15,
     max_candidates: int = 400,
+    include_closed: bool = False,
 ) -> dict[str, Any]:
     """Rank tenders, permits, and contract awards for a company profile."""
     metrics = SessionPhaseMetrics()
@@ -2186,6 +2230,7 @@ def discover_opportunities(
             max_candidates=max_candidates,
             min_score=min_score if min_score is not None else CONSTRUCTION_DEFAULT_MIN_SCORE,
             metrics=metrics,
+            include_closed=include_closed,
         )
 
     return _discover_architecture_opportunities(
@@ -2194,4 +2239,5 @@ def discover_opportunities(
         max_candidates=max_candidates,
         min_score=min_score if min_score is not None else ARCHITECTURE_DEFAULT_MIN_SCORE,
         metrics=metrics,
+        include_closed=include_closed,
     )

@@ -173,6 +173,7 @@ def get_unified_opportunities(
     construction_fetch_limit: int = 50,
     construction_min_score: int = 0,
     bd_active_limit: int = 10,
+    include_closed: bool = False,
 ) -> dict[str, Any]:
     """Merge construction hybrid discovery with BD active tenders (union, dual provenance)."""
     discovery = discover_opportunities(
@@ -180,12 +181,14 @@ def get_unified_opportunities(
         kind=kind,
         min_score=construction_min_score,
         limit=construction_fetch_limit,
+        include_closed=include_closed,
     )
     bd = recommend_bd_intelligence(
         session,
         company_id=company_id,
         kind=kind,
         active_limit=bd_active_limit,
+        include_closed=include_closed,
     )
 
     construction_rows = _extract_construction_tenders(discovery)

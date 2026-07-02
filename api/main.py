@@ -636,6 +636,7 @@ def company_opportunities_unified(
     company_id: int,
     kind: Literal["construction", "architecture"] = Query("construction"),
     limit: int = Query(20, ge=1, le=50),
+    include_closed: bool = Query(False),
 ) -> dict[str, Any]:
     from pipeline.unified_opportunities import get_unified_opportunities
 
@@ -648,6 +649,7 @@ def company_opportunities_unified(
                 company_id=company_id,
                 kind=kind,
                 limit=limit,
+                include_closed=include_closed,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -666,6 +668,7 @@ def company_opportunities(
     kind: Literal["construction", "architecture"] = Query("construction"),
     min_score: int = Query(CONSTRUCTION_DEFAULT_MIN_SCORE, ge=0, le=100),
     limit: int = Query(15, ge=1, le=50),
+    include_closed: bool = Query(False),
 ) -> dict[str, Any]:
     from pipeline.opportunity_discovery import discover_opportunities
 
@@ -676,6 +679,7 @@ def company_opportunities(
             kind=kind,
             min_score=min_score,
             limit=limit,
+            include_closed=include_closed,
         )
         print(
             f"[API] company_opportunities company_id={company_id} kind={kind} "
@@ -869,6 +873,7 @@ def arch_company_opportunities(
     company_id: int,
     min_score: int = Query(ARCHITECTURE_DEFAULT_MIN_SCORE, ge=0, le=100),
     limit: int = Query(15, ge=1, le=50),
+    include_closed: bool = Query(False),
 ) -> dict[str, Any]:
     from pipeline.opportunity_discovery import discover_opportunities
 
@@ -879,6 +884,7 @@ def arch_company_opportunities(
             kind="architecture",
             min_score=min_score,
             limit=limit,
+            include_closed=include_closed,
         )
         print(
             f"[API] arch_company_opportunities company_id={company_id} "

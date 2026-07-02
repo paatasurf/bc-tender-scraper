@@ -59,11 +59,19 @@ def _parse_date(value: str) -> date | None:
         return None
 
 
-def is_open(deadline: str) -> bool:
+def deadline_is_open(deadline: str) -> bool:
+    """Legacy string-date open check — distinct from Tender.is_open lifecycle column."""
     parsed = _parse_date(deadline)
     if parsed is None:
         return True
     return parsed >= date.today()
+
+
+def tender_lifecycle_eligible(row: Any, deadline: str, *, include_closed: bool = False) -> bool:
+    """Lifecycle column AND legacy deadline check (both must pass unless include_closed)."""
+    if not include_closed and not bool(getattr(row, "is_open", True)):
+        return False
+    return deadline_is_open(deadline)
 
 
 def infer_buyer_level(source: str, org: str = "") -> str:
@@ -141,7 +149,7 @@ def _tender_record(row: Any, source: str) -> NormalizedOpportunity:
         estimated_value=value,
         geography_text=f"{getattr(row, 'location', '')} {org}",
         deadline=payload["deadline"],
-        is_open=is_open(payload["deadline"]),
+        is_open=deadline_is_open(payload["deadline"]),
         payload=payload,
         context="open_tender",
         delivery_type=delivery,
@@ -260,25 +268,40 @@ def _award_record(award: ContractAward, *, context: str) -> NormalizedOpportunit
     )
 
 
-def load_active_tenders(session: Session, kind: str, limit: int = 400) -> list[NormalizedOpportunity]:
+def _tender_deadline_text(row: Any) -> str:
+    raw = getattr(row, "closing_date", None) or getattr(row, "deadline", "") or ""
+    return str(raw).replace("/", "-")[:10]
+
+
+def _open_tender_query(model: type[Any], limit: int, *, include_closed: bool):
+    stmt = select(model).order_by(model.id.desc()).limit(limit)
+    if not include_closed:
+        stmt = stmt.where(model.is_open.is_(True))
+    return stmt
+
+
+def load_active_tenders(
+    session: Session,
+    kind: str,
+    limit: int = 400,
+    *,
+    include_closed: bool = False,
+) -> list[NormalizedOpportunity]:
     rows: list[NormalizedOpportunity] = []
     if kind == "architecture":
-        for row in session.scalars(select(ArchTender).order_by(ArchTender.id.desc()).limit(limit)).all():
-            opp = _tender_record(row, "arch")
-            if opp.is_open:
-                rows.append(opp)
+        for row in session.scalars(_open_tender_query(ArchTender, limit, include_closed=include_closed)).all():
+            if tender_lifecycle_eligible(row, _tender_deadline_text(row), include_closed=include_closed):
+                rows.append(_tender_record(row, "arch"))
         return rows
 
-    for row in session.scalars(select(Tender).order_by(Tender.id.desc()).limit(limit)).all():
-        opp = _tender_record(row, "federal")
-        if opp.is_open:
-            rows.append(opp)
+    for row in session.scalars(_open_tender_query(Tender, limit, include_closed=include_closed)).all():
+        if tender_lifecycle_eligible(row, _tender_deadline_text(row), include_closed=include_closed):
+            rows.append(_tender_record(row, "federal"))
     for row in session.scalars(
-        select(CommercialTender).order_by(CommercialTender.id.desc()).limit(limit)
+        _open_tender_query(CommercialTender, limit, include_closed=include_closed)
     ).all():
-        opp = _tender_record(row, "commercial")
-        if opp.is_open:
-            rows.append(opp)
+        if tender_lifecycle_eligible(row, _tender_deadline_text(row), include_closed=include_closed):
+            rows.append(_tender_record(row, "commercial"))
     return rows
 
 

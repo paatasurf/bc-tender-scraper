@@ -194,13 +194,16 @@ def recommend_bd_intelligence(
     max_candidates: int = 400,
     include_rejections: bool = False,
     min_bps: int | None = None,
+    include_closed: bool = False,
 ) -> dict[str, Any]:
     cip = get_cip(session, company_id=company_id, kind=kind, refresh=refresh_profile)
     profile = cip_to_capability_profile(cip)
 
     active_threshold = min_bps if min_bps is not None else ACTIVE_BPS_THRESHOLD
 
-    tender_pool = load_active_tenders(session, kind, limit=max_candidates)
+    tender_pool = load_active_tenders(
+        session, kind, limit=max_candidates, include_closed=include_closed
+    )
     permit_pool = load_pipeline_permits(session, profile, limit=max_candidates // 2)
     award_pool: list[NormalizedOpportunity] = []
     if kind == "construction":
