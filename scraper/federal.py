@@ -16,6 +16,7 @@ from scraper.config import (
     FEDERAL_STATUS_OPEN,
 )
 from scraper.models import Tender
+from scraper.tender_category import CANADABUYS_SOURCE, resolve_tender_category
 from scraper.utils import clean_text, matches_target_category, polite_get
 
 
@@ -143,14 +144,11 @@ def _parse_detail_page(soup: BeautifulSoup, listing: dict[str, str]) -> Tender:
                 estimated_value = clean_text(value.get_text(" ", strip=True))
                 break
 
-    category = listing["category"]
-    if not matches_target_category(category, title):
-        category_blob = clean_text(soup.get_text(" ", strip=True))
-        if matches_target_category(category_blob):
-            for keyword in ("construction", "architecture", "engineering"):
-                if keyword in category_blob.lower() and keyword.title() not in category:
-                    category = keyword.title()
-                    break
+    category = resolve_tender_category(
+        title=title,
+        source=CANADABUYS_SOURCE,
+        raw_category=listing["category"],
+    )
 
     return Tender(
         title=title,

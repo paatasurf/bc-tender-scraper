@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
 from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, RedditSignal, Tender
 from db.permit_import import upsert_city_permits
+from scraper.tender_category import resolve_tender_category
 from scraper.config import (
     ARCH_TENDERS_CSV,
     BUILDING_PERMITS_CSV,
@@ -68,7 +69,11 @@ def import_tenders(session: Session, path: Path | None = None) -> int:
         {
             "title": row.get("title", ""),
             "organization": row.get("organization", ""),
-            "category": row.get("category", ""),
+            "category": resolve_tender_category(
+                title=row.get("title", ""),
+                source=row.get("source", ""),
+                raw_category=row.get("category", ""),
+            ),
             "posted_date": row.get("posted_date", ""),
             "closing_date": row.get("closing_date", ""),
             "estimated_value": row.get("estimated_value", ""),

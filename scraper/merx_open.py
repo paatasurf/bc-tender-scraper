@@ -4,19 +4,22 @@ import requests
 
 from scraper.config import (
     MERX_ARCH_BC_LOCATION,
-    MERX_CONSTRUCTION_CATEGORY,
     MERX_OPEN_LIST_PATH,
     MERX_OPEN_SOURCE,
 )
 from scraper.merx_common import iter_merx_listing_pages
 from scraper.models import Tender
+from scraper.tender_category import MERX_SOURCE, resolve_tender_category
 
 
 def _listing_to_tender(listing: dict[str, str]) -> Tender:
     return Tender(
         title=listing["title"],
         organization=listing["organization"],
-        category=MERX_CONSTRUCTION_CATEGORY,
+        category=resolve_tender_category(
+            title=listing["title"],
+            source=MERX_SOURCE,
+        ),
         posted_date="",
         closing_date=listing["closing_date"],
         estimated_value="",
