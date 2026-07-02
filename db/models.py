@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -56,6 +56,11 @@ class Permit(Base):
     city: Mapped[str] = mapped_column(String(100), default="Vancouver", index=True)
     external_id: Mapped[str] = mapped_column(String(100), default="", index=True)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    lifecycle_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
+    lifecycle_status_override: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    source_status_raw: Mapped[str] = mapped_column(String(100), default="")
 
 
 class EarlySignalEvent(Base):

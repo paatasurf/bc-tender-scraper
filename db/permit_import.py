@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from db.constants import BATCH_SIZE
 from db.models import Permit
+from db.permit_lifecycle_constants import PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
 
 PERMIT_VARCHAR_LIMITS: dict[str, int] = {
     "address": 300,
@@ -61,7 +62,7 @@ def upsert_city_permits(
 
     table = Permit.__table__
     imported = 0
-    skip_on_update = {"id", "scraped_at"}
+    skip_on_update = {"id", "scraped_at"} | PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
 
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start : start + BATCH_SIZE]

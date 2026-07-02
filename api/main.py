@@ -164,6 +164,24 @@ def reconcile_awards_route() -> dict[str, Any]:
         session.close()
 
 
+@app.post(
+    "/internal/lifecycle/resolve-permits",
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_key)],
+)
+def resolve_permit_lifecycle_route() -> dict[str, Any]:
+    """Apply permit lifecycle rules. Nightly n8n trigger at 06:15 Vancouver."""
+    from db.connection import init_db
+    from pipeline.permit_lifecycle_resolver import resolve_permit_lifecycle
+
+    init_db()
+    session = get_session()
+    try:
+        return resolve_permit_lifecycle(session)
+    finally:
+        session.close()
+
+
 @app.exception_handler(OperationalError)
 @app.exception_handler(DBAPIError)
 def database_unavailable_handler(_request: Request, exc: Exception) -> JSONResponse:
