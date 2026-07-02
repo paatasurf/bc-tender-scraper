@@ -31,6 +31,9 @@ class Tender(Base):
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(Text, default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Permit(Base):
@@ -159,6 +162,9 @@ class CommercialTender(Base):
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(Text, default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Company(Base):
@@ -406,3 +412,6 @@ class ArchTender(Base):
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(String(100), default="")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

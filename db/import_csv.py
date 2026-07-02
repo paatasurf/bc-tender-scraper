@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session
 from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
 from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, RedditSignal, Tender
 from db.permit_import import upsert_city_permits
+from db.tender_presence import (
+    ARCH_CONTENT_COLUMNS,
+    COMMERCIAL_CONTENT_COLUMNS,
+    TENDER_CONTENT_COLUMNS,
+    upsert_with_presence,
+)
 from scraper.tender_category import resolve_tender_category
 from scraper.config import (
     ARCH_TENDERS_CSV,
@@ -85,7 +91,14 @@ def import_tenders(session: Session, path: Path | None = None) -> int:
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(session, Tender, payload, "url", AI_PRESERVE_COLUMNS)
+    count = upsert_with_presence(
+        session,
+        Tender,
+        payload,
+        "url",
+        TENDER_CONTENT_COLUMNS,
+        preserve_on_update=AI_PRESERVE_COLUMNS,
+    )
     print(f"[Import] Tenders: {count} rows")
     return count
 
@@ -227,12 +240,13 @@ def import_commercial_tenders(session: Session, path: Path | None = None) -> int
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(
+    count = upsert_with_presence(
         session,
         CommercialTender,
         payload,
         "url",
-        AI_PRESERVE_COLUMNS,
+        COMMERCIAL_CONTENT_COLUMNS,
+        preserve_on_update=AI_PRESERVE_COLUMNS,
         batch_size=COMMERCIAL_BATCH_SIZE,
     )
     print(f"[Import] Commercial tenders: {count} rows")
@@ -255,7 +269,14 @@ def import_arch_tenders(session: Session, path: Path | None = None) -> int:
         for row in rows
         if row.get("url")
     ]
-    count = _upsert_batch(session, ArchTender, payload, "url", AI_PRESERVE_COLUMNS)
+    count = upsert_with_presence(
+        session,
+        ArchTender,
+        payload,
+        "url",
+        ARCH_CONTENT_COLUMNS,
+        preserve_on_update=AI_PRESERVE_COLUMNS,
+    )
     print(f"[Import] Architecture tenders: {count} rows")
     return count
 

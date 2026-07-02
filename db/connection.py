@@ -821,6 +821,48 @@ def _ensure_tender_outcomes_table(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_tender_presence_columns(engine) -> None:
+    statements = (
+        "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ",
+        "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ",
+        "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ",
+        "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
+        "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ",
+        "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ",
+        "ALTER TABLE arch_tenders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
+        """
+        UPDATE tenders
+        SET first_seen_at = COALESCE(first_seen_at, scraped_at),
+            last_seen_at = COALESCE(last_seen_at, scraped_at),
+            updated_at = COALESCE(updated_at, scraped_at)
+        WHERE first_seen_at IS NULL OR last_seen_at IS NULL OR updated_at IS NULL
+        """,
+        """
+        UPDATE commercial_tenders
+        SET first_seen_at = COALESCE(first_seen_at, scraped_at),
+            last_seen_at = COALESCE(last_seen_at, scraped_at),
+            updated_at = COALESCE(updated_at, scraped_at)
+        WHERE first_seen_at IS NULL OR last_seen_at IS NULL OR updated_at IS NULL
+        """,
+        """
+        UPDATE arch_tenders
+        SET first_seen_at = COALESCE(first_seen_at, scraped_at),
+            last_seen_at = COALESCE(last_seen_at, scraped_at),
+            updated_at = COALESCE(updated_at, scraped_at)
+        WHERE first_seen_at IS NULL OR last_seen_at IS NULL OR updated_at IS NULL
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_tenders_last_seen_at ON tenders (last_seen_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_commercial_tenders_last_seen_at "
+        "ON commercial_tenders (last_seen_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_arch_tenders_last_seen_at ON arch_tenders (last_seen_at DESC)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -837,6 +879,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_early_signal_events_table(engine)
     _ensure_project_contacts_table(engine)
     _ensure_tender_outcomes_table(engine)
+    _ensure_tender_presence_columns(engine)
     _widen_commercial_text_columns(engine)
 
 
