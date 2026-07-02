@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
+from db.closing_at_sync import sync_closing_at_from_deadline
 from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, RedditSignal, Tender
 from db.permit_import import upsert_city_permits
 from db.tender_presence import (
@@ -105,7 +106,16 @@ def import_tenders(session: Session, path: Path | None = None) -> int:
         Tender,
         {row["url"] for row in payload},
     )
-    print(f"[Import] Tenders: {count} rows; missing_from_source reset={presence['reset']} incremented={presence['incremented']}")
+    closing = sync_closing_at_from_deadline(
+        session,
+        Tender,
+        "closing_date",
+        urls={row["url"] for row in payload},
+    )
+    print(
+        f"[Import] Tenders: {count} rows; missing_from_source reset={presence['reset']} "
+        f"incremented={presence['incremented']}; closing_at updated={closing['updated']}"
+    )
     return count
 
 
@@ -260,9 +270,16 @@ def import_commercial_tenders(session: Session, path: Path | None = None) -> int
         CommercialTender,
         {row["url"] for row in payload},
     )
+    closing = sync_closing_at_from_deadline(
+        session,
+        CommercialTender,
+        "deadline",
+        urls={row["url"] for row in payload},
+    )
     print(
         f"[Import] Commercial tenders: {count} rows; "
-        f"missing_from_source reset={presence['reset']} incremented={presence['incremented']}"
+        f"missing_from_source reset={presence['reset']} incremented={presence['incremented']}; "
+        f"closing_at updated={closing['updated']}"
     )
     return count
 
@@ -296,9 +313,16 @@ def import_arch_tenders(session: Session, path: Path | None = None) -> int:
         ArchTender,
         {row["url"] for row in payload},
     )
+    closing = sync_closing_at_from_deadline(
+        session,
+        ArchTender,
+        "deadline",
+        urls={row["url"] for row in payload},
+    )
     print(
         f"[Import] Architecture tenders: {count} rows; "
-        f"missing_from_source reset={presence['reset']} incremented={presence['incremented']}"
+        f"missing_from_source reset={presence['reset']} incremented={presence['incremented']}; "
+        f"closing_at updated={closing['updated']}"
     )
     return count
 

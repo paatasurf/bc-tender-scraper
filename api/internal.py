@@ -7,6 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from db.connection import get_session
+from db.closing_at_sync import backfill_all_tender_closing_at
 from pipeline.internal_steps import (
     assert_import_allowed,
     make_gated_import_worker,
@@ -341,6 +342,29 @@ def resolve_lifecycle(request: Request) -> dict[str, Any]:
     session = get_session()
     try:
         return resolve_tender_lifecycle(session)
+    finally:
+        session.close()
+
+
+@router.post("/lifecycle/backfill-closing-at")
+def backfill_closing_at(request: Request) -> dict[str, Any]:
+    """One-time/idempotent backfill of closing_at from deadline strings (P2-06)."""
+    _require_internal_key(request)
+    from db.connection import init_db
+
+    init_db()
+    session = get_session()
+    try:
+        tables = backfill_all_tender_closing_at(session, only_null=True)
+        return {
+            "only_null": True,
+            "tables": tables,
+            "totals": {
+                "updated": sum(item["updated"] for item in tables.values()),
+                "after_set": sum(item["after_set"] for item in tables.values()),
+                "after_null": sum(item["after_null"] for item in tables.values()),
+            },
+        }
     finally:
         session.close()
 
