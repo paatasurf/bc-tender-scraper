@@ -7,6 +7,10 @@ import csv
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
+from db.permit_source_status import (
+    SURREY_STATUS_SOURCE_FIELD,
+    extract_surrey_source_status,
+)
 from scraper.config import (
     SURREY_CITY,
     SURREY_PERMITS_API,
@@ -18,7 +22,8 @@ from scraper.utils import clean_text, create_session, polite_api_get
 DEFAULT_PAGE_SIZE = 500
 OUT_FIELDS = (
     "PermitNumber,ProjectAddress,WorkDescription,SubDescription,"
-    "IssuedDate,ValueOfConstruction,ApplicantOrganization"
+    "IssuedDate,ValueOfConstruction,ApplicantOrganization,"
+    f"{SURREY_STATUS_SOURCE_FIELD}"
 )
 FIELDNAMES = [
     "external_id",
@@ -28,6 +33,7 @@ FIELDNAMES = [
     "applicant",
     "issue_date",
     "description",
+    "source_status_raw",
     "source",
     "city",
 ]
@@ -69,6 +75,7 @@ def _format_record(attrs: dict[str, Any]) -> dict[str, str]:
         "applicant": applicant,
         "issue_date": _parse_issue_date(attrs.get("IssuedDate")),
         "description": " / ".join(description_parts),
+        "source_status_raw": extract_surrey_source_status(attrs),
         "source": SURREY_SOURCE,
         "city": SURREY_CITY,
     }

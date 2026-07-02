@@ -23,6 +23,7 @@ PERMIT_VARCHAR_LIMITS: dict[str, int] = {
     "source": 50,
     "city": 100,
     "external_id": 100,
+    "source_status_raw": 100,
 }
 
 

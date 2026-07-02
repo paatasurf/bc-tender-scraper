@@ -33,8 +33,24 @@ def test_format_record_maps_current_arcgis_fields():
     assert row["applicant"] == "Example Builder Ltd"
     assert row["issue_date"] == "2023-01-02"
     assert row["description"] == "New Single Family with Secondary Suite / Primary"
+    assert row["source_status_raw"] == ""
     assert row["source"] == "surrey"
     assert row["city"] == "Surrey"
+
+
+def test_format_record_maps_permit_status_when_present():
+    row = _format_record(
+        {
+            "PermitNumber": "22-020638-000-00",
+            "ProjectAddress": "17065 84 Ave",
+            "WorkDescription": "Renovation",
+            "SubDescription": "Single Family",
+            "IssuedDate": "20230102",
+            "ValueOfConstruction": 995000,
+            "PermitStatus": "Issued",
+        }
+    )
+    assert row["source_status_raw"] == "Issued"
 
 
 def test_format_record_falls_back_to_legacy_arcgis_fields():

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from db.permit_source_status import extract_vancouver_source_status
 from scraper.config import BUILDING_PERMITS_CSV, VANCOUVER_PERMITS_API
 from scraper.utils import clean_text, create_session, polite_api_get
 
@@ -24,6 +25,7 @@ FIELDNAMES = [
     "description",
     "contractor",
     "local_area",
+    "source_status_raw",
     "source",
     "city",
 ]
@@ -54,6 +56,7 @@ def _format_vancouver_record(record: dict[str, Any]) -> dict[str, str]:
         "description": clean_text(record.get("projectdescription")),
         "contractor": clean_text(record.get("buildingcontractor")),
         "local_area": clean_text(record.get("geolocalarea")),
+        "source_status_raw": extract_vancouver_source_status(record),
         "source": VANCOUVER_SOURCE,
         "city": VANCOUVER_CITY,
     }

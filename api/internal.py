@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from db.connection import get_session
 from db.closing_at_sync import backfill_all_tender_closing_at
+from db.permit_source_status import backfill_permit_source_status
 from pipeline.internal_steps import (
     assert_import_allowed,
     make_gated_import_worker,
@@ -342,6 +343,20 @@ def resolve_lifecycle(request: Request) -> dict[str, Any]:
     session = get_session()
     try:
         return resolve_tender_lifecycle(session)
+    finally:
+        session.close()
+
+
+@router.post("/lifecycle/backfill-permit-status")
+def backfill_permit_status(request: Request) -> dict[str, Any]:
+    """One-time/idempotent backfill of source_status_raw from municipal APIs."""
+    _require_internal_key(request)
+    from db.connection import init_db
+
+    init_db()
+    session = get_session()
+    try:
+        return backfill_permit_source_status(session, only_empty=True)
     finally:
         session.close()
 

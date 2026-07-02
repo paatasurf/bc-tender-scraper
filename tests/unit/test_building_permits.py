@@ -25,6 +25,7 @@ def test_format_vancouver_record_maps_early_signal_fields():
             "applicant": "Example Applicant",
             "buildingcontractor": "PB Management Group Inc",
             "geolocalarea": "Downtown",
+            "permitcategory": "Renovation - Commercial/ Mixed Use - Lower Complexity",
         }
     )
     assert row["external_id"] == "BP-2026-01953"
@@ -32,6 +33,7 @@ def test_format_vancouver_record_maps_early_signal_fields():
     assert row["issue_date"] == "2026-06-22"
     assert row["contractor"] == "PB Management Group Inc"
     assert row["local_area"] == "Downtown"
+    assert row["source_status_raw"] == "Renovation - Commercial/ Mixed Use - Lower Complexity"
     assert row["source"] == "vancouver"
     assert row["city"] == "Vancouver"
 
