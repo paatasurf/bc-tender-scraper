@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -393,10 +393,12 @@ def backfill_closing_at(request: Request) -> dict[str, Any]:
 def import_csvs(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
-    sync: bool = Query(
-        False,
-        description="When true, run to completion and return tracked import status/counts.",
-    ),
+    sync: Annotated[
+        bool,
+        Query(
+            description="When true, run to completion and return tracked import status/counts.",
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
     run_id = body.run_id if body else None
