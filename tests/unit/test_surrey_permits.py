@@ -33,12 +33,12 @@ def test_format_record_maps_current_arcgis_fields():
     assert row["applicant"] == "Example Builder Ltd"
     assert row["issue_date"] == "2023-01-02"
     assert row["description"] == "New Single Family with Secondary Suite / Primary"
-    assert row["source_status_raw"] == ""
+    assert "source_status_raw" not in row
     assert row["source"] == "surrey"
     assert row["city"] == "Surrey"
 
 
-def test_format_record_maps_permit_status_when_present():
+def test_format_record_ignores_permit_status_when_present():
     row = _format_record(
         {
             "PermitNumber": "22-020638-000-00",
@@ -50,7 +50,7 @@ def test_format_record_maps_permit_status_when_present():
             "PermitStatus": "Issued",
         }
     )
-    assert row["source_status_raw"] == "Issued"
+    assert "source_status_raw" not in row
 
 
 def test_format_record_falls_back_to_legacy_arcgis_fields():

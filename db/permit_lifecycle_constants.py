@@ -44,12 +44,13 @@ PERMIT_SOURCE_STATUS_ACTIVE: frozenset[str] = frozenset(
     }
 )
 
-# Lifecycle columns managed by resolver — never overwritten by permit CSV/API upserts.
+# Lifecycle + source-status columns managed by resolver/backfill — never overwritten by scraper upserts.
 PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS: frozenset[str] = frozenset(
     {
         "lifecycle_status",
         "lifecycle_status_override",
         "status_changed_at",
         "is_active",
+        "source_status_raw",
     }
 )

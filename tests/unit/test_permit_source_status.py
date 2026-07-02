@@ -1,4 +1,4 @@
-"""Unit tests for permit source_status_raw extraction and backfill."""
+"""Unit tests for permit source_status_raw guardrails (no false status ingestion)."""
 
 from __future__ import annotations
 
@@ -11,22 +11,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from api import internal as internal_api
 from db.models import Permit
-from db.permit_source_status import (
-    VANCOUVER_STATUS_SOURCE_FIELD,
-    backfill_permit_source_status,
-    extract_surrey_source_status,
-    extract_vancouver_source_status,
-)
-from pipeline.permit_lifecycle_resolver import (
-    PermitLifecycleSnapshot,
-    evaluate_permit_lifecycle_transition,
-    lifecycle_from_source_status,
-)
-from db.permit_lifecycle_constants import (
-    PERMIT_LIFECYCLE_STATUS_ACTIVE,
-    PERMIT_LIFECYCLE_STATUS_UNKNOWN,
-)
 from db.permit_import import upsert_city_permits
+from db.permit_source_status import (
+    FUTURE_STATUS_SOURCES,
+    backfill_permit_source_status,
+)
 
 
 def _require_local_database_url() -> str:
@@ -35,7 +24,7 @@ def _require_local_database_url() -> str:
         pytest.skip("DATABASE_URL not configured")
     lowered = database_url.lower()
     if any(token in lowered for token in ("railway", "rlwy.net", "production")):
-        pytest.skip("Refusing permit status backfill tests against production DATABASE_URL")
+        pytest.skip("Refusing permit status tests against production DATABASE_URL")
     return database_url
 
 
@@ -55,42 +44,16 @@ def local_db_session() -> Session:
         session.close()
 
 
-def test_extract_vancouver_source_status_from_permitcategory():
-    assert (
-        extract_vancouver_source_status({"permitcategory": "New Build - Standalone Laneway"})
-        == "New Build - Standalone Laneway"
-    )
-    assert extract_vancouver_source_status({"permitcategory": None}) == ""
-    assert extract_vancouver_source_status({}) == ""
+def test_backfill_is_noop_until_plpos(local_db_session: Session):
+    result = backfill_permit_source_status(local_db_session, only_empty=True)
+    assert result["status"] == "no_status_source_configured"
+    assert result["totals"]["updated"] == 0
+    assert "vancouver" in result["future_status_sources"]
+    assert result["future_status_sources"]["vancouver"]["candidate"] == "PLPOS"
 
 
-def test_extract_surrey_source_status_from_permit_status_only():
-    assert extract_surrey_source_status({"PermitStatus": "Finaled"}) == "Finaled"
-    assert extract_surrey_source_status({"WorkDescription": "Renovation"}) == ""
-    assert extract_surrey_source_status({}) == ""
-
-
-def test_unmapped_vancouver_permitcategory_lifecycle_is_unknown():
-    from datetime import datetime, timezone
-
-    raw = "Renovation - Residential - Lower Complexity"
-    assert lifecycle_from_source_status(raw) == PERMIT_LIFECYCLE_STATUS_UNKNOWN
-    rule = evaluate_permit_lifecycle_transition(
-        PermitLifecycleSnapshot(
-            lifecycle_status=PERMIT_LIFECYCLE_STATUS_ACTIVE,
-            is_active=True,
-            lifecycle_status_override=None,
-            source_status_raw=raw,
-            issue_date="2026-01-01",
-            application_date="2025-12-01",
-        ),
-        now=datetime(2026, 7, 2, tzinfo=timezone.utc),
-    )
-    assert rule == "source_status_unknown"
-
-
-def test_upsert_city_permits_writes_source_status_raw(local_db_session: Session):
-    external_id = "BP-STATUS-TEST-1"
+def test_upsert_city_permits_does_not_overwrite_source_status_raw(local_db_session: Session):
+    external_id = "BP-STATUS-SKIP-1"
     local_db_session.execute(
         text("DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"),
         {"external_id": external_id},
@@ -124,50 +87,7 @@ def test_upsert_city_permits_writes_source_status_raw(local_db_session: Session)
         select(Permit).where(Permit.source == "vancouver", Permit.external_id == external_id)
     )
     assert row is not None
-    assert row.source_status_raw == "Issued"
-
-    local_db_session.execute(
-        text("DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"),
-        {"external_id": external_id},
-    )
-    local_db_session.commit()
-
-
-@patch("db.permit_source_status.collect_source_status_vocabularies")
-@patch("db.permit_source_status._status_lookup_for_source")
-def test_backfill_permit_source_status_idempotent(
-    mock_lookup,
-    mock_vocab,
-    local_db_session: Session,
-):
-    mock_vocab.return_value = {"vancouver": ["Issued"], "surrey": []}
-    external_id = "BP-BACKFILL-TEST-1"
-    local_db_session.execute(
-        text("DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"),
-        {"external_id": external_id},
-    )
-    local_db_session.commit()
-
-    permit = Permit(
-        address="2 Main St",
-        external_id=external_id,
-        source="vancouver",
-        city="Vancouver",
-        issue_date="2026-06-01",
-        source_status_raw="",
-    )
-    local_db_session.add(permit)
-    local_db_session.commit()
-
-    mock_lookup.return_value = {external_id: "Issued"}
-
-    first = backfill_permit_source_status(local_db_session, only_empty=True, sources=("vancouver",))
-    assert first["cities"]["vancouver"]["updated"] == 1
-    assert first["cities"]["vancouver"]["after_set"] == 1
-
-    second = backfill_permit_source_status(local_db_session, only_empty=True, sources=("vancouver",))
-    assert second["cities"]["vancouver"]["updated"] == 0
-    assert second["cities"]["vancouver"]["after_set"] == 1
+    assert row.source_status_raw == ""
 
     local_db_session.execute(
         text("DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"),
@@ -186,5 +106,6 @@ def test_backfill_permit_status_endpoint_requires_internal_key():
     assert getattr(exc.value, "status_code", None) == 403
 
 
-def test_vancouver_status_source_field_constant():
-    assert VANCOUVER_STATUS_SOURCE_FIELD == "permitcategory"
+def test_future_status_sources_documents_plpos_backlog():
+    assert FUTURE_STATUS_SOURCES["vancouver"]["status"] == "backlog"
+    assert FUTURE_STATUS_SOURCES["vancouver"]["candidate"] == "PLPOS"

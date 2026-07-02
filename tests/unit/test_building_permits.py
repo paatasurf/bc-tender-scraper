@@ -33,7 +33,7 @@ def test_format_vancouver_record_maps_early_signal_fields():
     assert row["issue_date"] == "2026-06-22"
     assert row["contractor"] == "PB Management Group Inc"
     assert row["local_area"] == "Downtown"
-    assert row["source_status_raw"] == "Renovation - Commercial/ Mixed Use - Lower Complexity"
+    assert "source_status_raw" not in row
     assert row["source"] == "vancouver"
     assert row["city"] == "Vancouver"
 

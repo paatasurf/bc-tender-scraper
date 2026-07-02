@@ -349,7 +349,7 @@ def resolve_lifecycle(request: Request) -> dict[str, Any]:
 
 @router.post("/lifecycle/backfill-permit-status")
 def backfill_permit_status(request: Request) -> dict[str, Any]:
-    """One-time/idempotent backfill of source_status_raw from municipal APIs."""
+    """Reserved for future true lifecycle status backfill (PLPOS backlog; currently no-op)."""
     _require_internal_key(request)
     from db.connection import init_db
 

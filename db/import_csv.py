@@ -142,7 +142,6 @@ def import_permits(session: Session, path: Path | None = None) -> int:
                     "description": row.get("description", ""),
                     "contractor": row.get("contractor", ""),
                     "local_area": row.get("local_area", ""),
-                    "source_status_raw": row.get("source_status_raw", ""),
                     "source": "vancouver",
                     "city": "Vancouver",
                 }
