@@ -138,3 +138,64 @@ def test_internal_import_rejected_before_scrape() -> None:
             with pytest.raises(HTTPException) as exc:
                 internal_api.import_csvs(background_tasks, None)
     assert exc.value.status_code == 409
+
+
+def test_internal_import_without_body_reuses_active_run_id(coordinator_state: Path) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-run")
+    coordinator.begin_tender_scrape("active-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("active-run", step)
+
+    record = MagicMock()
+    record.id = 456
+    session = MagicMock()
+    background_tasks = MagicMock()
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.get_session", return_value=session):
+            with patch("api.internal.start_run", return_value=record) as start_run:
+                payload = internal_api.import_csvs(background_tasks, None)
+
+    assert payload["run_id"] == "active-run"
+    assert payload["step"] == "import-csvs"
+    start_run.assert_called_once_with(session, "import-csvs", "active-run")
+    assert background_tasks.add_task.call_args.kwargs["run_id"] == "active-run"
+
+
+def test_internal_import_sync_without_body_returns_tracked_status(coordinator_state: Path) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-sync-run")
+    coordinator.begin_tender_scrape("active-sync-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("active-sync-run", step)
+
+    tracked_result = {
+        "id": 789,
+        "status": "success",
+        "started_at": None,
+        "finished_at": None,
+        "error": "",
+        "counts": {"tenders": 2},
+    }
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.execute_tracked_step", return_value=tracked_result) as execute:
+            payload = internal_api.import_csvs(MagicMock(), None, sync=True)
+
+    assert payload == {
+        "status": "success",
+        "run_id": "active-sync-run",
+        "step": "import-csvs",
+        "pipeline_run_id": 789,
+        "poll_url": "/internal/steps/789",
+        "run_poll_url": "/internal/runs/active-sync-run",
+        "started_at": None,
+        "finished_at": None,
+        "error": "",
+        "counts": {"tenders": 2},
+    }
+    assert execute.call_args.args[0] == "import-csvs"
+    assert execute.call_args.kwargs["run_id"] == "active-sync-run"
