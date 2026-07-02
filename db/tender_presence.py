@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
+from db.lifecycle_constants import LIFECYCLE_IMPORT_SKIP_COLUMNS
 from db.models import ArchTender, CommercialTender, Tender
 
 TENDER_CONTENT_COLUMNS: tuple[str, ...] = (
@@ -45,7 +46,7 @@ ARCH_CONTENT_COLUMNS: tuple[str, ...] = (
     "tender_id",
 )
 
-PRESENCE_SKIP_ON_UPDATE = frozenset({"id", "scraped_at", "first_seen_at"})
+PRESENCE_SKIP_ON_UPDATE = frozenset({"id", "scraped_at", "first_seen_at"}) | LIFECYCLE_IMPORT_SKIP_COLUMNS
 
 
 def _utc_now() -> datetime:

@@ -863,6 +863,27 @@ def _ensure_tender_presence_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_tender_lifecycle_columns(engine) -> None:
+    from db.tender_lifecycle_ddl import (
+        LIFECYCLE_STATUS_CHECK_SQL,
+        TENDER_LIFECYCLE_TABLES,
+        lifecycle_add_column_statements,
+        lifecycle_backfill_statement,
+        lifecycle_index_statements,
+    )
+
+    statements: list[str] = []
+    for table in TENDER_LIFECYCLE_TABLES:
+        statements.extend(lifecycle_add_column_statements(table))
+        statements.append(lifecycle_backfill_statement(table))
+        statements.extend(lifecycle_index_statements(table))
+        statements.append(LIFECYCLE_STATUS_CHECK_SQL.format(table=table))
+
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -880,6 +901,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_project_contacts_table(engine)
     _ensure_tender_outcomes_table(engine)
     _ensure_tender_presence_columns(engine)
+    _ensure_tender_lifecycle_columns(engine)
     _widen_commercial_text_columns(engine)
 
 

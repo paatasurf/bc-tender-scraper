@@ -6,12 +6,14 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, S
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from db.tender_lifecycle_columns import TenderLifecycleColumnsMixin
+
 
 class Base(DeclarativeBase):
     pass
 
 
-class Tender(Base):
+class Tender(TenderLifecycleColumnsMixin, Base):
     __tablename__ = "tenders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -143,7 +145,7 @@ class Job(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class CommercialTender(Base):
+class CommercialTender(TenderLifecycleColumnsMixin, Base):
     __tablename__ = "commercial_tenders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -396,7 +398,7 @@ class TenderOutcome(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-class ArchTender(Base):
+class ArchTender(TenderLifecycleColumnsMixin, Base):
     __tablename__ = "arch_tenders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
