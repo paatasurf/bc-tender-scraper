@@ -1,0 +1,33 @@
+# TenderScope Backend — bc-tender-scraper
+
+## Stack
+- FastAPI on Railway, branch `master`, auto-deploys on push to origin/master
+- PostgreSQL on Railway
+- Local path: C:\Users\DAVIDSURF\Projects\bc-tender-scraper
+- Test company: Pontem Group, company_id=8638
+
+## Standing rules (never violate)
+- NEVER run verification scripts or destructive operations against production DATABASE_URL — local DB only. Production data operations go through authenticated internal API endpoints (X-Internal-Key), never ad-hoc scripts.
+- Historical records are NEVER deleted. Everything gets a lifecycle status instead.
+- Do not commit until explicitly approved by the user. Always show diff + test output first.
+- Every phase: implement → verify → review → approve → commit → deploy. One phase at a time, never implement future phases early.
+- PowerShell environment: no `&&` chaining, commands run one at a time.
+- tender_id string format is `{source}:{id}` (e.g. federal:42) in tender_outcomes — do not break compatibility.
+
+## Architecture
+- Lifecycle system: tenders have 17 lifecycle columns (P2-01), automatic transitions via pipeline/lifecycle_resolver.py (P2-02), closing_at parsed from deadline strings (P2-06), opportunity pipelines filter WHERE is_open=true by default with include_closed param (P2-07).
+- include_closed=true semantics: skips BOTH the is_open column check AND deadline_is_open() — full archive access.
+- Two scoring models coexist: construction_hybrid (opportunity_discovery.py, "AI Match Score") and business_pursuit (bd_recommendations.py, "Business Pursuit Score"). unified_opportunities.py merges them with dual provenance — NEVER blend scores into one number.
+- tender_outcomes table (win/loss, per-company) is separate from lifecycle awarded status (global market state) — different concepts, do not conflate.
+- n8n nightly jobs: lifecycle resolver 06:00, morning brief 07:00 America/Vancouver.
+
+## Key docs (read when relevant)
+- docs/audits/ — per-phase audit documents
+- docs/VISION_HISTORICAL_INTELLIGENCE.md — why lifecycle exists (historical intelligence platform)
+
+## Verification protocol for every change
+- Run unit tests, show output
+- LOCAL database only for DB verification
+- Show before/after counts
+- List every file touched
+- Confirm which files were NOT touched (respect phase boundaries)
