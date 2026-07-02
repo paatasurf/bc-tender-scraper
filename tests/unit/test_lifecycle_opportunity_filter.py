@@ -60,7 +60,13 @@ class TestTenderLifecycleEligible:
         row = _row(is_open=False, deadline="")
         assert tender_lifecycle_eligible(row, "", include_closed=False) is False
 
-    def test_include_closed_allows_lifecycle_closed_with_open_deadline(self):
+    def test_include_closed_admits_lifecycle_closed_with_past_deadline(self):
+        past = (date.today() - timedelta(days=30)).isoformat()
+        row = _row(is_open=False, deadline=past)
+        assert tender_lifecycle_eligible(row, past, include_closed=False) is False
+        assert tender_lifecycle_eligible(row, past, include_closed=True) is True
+
+    def test_include_closed_admits_lifecycle_closed_with_empty_deadline(self):
         row = _row(is_open=False, deadline="")
         assert tender_lifecycle_eligible(row, "", include_closed=True) is True
 
@@ -69,10 +75,11 @@ class TestTenderLifecycleEligible:
         assert row.lifecycle_status == LIFECYCLE_STATUS_CLOSING_SOON
         assert tender_lifecycle_eligible(row, row.deadline, include_closed=False) is True
 
-    def test_both_checks_required_past_deadline_excluded(self):
+    def test_both_checks_required_past_deadline_excluded_by_default(self):
         past = (date.today() - timedelta(days=2)).isoformat()
         row = _row(is_open=True, deadline=past)
         assert tender_lifecycle_eligible(row, past, include_closed=False) is False
+        assert tender_lifecycle_eligible(row, past, include_closed=True) is True
 
 
 class TestOpenTenderQuery:
@@ -127,7 +134,7 @@ class TestLoadTenderCandidates:
 
 
 class TestRuleScanBeltAndSuspenders:
-    def test_scan_excludes_lifecycle_closed_even_if_loaded(self):
+    def test_scan_excludes_lifecycle_closed_by_default(self):
         signals = MagicMock()
         open_row = _row(is_open=True, deadline=(date.today() + timedelta(days=5)).isoformat())
         closed_row = _row(is_open=False, deadline="")
@@ -146,6 +153,28 @@ class TestRuleScanBeltAndSuspenders:
 
         assert len(results) == 1
         assert results[0].tender_id == open_row.id
+
+    def test_scan_include_closed_admits_lifecycle_closed_with_past_deadline(self):
+        signals = MagicMock()
+        past = (date.today() - timedelta(days=14)).isoformat()
+        open_row = _row(is_open=True, deadline=(date.today() + timedelta(days=5)).isoformat())
+        closed_row = _row(is_open=False, deadline=past)
+        closed_row.id = 99
+        tender_rows = [(open_row, "federal"), (closed_row, "commercial")]
+
+        with patch(
+            "pipeline.opportunity_discovery._score_construction_tender_rules",
+            return_value=(80, ["fit"]),
+        ), patch(
+            "pipeline.opportunity_discovery._tender_payload",
+            side_effect=lambda row, source: {"id": row.id, "title": row.title, "company": "X", "value": 1, "deadline": row.deadline, "category": "Construction"},
+        ):
+            results = _scan_construction_rule_tenders_from_rows(
+                tender_rows, signals, include_closed=True
+            )
+
+        assert len(results) == 2
+        assert {item.tender_id for item in results} == {open_row.id, closed_row.id}
 
 
 @patch("pipeline.unified_opportunities.recommend_bd_intelligence")

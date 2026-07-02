@@ -68,10 +68,10 @@ def deadline_is_open(deadline: str) -> bool:
 
 
 def tender_lifecycle_eligible(row: Any, deadline: str, *, include_closed: bool = False) -> bool:
-    """Lifecycle column AND legacy deadline check (both must pass unless include_closed)."""
-    if not include_closed and not bool(getattr(row, "is_open", True)):
-        return False
-    return deadline_is_open(deadline)
+    """Lifecycle column AND legacy deadline check when include_closed is false."""
+    if include_closed:
+        return True
+    return bool(getattr(row, "is_open", True)) and deadline_is_open(deadline)
 
 
 def infer_buyer_level(source: str, org: str = "") -> str:

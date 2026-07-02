@@ -19,7 +19,8 @@ from db.models import ClientProfile, TenderMatch
 from intelligence.canonical_brief import disposition_for_entity, fetch_company_executive_brief
 from intelligence.resend import send_email
 from pipeline.ai_matching import _load_tender_row
-from pipeline.opportunity_discovery import _is_tender_open, _parse_date
+from pipeline.market_normalizer import deadline_is_open
+from pipeline.opportunity_discovery import _parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def _collect_profile_alerts(
             or ""
         )
         deadline = str(deadline).strip()
-        if not deadline or not _is_tender_open(deadline):
+        if not deadline or not deadline_is_open(deadline):
             continue
 
         days_left = _days_until_close(deadline)
