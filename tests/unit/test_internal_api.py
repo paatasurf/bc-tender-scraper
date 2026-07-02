@@ -49,7 +49,7 @@ def test_tender_data_pipeline_sync_true_runs_inline():
 
     with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
         with patch("api.internal.run_tender_data_pipeline", return_value=summary) as run_pipeline:
-            with patch("api.internal.assert_import_not_before_scrape", return_value={"ordering_ok": "True"}):
+            with patch("pipeline.run_coordinator.assert_import_not_before_scrape", return_value={"ordering_ok": "True"}):
                 payload = internal_api.run_tender_data_pipeline_route(
                     MagicMock(),
                     internal_api.InternalRunRequest(run_id="run-456"),
