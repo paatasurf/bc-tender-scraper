@@ -11,6 +11,7 @@ Import JSON files from `n8n/workflows/` into your n8n instance.
 | Pipeline Runs Monitor | `pipeline-runs-monitor.json` | Polls `GET /internal/runs?limit=20` every 15 minutes |
 | AI Scoring (sync) | `ai-scoring-poll.json` | Existing; failures route to Incident Router |
 | Bulk Prescore | `bulk-prescore.json` | Existing; assign Error Workflow |
+| Lifecycle Resolver Nightly | `lifecycle_resolver.json` | Daily 06:00 Vancouver: POST `/internal/lifecycle/resolve` |
 
 ## Setup
 
