@@ -6,47 +6,41 @@ Scheduled path (production, no manual intervention):
     → pipeline.executor.start_pipeline_subprocess()
     → run_pipeline.py (file lock)
     → pipeline.run.run_pipeline()
-       1. scraper.main.run() — federal/MERX/commercial tenders, permits, news, …
-       2. db.import_csv.import_all_csvs()
-       3. db.import_contract_awards.import_contract_awards()
-       4. pipeline.ai_scoring.score_unscored_tenders() (optional)
-       5. pipeline.company_intelligence.run_company_intelligence()
-       6. pipeline.arch_company_intelligence.run_arch_company_intelligence()
+       1. pipeline.tender_data_pipeline.run_tender_data_pipeline()
+          — tender scrapers → CSV verify → import → DB verify
+       2. pipeline.ai_scoring.score_unscored_tenders() (optional)
+       3. pipeline.company_intelligence.run_company_intelligence()
+       4. pipeline.arch_company_intelligence.run_arch_company_intelligence()
 """
 
 from config.env import env_flag
 from db.connection import get_session, init_db
-from db.import_csv import import_all_csvs
-from db.import_contract_awards import import_contract_awards
 from pipeline.ai_scoring import score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
 from pipeline.company_intelligence import run_company_intelligence
-from scraper.main import run as run_scrapers
+from pipeline.tender_data_pipeline import run_tender_data_pipeline
 
 
 def run_pipeline() -> int:
-    print("[Pipeline] Running scrapers...")
-    scrape_status = run_scrapers()
+    print("[Pipeline] Starting deterministic tender data pipeline...")
+    try:
+        summary = run_tender_data_pipeline()
+    except Exception as exc:
+        print(f"[Pipeline] Tender data pipeline failed: {exc}")
+        return 1
 
-    print("[Pipeline] Importing CSV data into database...")
+    print(f"[Pipeline] Tender data pipeline summary: {summary.get('status')}")
+
+    print("[Pipeline] Post-import enrichment...")
     init_db()
     session = get_session()
     try:
-        import_all_csvs(session)
-        print("[Pipeline] Importing contract awards...")
-        import_contract_awards(session)
-        print("[Pipeline] Refreshing company award stats...")
-        from pipeline.refresh_company_award_stats import refresh_company_award_stats
-
-        refresh_company_award_stats(session)
         if env_flag("PIPELINE_SKIP_AI_SCORING"):
             print("[Pipeline] Skipping AI scoring (PIPELINE_SKIP_AI_SCORING=true)")
         else:
             score_unscored_tenders(session)
     finally:
         session.close()
-
-    print("[Pipeline] Complete")
 
     print("[Pipeline] Running company intelligence...")
     session = get_session()
@@ -66,4 +60,5 @@ def run_pipeline() -> int:
     finally:
         session.close()
 
-    return scrape_status
+    print("[Pipeline] Complete")
+    return 0

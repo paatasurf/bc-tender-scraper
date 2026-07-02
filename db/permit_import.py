@@ -9,6 +9,30 @@ from sqlalchemy.orm import Session
 from db.constants import BATCH_SIZE
 from db.models import Permit
 
+PERMIT_VARCHAR_LIMITS: dict[str, int] = {
+    "address": 300,
+    "permit_type": 100,
+    "project_value": 50,
+    "applicant": 300,
+    "architect": 300,
+    "issue_date": 20,
+    "application_date": 20,
+    "contractor": 300,
+    "local_area": 100,
+    "source": 50,
+    "city": 100,
+    "external_id": 100,
+}
+
+
+def _clamp_permit_row(row: dict[str, str]) -> dict[str, str]:
+    clamped = dict(row)
+    for field, limit in PERMIT_VARCHAR_LIMITS.items():
+        value = clamped.get(field) or ""
+        if len(value) > limit:
+            clamped[field] = value[:limit]
+    return clamped
+
 
 def _dedupe_permit_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     deduped: dict[tuple[str, str], dict[str, str]] = {}
@@ -27,7 +51,7 @@ def upsert_city_permits(
     source: str,
     full_refresh: bool,
 ) -> int:
-    rows = _dedupe_permit_rows(rows)
+    rows = [_clamp_permit_row(row) for row in _dedupe_permit_rows(rows)]
     if not rows:
         return 0
 

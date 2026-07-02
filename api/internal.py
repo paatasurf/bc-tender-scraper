@@ -8,13 +8,17 @@ from pydantic import BaseModel, Field
 
 from db.connection import get_session
 from pipeline.internal_steps import (
+    assert_import_allowed,
+    make_gated_import_worker,
+    make_tender_scrape_worker,
     run_ai_scoring_step,
     run_arch_company_intelligence_step,
     run_company_intelligence_step,
     run_import_contract_awards_step,
-    run_import_step,
     run_populate_project_contacts_step,
 )
+from pipeline.run_coordinator import PipelineOrderError
+from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
     execute_tracked_step,
     get_pipeline_run,
@@ -64,6 +68,38 @@ def _require_internal_key(request: Request) -> None:
 
 def _step_status_path(pipeline_run_id: int) -> str:
     return f"/internal/steps/{pipeline_run_id}"
+
+
+def _enqueue_tender_scrape_step(
+    background_tasks: BackgroundTasks,
+    step: str,
+    runner,
+    run_id: str | None,
+) -> dict[str, Any]:
+    actual_run_id = run_id or new_run_id()
+    return _enqueue_step(
+        background_tasks,
+        step,
+        make_tender_scrape_worker(step, runner, actual_run_id),
+        actual_run_id,
+    )
+
+
+def _enqueue_import_step(
+    background_tasks: BackgroundTasks,
+    run_id: str | None,
+) -> dict[str, Any]:
+    actual_run_id = run_id or new_run_id()
+    try:
+        assert_import_allowed(actual_run_id if run_id else None)
+    except PipelineOrderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _enqueue_step(
+        background_tasks,
+        "import-csvs",
+        make_gated_import_worker(actual_run_id),
+        actual_run_id,
+    )
 
 
 def _run_status_path(run_id: str) -> str:
@@ -128,7 +164,7 @@ def scrape_federal(
     body: InternalRunRequest | None = None,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
-    return _enqueue_step(
+    return _enqueue_tender_scrape_step(
         background_tasks,
         "scrape-federal",
         run_federal_scraper,
@@ -157,7 +193,7 @@ def scrape_merx_arch(
     body: InternalRunRequest | None = None,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
-    return _enqueue_step(
+    return _enqueue_tender_scrape_step(
         background_tasks,
         "scrape-merx-arch",
         run_merx_arch_scraper,
@@ -171,7 +207,7 @@ def scrape_commercial(
     body: InternalRunRequest | None = None,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
-    return _enqueue_step(
+    return _enqueue_tender_scrape_step(
         background_tasks,
         "scrape-commercial",
         run_commercial_scraper,
@@ -300,12 +336,37 @@ def import_csvs(
     body: InternalRunRequest | None = None,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
-    return _enqueue_step(
-        background_tasks,
-        "import-csvs",
-        run_import_step,
-        body.run_id if body else None,
-    )
+    return _enqueue_import_step(background_tasks, body.run_id if body else None)
+
+
+@router.post("/pipeline/tender-data")
+def run_tender_data_pipeline_route(
+    body: InternalRunRequest | None = None,
+    sync: bool = Query(
+        True,
+        description="Run the full deterministic tender-data pipeline synchronously.",
+    ),
+) -> dict[str, Any]:
+    """Run tender scrapers → CSV verify → import → DB verify in strict order."""
+    _require_manual_pipeline()
+    run_id = body.run_id if body else None
+    if not sync:
+        raise HTTPException(
+            status_code=400,
+            detail="Only sync=true is supported for /internal/pipeline/tender-data",
+        )
+    try:
+        summary = run_tender_data_pipeline(run_id=run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    from pipeline.run_coordinator import assert_import_not_before_scrape
+
+    return {
+        "status": summary.get("status", "success"),
+        "run_id": summary.get("run_id"),
+        "ordering_audit": assert_import_not_before_scrape(),
+        "phases": summary.get("phases", {}),
+    }
 
 
 @router.post("/ai-scoring")

@@ -134,16 +134,40 @@ def iter_vancouver_permits(*, days: int | None = None) -> Iterator[dict[str, str
             yield from page
 
 
+def _read_existing_rows(csv_path: Path) -> list[dict[str, str]]:
+    if not csv_path.exists():
+        return []
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if list(reader.fieldnames or []) != FIELDNAMES:
+            print(
+                "[Vancouver Permits] Existing CSV header order differs from canonical columns; "
+                "skipping merge to avoid column misalignment"
+            )
+            return []
+        return [{field: row.get(field, "") for field in FIELDNAMES} for row in reader]
+
+
 def _write_csv(records: list[dict[str, str]], *, append: bool) -> None:
     csv_path = Path(BUILDING_PERMITS_CSV)
-    mode = "a" if append else "w"
-    write_header = not append or not csv_path.exists()
-    with csv_path.open(mode, encoding="utf-8", newline="") as handle:
+    merged: dict[str, dict[str, str]] = {}
+
+    if append:
+        for row in _read_existing_rows(csv_path):
+            external_id = row.get("external_id", "")
+            if external_id:
+                merged[external_id] = row
+
+    for row in records:
+        external_id = row.get("external_id", "")
+        if external_id:
+            merged[external_id] = row
+
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
-        if write_header:
-            writer.writeheader()
-        if records:
-            writer.writerows(records)
+        writer.writeheader()
+        if merged:
+            writer.writerows(merged.values())
             handle.flush()
 
 

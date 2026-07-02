@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from config.env import env_flag
 from db.connection import get_session, init_db
@@ -10,6 +10,17 @@ from pipeline.ai_scoring import score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
 from pipeline.company_intelligence import run_company_intelligence
 from pipeline.project_intelligence import rebuild_project_contacts
+from pipeline.run_coordinator import (
+    assert_ready_for_import,
+    begin_import,
+    begin_run,
+    begin_tender_scrape,
+    complete_import,
+    get_run_state,
+    mark_tender_scrape_step,
+)
+
+TenderScrapeRunner = Callable[[], dict[str, Any]]
 
 
 def run_import_step() -> dict[str, Any]:
@@ -64,3 +75,38 @@ def run_populate_project_contacts_step() -> dict[str, Any]:
         return rebuild_project_contacts(session)
     finally:
         session.close()
+
+
+def ensure_run_started(run_id: str) -> None:
+    state = get_run_state()
+    if state is None or state.run_id != run_id:
+        begin_run(run_id)
+        begin_tender_scrape(run_id)
+
+
+def make_tender_scrape_worker(step: str, runner: TenderScrapeRunner, run_id: str) -> Callable[[], dict[str, Any]]:
+    def worker() -> dict[str, Any]:
+        ensure_run_started(run_id)
+        begin_tender_scrape(run_id)
+        result = runner()
+        mark_tender_scrape_step(run_id, step)
+        return result
+
+    return worker
+
+
+def make_gated_import_worker(run_id: str) -> Callable[[], dict[str, Any]]:
+    def worker() -> dict[str, Any]:
+        assert_ready_for_import(run_id)
+        begin_import(run_id)
+        try:
+            return run_import_step()
+        finally:
+            complete_import(run_id)
+
+    return worker
+
+
+def assert_import_allowed(run_id: str | None) -> None:
+    """Raise PipelineOrderError when import is requested before scrapes finish."""
+    assert_ready_for_import(run_id)
