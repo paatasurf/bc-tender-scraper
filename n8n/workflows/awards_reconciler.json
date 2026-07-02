@@ -1,0 +1,114 @@
+{
+  "name": "Awards Reconciler Nightly",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 6 * * *"
+            }
+          ]
+        },
+        "timezone": "America/Vancouver"
+      },
+      "id": "a1b2c3d4-2222-4000-8000-000000000001",
+      "name": "Daily 06:30 Vancouver",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Runs every day at 06:30 America/Vancouver — after 06:00 lifecycle resolver."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-2222-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/internal/lifecycle/reconcile-awards",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Key",
+              "value": "={{ $env.INTERNAL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "a1b2c3d4-2222-4000-8000-000000000003",
+      "name": "Reconcile Tender Awards",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "POST /internal/lifecycle/reconcile-awards — P2-03 high-confidence award linkage for closed tenders."
+    }
+  ],
+  "connections": {
+    "Daily 06:30 Vancouver": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "Reconcile Tender Awards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "REPLACE_WITH_ERROR_WORKFLOW_ID"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "triggerCount": 1,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Daily 06:30 America/Vancouver: POST /internal/lifecycle/reconcile-awards with X-Internal-Key for P2-03 awards reconciliation."
+  }
+}
