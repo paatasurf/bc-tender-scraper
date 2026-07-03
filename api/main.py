@@ -53,6 +53,7 @@ from api.win_loss import router as win_loss_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
 from pipeline.construction_tier import parse_tier_filter
+from pipeline.registry_verification.service import get_company_verification_hub
 from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
@@ -657,7 +658,9 @@ def get_company_by_id(company_id: int) -> dict[str, Any]:
         company = session.get(Company, company_id)
         if company is None:
             raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
-        return _company_to_api_dict(company)
+        payload = _company_to_api_dict(company)
+        payload.update(get_company_verification_hub(session, company_id))
+        return payload
     finally:
         session.close()
 
@@ -751,7 +754,9 @@ def get_company(name: str) -> dict[str, Any]:
         company = _find_company(session, name)
         if company is None:
             raise HTTPException(status_code=404, detail=f"Company '{name}' not found")
-        return _company_to_api_dict(company)
+        payload = _company_to_api_dict(company)
+        payload.update(get_company_verification_hub(session, company.id))
+        return payload
     finally:
         session.close()
 

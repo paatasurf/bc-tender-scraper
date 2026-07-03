@@ -78,6 +78,51 @@ def run_populate_project_contacts_step() -> dict[str, Any]:
         session.close()
 
 
+def run_odbus_import_step(csv_path: str) -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        from pipeline.registry_verification.hub import import_reference_data
+        from db.registry_constants import REGISTRY_SOURCE_ODBUS
+
+        return import_reference_data(session, source=REGISTRY_SOURCE_ODBUS, path=csv_path)
+    finally:
+        session.close()
+
+
+def run_orgbook_import_step(path: str) -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        from pipeline.registry_verification.hub import import_reference_data
+        from db.registry_constants import REGISTRY_SOURCE_ORGBOOK
+
+        return import_reference_data(session, source=REGISTRY_SOURCE_ORGBOOK, path=path)
+    finally:
+        session.close()
+
+
+def run_registry_verification_match_step(
+    *,
+    company_ids: list[int] | None = None,
+    include_review_tiers: bool = False,
+    sources: list[str] | None = None,
+) -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        from pipeline.registry_verification.hub import batch_match
+
+        return batch_match(
+            session,
+            sources=sources,
+            company_ids=company_ids,
+            include_review_tiers=include_review_tiers,
+        )
+    finally:
+        session.close()
+
+
 def run_construction_tiers_step(*, company_ids: list[int] | None = None) -> dict[str, Any]:
     init_db()
     session = get_session()

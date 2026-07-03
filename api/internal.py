@@ -17,7 +17,10 @@ from pipeline.internal_steps import (
     run_arch_company_intelligence_step,
     run_company_intelligence_step,
     run_import_contract_awards_step,
+    run_odbus_import_step,
+    run_orgbook_import_step,
     run_populate_project_contacts_step,
+    run_registry_verification_match_step,
     run_construction_tiers_step,
 )
 from pipeline.run_coordinator import PipelineOrderError
@@ -53,6 +56,43 @@ class InternalRunRequest(BaseModel):
         default=None,
         max_length=36,
         description="Optional shared run id for grouping steps in n8n orchestration.",
+    )
+
+
+class OdbusImportRequest(BaseModel):
+    run_id: str | None = Field(default=None, max_length=36)
+    csv_path: str = Field(..., min_length=1, max_length=1000, description="Path to ODBus_v1.csv")
+
+
+class OrgbookImportRequest(BaseModel):
+    run_id: str | None = Field(default=None, max_length=36)
+    path: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Path to OrgBook CSV or JSONL export.",
+    )
+
+
+class VerificationHubImportRequest(BaseModel):
+    run_id: str | None = Field(default=None, max_length=36)
+    source: str = Field(..., min_length=1, max_length=30, description="Provider source key (odbus, orgbook).")
+    path: str = Field(..., min_length=1, max_length=1000, description="Path to provider reference export.")
+
+
+class RegistryVerificationMatchRequest(BaseModel):
+    run_id: str | None = Field(default=None, max_length=36)
+    company_ids: list[int] | None = Field(
+        default=None,
+        description="Optional canonical company ids; default all canonical rows.",
+    )
+    sources: list[str] | None = Field(
+        default=None,
+        description="Optional provider source keys; default all registered providers.",
+    )
+    include_review_tiers: bool = Field(
+        default=False,
+        description="When true, include T4 family and T5 fuzzy matches as review_pending links.",
     )
 
 
@@ -500,6 +540,100 @@ def arch_company_intelligence(
         "arch-company-intelligence",
         run_arch_company_intelligence_step,
         body.run_id if body else None,
+    )
+
+
+@router.post("/import/odbus")
+def import_odbus_reference(
+    background_tasks: BackgroundTasks,
+    body: OdbusImportRequest,
+    sync: bool = Query(
+        False,
+        description="When true, run import synchronously and return counts.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+
+    def _worker() -> dict[str, Any]:
+        return run_odbus_import_step(body.csv_path)
+
+    if sync:
+        return _run_step_sync("import-odbus", _worker, body.run_id)
+    return _enqueue_step(background_tasks, "import-odbus", _worker, body.run_id)
+
+
+@router.post("/import/orgbook")
+def import_orgbook_reference(
+    background_tasks: BackgroundTasks,
+    body: OrgbookImportRequest,
+    sync: bool = Query(
+        False,
+        description="When true, run import synchronously and return counts.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+
+    def _worker() -> dict[str, Any]:
+        return run_orgbook_import_step(body.path)
+
+    if sync:
+        return _run_step_sync("import-orgbook", _worker, body.run_id)
+    return _enqueue_step(background_tasks, "import-orgbook", _worker, body.run_id)
+
+
+@router.post("/verification-hub/import")
+def verification_hub_import(
+    background_tasks: BackgroundTasks,
+    body: VerificationHubImportRequest,
+    sync: bool = Query(
+        False,
+        description="When true, run import synchronously and return counts.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+
+    def _worker() -> dict[str, Any]:
+        from db.connection import get_session, init_db
+        from pipeline.registry_verification.hub import import_reference_data
+
+        init_db()
+        session = get_session()
+        try:
+            return import_reference_data(session, source=body.source, path=body.path)
+        finally:
+            session.close()
+
+    if sync:
+        return _run_step_sync("verification-hub-import", _worker, body.run_id)
+    return _enqueue_step(background_tasks, "verification-hub-import", _worker, body.run_id)
+
+
+@router.post("/registry-verification/match")
+def registry_verification_match(
+    background_tasks: BackgroundTasks,
+    body: RegistryVerificationMatchRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run matching synchronously and return counts.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+    payload = body or RegistryVerificationMatchRequest()
+
+    def _worker() -> dict[str, Any]:
+        return run_registry_verification_match_step(
+            company_ids=payload.company_ids,
+            include_review_tiers=payload.include_review_tiers,
+            sources=payload.sources,
+        )
+
+    if sync:
+        return _run_step_sync("registry-verification-match", _worker, payload.run_id)
+    return _enqueue_step(
+        background_tasks,
+        "registry-verification-match",
+        _worker,
+        payload.run_id,
     )
 
 

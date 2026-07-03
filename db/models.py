@@ -304,6 +304,75 @@ class CompanyCanonicalMergeRollback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class OdbusReference(Base):
+    """Read-only Statistics Canada ODB snapshot. No business logic."""
+
+    __tablename__ = "odbus_reference"
+
+    odbus_idx: Mapped[str] = mapped_column(Text, primary_key=True)
+    business_name: Mapped[str] = mapped_column(String(500), default="")
+    alt_business_name: Mapped[str] = mapped_column(String(500), default="")
+    normalized_name: Mapped[str] = mapped_column(String(300), default="", index=True)
+    city: Mapped[str] = mapped_column(String(100), default="")
+    normalized_city: Mapped[str] = mapped_column(String(100), default="")
+    province: Mapped[str] = mapped_column(String(10), default="", index=True)
+    status: Mapped[str] = mapped_column(String(50), default="")
+    derived_naics: Mapped[str] = mapped_column(String(10), default="")
+    source_naics: Mapped[str] = mapped_column(String(20), default="")
+    licence_number: Mapped[str] = mapped_column(String(100), default="")
+    business_id_no: Mapped[str] = mapped_column(String(100), default="")
+    provider: Mapped[str] = mapped_column(String(200), default="")
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OrgbookReference(Base):
+    """Read-only BC OrgBook snapshot. No business logic."""
+
+    __tablename__ = "orgbook_reference"
+
+    orgbook_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    legal_name: Mapped[str] = mapped_column(String(500), default="")
+    dba_names: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    normalized_name: Mapped[str] = mapped_column(String(300), default="", index=True)
+    business_number: Mapped[str] = mapped_column(String(20), default="")
+    registry_id: Mapped[str] = mapped_column(String(30), default="")
+    entity_type: Mapped[str] = mapped_column(String(100), default="")
+    status: Mapped[str] = mapped_column(String(50), default="")
+    city: Mapped[str] = mapped_column(String(100), default="")
+    normalized_city: Mapped[str] = mapped_column(String(100), default="")
+    province: Mapped[str] = mapped_column(String(10), default="BC")
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CompanyRegistryLink(Base):
+    """Evidence link between a canonical company and an external registry record."""
+
+    __tablename__ = "company_registry_links"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_company_registry_links_source_external"),
+        UniqueConstraint(
+            "company_id",
+            "source",
+            "external_id",
+            name="uq_company_registry_links_company_source_external",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    match_tier: Mapped[str] = mapped_column(String(5), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    multi_location: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CompanyScoreHistory(Base):
     """Historical construction score snapshots for trend analysis."""
 
