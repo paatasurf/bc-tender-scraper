@@ -1,0 +1,235 @@
+{
+  "name": "TenderScope — Google Enrichment Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "45 6 * * *"
+            }
+          ]
+        },
+        "timezone": "America/Vancouver"
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000001",
+      "name": "Daily 06:45 Vancouver",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Daily 06:45 America/Vancouver — after tender lifecycle (06:00), permit (06:15), company lifecycle (06:20), awards (06:30). Batch size from Railway GOOGLE_ENRICHMENT_BATCH_SIZE."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/internal/google-enrichment/run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Key",
+              "value": "={{ $env.INTERNAL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"dry_run\": false}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000003",
+      "name": "Run Google Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "POST /internal/google-enrichment/run — sync batch via execute_tracked_step. Requires INTERNAL_API_KEY on Railway + n8n. Apify token on Railway only."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "status-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000004",
+      "name": "Run Finished OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=✅ Google Enrichment complete\n\nAttempted: {{ $json.counts.attempted }}\nSuccess: {{ $json.counts.success }}\nReview: {{ $json.counts.review }}\nNo match: {{ $json.counts.no_match }}\nError: {{ $json.counts.error }}\nRejected: {{ $json.counts.rejected }}\n\nProvider: {{ $json.counts.provider }}\nFallback used: {{ $json.counts.provider_fallback_used }}\nAvg confidence: {{ $json.counts.avg_confidence }}\nAvg latency ms: {{ $json.counts.avg_latency_ms }}\n\nRun ID: {{ $json.run_id }}\nStep status: {{ $json.status }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000005",
+      "name": "Telegram Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 180],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\n\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const rnd = (Math.random() * 16) | 0;\n    const v = c === 'x' ? rnd : (rnd & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst counts = r.counts || {};\nconst errorMsg = r.error || `status=${r.status}`;\nconst incident_key = `google-enrichment:failed:${r.run_id || 'unknown'}`;\n\nreturn [\n  {\n    json: {\n      incident_id: uuidv4(),\n      incident_key,\n      severity: counts.error > 0 ? 'high' : 'medium',\n      source: 'n8n-google-enrichment',\n      step: 'google-enrichment',\n      timestamp: new Date().toISOString(),\n      summary: 'Google enrichment run failed or returned non-success status',\n      error: errorMsg,\n      context: {\n        step: 'google-enrichment',\n        run_id: r.run_id,\n        pipeline_run_id: r.id,\n        status: r.status,\n        counts,\n        provider: counts.provider,\n        provider_fallback_used: counts.provider_fallback_used,\n      },\n    },\n  },\n];"
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000006",
+      "name": "Prepare Incident Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.INCIDENT_ROUTER_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "g1a2b3c4-1111-4000-8000-000000000007",
+      "name": "Forward to Incident Router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 420],
+      "notes": "Set INCIDENT_ROUTER_WEBHOOK_URL to the Incident Router workflow Production webhook URL."
+    }
+  ],
+  "connections": {
+    "Daily 06:45 Vancouver": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "Run Google Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Google Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Run Finished OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Finished OK?": {
+      "main": [
+        [
+          {
+            "node": "Telegram Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Incident Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Incident Payload": {
+      "main": [
+        [
+          {
+            "node": "Forward to Incident Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "REPLACE_WITH_ERROR_WORKFLOW_ID"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "triggerCount": 1,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Daily 06:45 America/Vancouver: POST /internal/google-enrichment/run with X-Internal-Key. Deterministic Google Business ETL batch (Apify). Ops metrics only — not product scoring. Activate after APIFY_TOKEN is set on Railway and dry_run smoke test passes."
+  }
+}

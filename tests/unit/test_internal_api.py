@@ -68,3 +68,27 @@ def test_populate_project_contacts_requires_internal_key():
             assert False, "expected HTTPException"
         except Exception as exc:
             assert getattr(exc, "status_code", None) == 403
+
+
+def test_google_enrichment_metrics_requires_internal_key():
+    request = MagicMock()
+    request.headers.get.return_value = None
+
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
+        try:
+            internal_api.google_enrichment_metrics(request)
+            assert False, "expected HTTPException"
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 403
+
+
+def test_google_enrichment_run_requires_internal_key():
+    request = MagicMock()
+    request.headers.get.return_value = None
+
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
+        try:
+            internal_api.google_enrichment_run(request, None)
+            assert False, "expected HTTPException"
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 403

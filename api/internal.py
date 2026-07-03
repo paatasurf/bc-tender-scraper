@@ -55,6 +55,28 @@ class InternalRunRequest(BaseModel):
     )
 
 
+class GoogleEnrichmentRunRequest(BaseModel):
+    run_id: str | None = Field(
+        default=None,
+        max_length=36,
+        description="Optional shared run id for pipeline_runs grouping.",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="When true, perform lookups and matching but do not write companies or reviews.",
+    )
+    batch_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Override GOOGLE_ENRICHMENT_BATCH_SIZE for this run.",
+    )
+    company_ids: list[int] | None = Field(
+        default=None,
+        description="Optional explicit company ids (useful for dry_run smoke tests).",
+    )
+
+
 def _require_manual_pipeline() -> None:
     if os.getenv("ALLOW_MANUAL_PIPELINE", "false").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=403, detail="Manual pipeline runs are disabled")
@@ -522,6 +544,54 @@ def get_runs_for_id(run_id: str) -> dict[str, Any]:
         }
     finally:
         session.close()
+
+
+@router.get("/google-enrichment/metrics")
+def google_enrichment_metrics(request: Request) -> dict[str, Any]:
+    """Operational health metrics for Google enrichment (internal ops only)."""
+    _require_internal_key(request)
+    from db.connection import init_db
+    from pipeline.google_enrichment.metrics import get_google_enrichment_metrics
+
+    init_db()
+    session = get_session()
+    try:
+        return get_google_enrichment_metrics(session)
+    finally:
+        session.close()
+
+
+@router.post("/google-enrichment/run")
+def google_enrichment_run(
+    request: Request,
+    body: GoogleEnrichmentRunRequest | None = None,
+) -> dict[str, Any]:
+    """Run Google enrichment batch (n8n daily trigger or manual dry_run)."""
+    _require_internal_key(request)
+    from db.connection import init_db
+    from pipeline.google_enrichment.orchestrator import run_google_enrichment
+
+    init_db()
+    payload = body or GoogleEnrichmentRunRequest()
+
+    def _worker() -> dict[str, Any]:
+        session = get_session()
+        try:
+            return run_google_enrichment(
+                session,
+                run_id=payload.run_id,
+                dry_run=payload.dry_run,
+                batch_size=payload.batch_size,
+                company_ids=payload.company_ids,
+            )
+        finally:
+            session.close()
+
+    return execute_tracked_step(
+        "google-enrichment",
+        _worker,
+        run_id=payload.run_id,
+    )
 
 
 @router.post("/send-alerts")

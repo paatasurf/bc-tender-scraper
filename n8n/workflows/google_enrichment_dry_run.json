@@ -1,0 +1,118 @@
+{
+  "name": "TenderScope — Google Enrichment Dry Run",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "g2a2b3c4-2222-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 300],
+      "notes": "Smoke test before enabling the daily workflow. No company/review writes — lookups + matching only."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            },
+            {
+              "id": "batch-size",
+              "name": "batchSize",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "company-ids",
+              "name": "companyIds",
+              "value": "=[8638]",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "g2a2b3c4-2222-4000-8000-000000000002",
+      "name": "Set Run Params",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300],
+      "notes": "Edit companyIds before run — default Pontem Group (8638). Add up to 10 ids for smoke test."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/internal/google-enrichment/run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Key",
+              "value": "={{ $env.INTERNAL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ dry_run: true, batch_size: $json.batchSize, company_ids: $json.companyIds }) }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "id": "g2a2b3c4-2222-4000-8000-000000000003",
+      "name": "Run Dry Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Run Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Run Params": {
+      "main": [
+        [
+          {
+            "node": "Run Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tenderscope-monitoring"
+    }
+  ],
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Manual dry_run smoke test: POST /internal/google-enrichment/run with dry_run=true. Inspect counts.companies[] in execution output before activating Google Enrichment Daily."
+  }
+}
