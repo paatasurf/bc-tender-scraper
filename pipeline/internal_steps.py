@@ -6,7 +6,7 @@ from config.env import env_flag
 from db.connection import get_session, init_db
 from db.import_contract_awards import import_contract_awards
 from db.import_csv import import_all_csvs
-from pipeline.ai_scoring import score_unscored_tenders
+from pipeline.ai_scoring import ai_scoring_sync_time_budget_seconds, score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
 from pipeline.company_intelligence import run_company_intelligence
 from pipeline.project_intelligence import rebuild_project_contacts
@@ -41,15 +41,19 @@ def run_import_contract_awards_step() -> dict[str, Any]:
         session.close()
 
 
-def run_ai_scoring_step() -> dict[str, Any]:
+def run_ai_scoring_step(*, time_budget_seconds: float | None = None) -> dict[str, Any]:
     if env_flag("PIPELINE_SKIP_AI_SCORING"):
         return {"skipped": True, "reason": "PIPELINE_SKIP_AI_SCORING=true"}
 
     session = get_session()
     try:
-        return score_unscored_tenders(session)
+        return score_unscored_tenders(session, time_budget_seconds=time_budget_seconds)
     finally:
         session.close()
+
+
+def run_ai_scoring_sync_step() -> dict[str, Any]:
+    return run_ai_scoring_step(time_budget_seconds=ai_scoring_sync_time_budget_seconds())
 
 
 def run_company_intelligence_step() -> dict[str, Any]:
