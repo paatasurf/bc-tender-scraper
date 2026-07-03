@@ -158,3 +158,47 @@ def test_resolve_permit_lifecycle_endpoint_requires_internal_key():
     with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
         response = client.post("/internal/lifecycle/resolve-permits")
     assert response.status_code == 403
+
+
+def test_resolve_permits_sync_returns_resolver_summary():
+    client = TestClient(app)
+    summary = {
+        "resolved_at": "2026-07-02T00:00:00+00:00",
+        "stale_age_days": 730,
+        "cities": {},
+        "totals": {"skipped_no_change": 111773},
+    }
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
+        with patch(
+            "pipeline.permit_lifecycle_resolver.run_permit_lifecycle_resolve_job",
+            return_value=summary,
+        ) as mock_run:
+            response = client.post(
+                "/internal/lifecycle/resolve-permits",
+                headers={"X-Internal-Key": "secret"},
+            )
+    assert response.status_code == 200
+    assert response.json() == summary
+    mock_run.assert_called_once()
+
+
+def test_resolve_permits_background_returns_started_and_runs_job():
+    client = TestClient(app)
+    summary = {
+        "resolved_at": "2026-07-02T00:00:00+00:00",
+        "stale_age_days": 730,
+        "cities": {},
+        "totals": {"skipped_no_change": 111773},
+    }
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
+        with patch(
+            "pipeline.permit_lifecycle_resolver.run_permit_lifecycle_resolve_job",
+            return_value=summary,
+        ) as mock_run:
+            response = client.post(
+                "/internal/lifecycle/resolve-permits?background=true",
+                headers={"X-Internal-Key": "secret"},
+            )
+    assert response.status_code == 200
+    assert response.json() == {"status": "started"}
+    mock_run.assert_called_once()

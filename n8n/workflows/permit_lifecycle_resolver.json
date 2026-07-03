@@ -43,7 +43,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.baseUrl }}/internal/lifecycle/resolve-permits",
+        "url": "={{ $json.baseUrl }}/internal/lifecycle/resolve-permits?background=true",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -58,7 +58,7 @@
           ]
         },
         "options": {
-          "timeout": 300000
+          "timeout": 60000
         }
       },
       "id": "p1b2c3d4-3333-4000-8000-000000000003",
@@ -66,7 +66,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [440, 300],
-      "notes": "POST /internal/lifecycle/resolve-permits — permit lifecycle status from source vocabulary + age fallback."
+      "notes": "POST /internal/lifecycle/resolve-permits?background=true — returns immediately; resolve runs server-side."
     }
   ],
   "connections": {
@@ -109,6 +109,6 @@
   "triggerCount": 1,
   "meta": {
     "templateCredsSetupCompleted": false,
-    "description": "Daily 06:15 America/Vancouver: POST /internal/lifecycle/resolve-permits with X-Internal-Key."
+    "description": "Daily 06:15 America/Vancouver: POST /internal/lifecycle/resolve-permits?background=true with X-Internal-Key."
   }
 }

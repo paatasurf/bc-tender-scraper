@@ -237,3 +237,18 @@ def resolve_permit_lifecycle(
     }
     logger.info("[PermitLifecycle] resolve summary: %s", payload)
     return payload
+
+
+def run_permit_lifecycle_resolve_job() -> dict[str, Any]:
+    """Entrypoint for sync HTTP or FastAPI background task — owns session lifecycle."""
+    from db.connection import get_session, init_db
+
+    init_db()
+    session = get_session()
+    try:
+        return resolve_permit_lifecycle(session)
+    except Exception:
+        logger.exception("[PermitLifecycle] resolve job failed")
+        raise
+    finally:
+        session.close()

@@ -169,17 +169,21 @@ def reconcile_awards_route() -> dict[str, Any]:
     tags=["internal"],
     dependencies=[Depends(verify_internal_key)],
 )
-def resolve_permit_lifecycle_route() -> dict[str, Any]:
-    """Apply permit lifecycle rules. Nightly n8n trigger at 06:15 Vancouver."""
-    from db.connection import init_db
-    from pipeline.permit_lifecycle_resolver import resolve_permit_lifecycle
+def resolve_permit_lifecycle_route(
+    background_tasks: BackgroundTasks,
+    background: bool = Query(
+        False,
+        description="When true, return immediately and resolve in a background task.",
+    ),
+) -> dict[str, Any]:
+    """Apply permit lifecycle rules. Nightly n8n uses background=true to avoid edge timeouts."""
+    from pipeline.permit_lifecycle_resolver import run_permit_lifecycle_resolve_job
 
-    init_db()
-    session = get_session()
-    try:
-        return resolve_permit_lifecycle(session)
-    finally:
-        session.close()
+    if background:
+        background_tasks.add_task(run_permit_lifecycle_resolve_job)
+        return {"status": "started"}
+
+    return run_permit_lifecycle_resolve_job()
 
 
 @app.exception_handler(OperationalError)
