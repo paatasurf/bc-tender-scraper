@@ -930,6 +930,25 @@ def _ensure_permit_lifecycle_columns(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_company_lifecycle_columns(engine) -> None:
+    from db.company_lifecycle_ddl import (
+        COMPANY_LIFECYCLE_STATUS_CHECK_SQL,
+        company_lifecycle_add_column_statements,
+        company_lifecycle_backfill_statement,
+        company_lifecycle_index_statements,
+    )
+
+    statements: list[str] = []
+    statements.extend(company_lifecycle_add_column_statements())
+    statements.append(company_lifecycle_backfill_statement())
+    statements.extend(company_lifecycle_index_statements())
+    statements.append(COMPANY_LIFECYCLE_STATUS_CHECK_SQL)
+
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -950,6 +969,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_tender_lifecycle_columns(engine)
     _ensure_lifecycle_delisted_status(engine)
     _ensure_permit_lifecycle_columns(engine)
+    _ensure_company_lifecycle_columns(engine)
     _widen_commercial_text_columns(engine)
 
 

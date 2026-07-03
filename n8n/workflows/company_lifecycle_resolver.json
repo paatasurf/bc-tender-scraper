@@ -1,0 +1,105 @@
+{
+  "name": "Company Lifecycle Resolver Nightly",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "20 6 * * *"
+            }
+          ]
+        },
+        "timezone": "America/Vancouver"
+      },
+      "id": "c1b2c3d4-4444-4000-8000-000000000001",
+      "name": "Daily 06:20 Vancouver",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Runs every day at 06:20 America/Vancouver — after tender lifecycle (06:00) and permit lifecycle (06:15), before awards reconciler (06:30)."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "base-url",
+              "name": "baseUrl",
+              "value": "https://bc-tender-scraper-production.up.railway.app",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c1b2c3d4-4444-4000-8000-000000000002",
+      "name": "Set API Base URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/internal/lifecycle/resolve-companies?background=true",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Key",
+              "value": "={{ $env.INTERNAL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "c1b2c3d4-4444-4000-8000-000000000003",
+      "name": "Resolve Company Lifecycle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "POST /internal/lifecycle/resolve-companies?background=true — returns immediately; resolve runs server-side."
+    }
+  ],
+  "connections": {
+    "Daily 06:20 Vancouver": {
+      "main": [
+        [
+          {
+            "node": "Set API Base URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set API Base URL": {
+      "main": [
+        [
+          {
+            "node": "Resolve Company Lifecycle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-07-02T00:00:00.000Z",
+  "versionId": "company-lifecycle-resolver-v1"
+}

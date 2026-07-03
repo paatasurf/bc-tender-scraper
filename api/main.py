@@ -186,6 +186,28 @@ def resolve_permit_lifecycle_route(
     return run_permit_lifecycle_resolve_job()
 
 
+@app.post(
+    "/internal/lifecycle/resolve-companies",
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_key)],
+)
+def resolve_company_lifecycle_route(
+    background_tasks: BackgroundTasks,
+    background: bool = Query(
+        False,
+        description="When true, return immediately and resolve in a background task.",
+    ),
+) -> dict[str, Any]:
+    """Apply company lifecycle rules. Nightly n8n uses background=true to avoid edge timeouts."""
+    from pipeline.company_lifecycle_resolver import run_company_lifecycle_resolve_job
+
+    if background:
+        background_tasks.add_task(run_company_lifecycle_resolve_job)
+        return {"status": "started"}
+
+    return run_company_lifecycle_resolve_job()
+
+
 @app.exception_handler(OperationalError)
 @app.exception_handler(DBAPIError)
 def database_unavailable_handler(_request: Request, exc: Exception) -> JSONResponse:

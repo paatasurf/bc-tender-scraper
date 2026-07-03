@@ -225,6 +225,11 @@ class Company(Base):
     geographic_reach: Mapped[str] = mapped_column(String(20), default="")
     value_p25: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_p75: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lifecycle_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'active'"))
+    lifecycle_status_override: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_operating: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
