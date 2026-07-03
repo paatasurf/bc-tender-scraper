@@ -116,3 +116,22 @@ Resolver logic is unchanged: source-status rules stay dormant while `source_stat
 | 2026-07-02 | 46,745 / 20,894 / 2,406 status counts | **Retracted** — never from Phase 1 SQL |
 | 2026-07-02 | 96.7% younger than 6 months | **Retracted** — contradicted verified date distribution |
 | 2026-07-02 | `permitcategory` → `source_status_raw` | **Reverted** — work type, not lifecycle status |
+
+---
+
+## Phase 3 — consumer filtering (approved)
+
+**Production baseline:** 86,520 `stale` (`is_active=false`), 25,253 `active` (`is_active=true`).
+
+| Consumer | Default filter | Archive param |
+|---|---|---|
+| `early_signals._collect_permit_signals` | `is_active=true` | — |
+| `opportunity_discovery._load_permit_candidates` | `is_active=true` | `include_closed=true` (shared with tenders) |
+| `GET /api/permits` | `is_active=true` | `include_inactive=true` |
+| Competitive intelligence permit paths | **No filter** | Historical evidence layer |
+
+**Weekly enrichment job** (`vancouver_early_signal_enrichment`): reads `early_signal_events` only — no `permits` query; no Phase 3 change. Email digests via `get_early_signals_for_profile` inherit the pipeline filter.
+
+### Backlog — cosmetic follow-up (6a)
+
+Discovery evidence may cite **"Company permit history"** (`_score_construction_permit`, own-permit branch) while underlying rows can include stale permits when `include_closed=true` archive mode is used, or from historical company aggregates. **Do not filter data** — relabel copy to distinguish recorded history vs ongoing activity (Contractor Reliability / evidence UX).

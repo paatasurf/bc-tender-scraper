@@ -259,11 +259,18 @@ def list_permits(
     offset: int = Query(0, ge=0),
     city: str | None = Query(None, max_length=100),
     applicant: str | None = Query(None, max_length=300),
+    include_inactive: bool = Query(
+        False,
+        description="When true, include stale/completed/cancelled permits (full archive).",
+    ),
 ) -> dict[str, Any]:
     session = get_session()
     try:
         query = select(Permit)
         count_query = select(func.count()).select_from(Permit)
+        if not include_inactive:
+            query = query.where(Permit.is_active.is_(True))
+            count_query = count_query.where(Permit.is_active.is_(True))
         if city and city.strip():
             city_value = city.strip().title()
             query = query.where(Permit.city == city_value)

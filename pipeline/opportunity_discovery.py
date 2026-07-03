@@ -24,6 +24,7 @@ from db.models import (
     Permit,
     Tender,
 )
+from db.permit_lifecycle_constants import apply_active_permit_filter
 from pipeline.company_matching import normalize_vendor_name
 from pipeline.market_normalizer import tender_lifecycle_eligible
 from pipeline.ai_matching import (
@@ -930,7 +931,9 @@ def _load_construction_read_bundle(
     )
 
     permit_started = time.perf_counter()
-    permit_rows = _load_permit_candidates(session, signals, max_candidates // 2)
+    permit_rows = _load_permit_candidates(
+        session, signals, max_candidates // 2, include_closed=include_closed
+    )
     _log_discover_step(
         "read.permits", company_id, kind, permit_started, extra=f"rows={len(permit_rows)}"
     )
@@ -992,7 +995,9 @@ def _load_architecture_read_bundle(
     )
 
     permit_started = time.perf_counter()
-    permit_rows = _load_permit_candidates(session, signals, max_candidates // 2)
+    permit_rows = _load_permit_candidates(
+        session, signals, max_candidates // 2, include_closed=include_closed
+    )
     _log_discover_step(
         "read.permits", company_id, kind, permit_started, extra=f"rows={len(permit_rows)}"
     )
@@ -1455,13 +1460,23 @@ def _cached_ai_tenders_to_opportunity_items(
     return matches, stretch
 
 
-def _load_permit_candidates(session: Session, signals: CompanySignals, limit: int) -> list[tuple[Permit, bool]]:
+def _load_permit_candidates(
+    session: Session,
+    signals: CompanySignals,
+    limit: int,
+    *,
+    include_closed: bool = False,
+) -> list[tuple[Permit, bool]]:
     results: list[tuple[Permit, bool]] = []
     seen: set[int] = set()
+    include_inactive = include_closed
 
     if signals.normalized_name:
         tokens = _applicant_search_tokens(signals.name)
-        own_query = select(Permit).where(Permit.applicant != "")
+        own_query = apply_active_permit_filter(
+            select(Permit).where(Permit.applicant != ""),
+            include_inactive=include_inactive,
+        )
         if tokens:
             own_query = own_query.where(
                 or_(*[func.lower(Permit.applicant).contains(token) for token in tokens])
@@ -1478,7 +1493,10 @@ def _load_permit_candidates(session: Session, signals: CompanySignals, limit: in
     # Use PK-ordered scan + Python filter — OR of LOWER(permit_type) LIKE '%term%'
     # cannot use btree indexes and can scan the full permits table.
     scan_limit = limit * 4 if not type_terms else limit * 8
-    market_query = select(Permit).order_by(Permit.id.desc()).limit(scan_limit)
+    market_query = apply_active_permit_filter(
+        select(Permit).order_by(Permit.id.desc()).limit(scan_limit),
+        include_inactive=include_inactive,
+    )
     for permit in session.scalars(market_query).all():
         if permit.id in seen:
             continue

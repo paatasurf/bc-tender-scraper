@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import ArchCompany, ClientProfile, Company, EarlySignalEvent, Permit
+from db.permit_lifecycle_constants import apply_active_permit_filter
 from pipeline.opportunity_discovery import (
     CompanySignals,
     _company_operating_geo,
@@ -362,13 +363,14 @@ def _collect_permit_signals(
     max_value: float | None,
     fetch_limit: int,
 ) -> list[dict[str, Any]]:
-    query = (
+    query = apply_active_permit_filter(
         select(Permit)
         .where(Permit.source == "vancouver")
         .where(Permit.application_date != "")
         .where(Permit.application_date >= since)
         .order_by(Permit.application_date.desc(), Permit.id.desc())
-        .limit(fetch_limit)
+        .limit(fetch_limit),
+        include_inactive=False,
     )
     rows = session.scalars(query).all()
     score_fn = (

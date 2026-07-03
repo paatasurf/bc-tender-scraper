@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 PERMIT_LIFECYCLE_STATUS_ACTIVE = "active"
 PERMIT_LIFECYCLE_STATUS_COMPLETED = "completed"
 PERMIT_LIFECYCLE_STATUS_CANCELLED = "cancelled"
@@ -54,3 +56,19 @@ PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS: frozenset[str] = frozenset(
         "source_status_raw",
     }
 )
+
+
+def permit_lifecycle_eligible(row: Any, *, include_inactive: bool = False) -> bool:
+    """Return True when a permit row is eligible for open-market consumer pipelines."""
+    if include_inactive:
+        return True
+    return bool(getattr(row, "is_active", True))
+
+
+def apply_active_permit_filter(stmt: Any, *, include_inactive: bool = False) -> Any:
+    """SQLAlchemy helper: default open-market filter on permits.is_active."""
+    if include_inactive:
+        return stmt
+    from db.models import Permit
+
+    return stmt.where(Permit.is_active.is_(True))
