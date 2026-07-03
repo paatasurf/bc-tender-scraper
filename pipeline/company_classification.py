@@ -610,11 +610,6 @@ def classify_companies(session: Session) -> int:
             company.company_type = result.market_category
             company.confidence_score = round(result.confidence, 4)
             company.company_lifecycle = lifecycle
-            company.company_tier = compute_company_tier(
-                result.market_category,
-                lifecycle,
-                company_stats,
-            )
             company.enrichment_status = compute_enrichment_status(company)
             classified += 1
 

@@ -52,6 +52,7 @@ from api.morning_brief import router as morning_brief_router
 from api.win_loss import router as win_loss_router
 from config.env import get_anthropic_api_key
 from pipeline.executor import pipeline_status as get_pipeline_runtime_status
+from pipeline.construction_tier import parse_tier_filter
 from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,13 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
         if isinstance(value, datetime):
             data[key] = value.isoformat()
     return data
+
+
+def _company_to_api_dict(company: Company) -> dict[str, Any]:
+    """Expose construction_score, company_tier, and construction_tier breakdown."""
+    payload = _row_to_dict(company)
+    payload["construction_tier"] = payload.pop("construction_tier_json", None)
+    return payload
 
 
 def _require_manual_pipeline() -> None:
@@ -576,6 +584,27 @@ def list_companies(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: str = Query("", max_length=300),
+    tiers: str = Query(
+        "A,B",
+        max_length=50,
+        description="Comma-separated construction tiers (A–E). Use ALL for no tier filter.",
+    ),
+    min_score: int | None = Query(
+        None,
+        ge=0,
+        le=100,
+        description="Minimum construction_score (inclusive).",
+    ),
+    max_score: int | None = Query(
+        None,
+        ge=0,
+        le=100,
+        description="Maximum construction_score (inclusive).",
+    ),
+    sort_by: Literal["construction_score", "total_value"] = Query(
+        "construction_score",
+        description="Sort field for company list.",
+    ),
 ) -> dict[str, Any]:
     session = get_session()
     try:
@@ -587,11 +616,36 @@ def list_companies(
             query = query.where(Company.name.ilike(pattern))
             count_query = count_query.where(Company.name.ilike(pattern))
 
+        tier_filter = parse_tier_filter(tiers)
+        if tier_filter:
+            query = query.where(Company.company_tier.in_(tier_filter))
+            count_query = count_query.where(Company.company_tier.in_(tier_filter))
+
+        if min_score is not None:
+            query = query.where(Company.construction_score >= min_score)
+            count_query = count_query.where(Company.construction_score >= min_score)
+        if max_score is not None:
+            query = query.where(Company.construction_score <= max_score)
+            count_query = count_query.where(Company.construction_score <= max_score)
+
+        order_column = (
+            Company.construction_score.desc()
+            if sort_by == "construction_score"
+            else Company.total_value.desc()
+        )
+
         total = session.scalar(count_query) or 0
-        rows = session.scalars(
-            query.order_by(Company.total_value.desc()).offset(offset).limit(limit)
-        ).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        rows = session.scalars(query.order_by(order_column).offset(offset).limit(limit)).all()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "tiers": tiers,
+            "min_score": min_score,
+            "max_score": max_score,
+            "sort_by": sort_by,
+            "data": [_company_to_api_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -603,7 +657,7 @@ def get_company_by_id(company_id: int) -> dict[str, Any]:
         company = session.get(Company, company_id)
         if company is None:
             raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
-        return _row_to_dict(company)
+        return _company_to_api_dict(company)
     finally:
         session.close()
 
@@ -697,7 +751,7 @@ def get_company(name: str) -> dict[str, Any]:
         company = _find_company(session, name)
         if company is None:
             raise HTTPException(status_code=404, detail=f"Company '{name}' not found")
-        return _row_to_dict(company)
+        return _company_to_api_dict(company)
     finally:
         session.close()
 

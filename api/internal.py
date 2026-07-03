@@ -18,6 +18,7 @@ from pipeline.internal_steps import (
     run_company_intelligence_step,
     run_import_contract_awards_step,
     run_populate_project_contacts_step,
+    run_construction_tiers_step,
 )
 from pipeline.run_coordinator import PipelineOrderError
 from pipeline.lifecycle_resolver import resolve_tender_lifecycle
@@ -52,6 +53,14 @@ class InternalRunRequest(BaseModel):
         default=None,
         max_length=36,
         description="Optional shared run id for grouping steps in n8n orchestration.",
+    )
+
+
+class ConstructionTiersRequest(BaseModel):
+    run_id: str | None = Field(default=None, max_length=36)
+    company_ids: list[int] | None = Field(
+        default=None,
+        description="Optional company ids; default all canonical + standalone rows.",
     )
 
 
@@ -492,6 +501,26 @@ def arch_company_intelligence(
         run_arch_company_intelligence_step,
         body.run_id if body else None,
     )
+
+
+@router.post("/construction-tiers")
+def construction_tiers(
+    background_tasks: BackgroundTasks,
+    body: ConstructionTiersRequest | None = None,
+    sync: bool = Query(
+        False,
+        description="When true, run tier computation synchronously and return counts.",
+    ),
+) -> dict[str, Any]:
+    _require_manual_pipeline()
+    payload = body or ConstructionTiersRequest()
+
+    def _worker() -> dict[str, Any]:
+        return run_construction_tiers_step(company_ids=payload.company_ids)
+
+    if sync:
+        return _run_step_sync("construction-tiers", _worker, payload.run_id)
+    return _enqueue_step(background_tasks, "construction-tiers", _worker, payload.run_id)
 
 
 @router.get("/steps/{pipeline_run_id}")

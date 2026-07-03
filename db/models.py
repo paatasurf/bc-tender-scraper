@@ -198,7 +198,10 @@ class Company(Base):
     company_type: Mapped[str] = mapped_column(String(50), default="", index=True)
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     company_lifecycle: Mapped[str] = mapped_column(String(20), default="", index=True)
-    company_tier: Mapped[str] = mapped_column(String(20), default="")
+    company_tier: Mapped[str] = mapped_column(String(20), default="", index=True)
+    construction_score: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), index=True)
+    construction_tier_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    construction_tier_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enrichment_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     award_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
@@ -299,6 +302,19 @@ class CompanyCanonicalMergeRollback(Base):
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
     before_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CompanyScoreHistory(Base):
+    """Historical construction score snapshots for trend analysis."""
+
+    __tablename__ = "company_score_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    construction_score: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    company_tier: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    algorithm_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
 
 class ArchCompany(Base):

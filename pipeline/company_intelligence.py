@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session
 
 from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender, Company, Permit, Tender
-from pipeline.company_classification import classify_companies, compute_enrichment_status
+from pipeline.company_classification import classify_companies
+from pipeline.construction_tier import compute_construction_tiers
 from pipeline.company_resolution import CompanyResolver, RESOLUTION_STATUS_REVIEW
 
 CLAUDE_MODEL = "claude-sonnet-4-5"
@@ -448,9 +449,11 @@ def run_company_intelligence(session: Session) -> dict[str, int]:
     google_enriched = enrich_companies_google(session)
     ai_analyzed = analyze_companies_ai(session)
     classified = classify_companies(session)
+    tier_results = compute_construction_tiers(session)
     return {
         "companies_populated": populated,
         "companies_google_enriched": google_enriched,
         "companies_ai_analyzed": ai_analyzed,
         "companies_classified": classified,
+        "construction_tiers_updated": tier_results.get("companies_updated", 0),
     }

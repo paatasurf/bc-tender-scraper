@@ -9,6 +9,7 @@ from db.import_csv import import_all_csvs
 from pipeline.ai_scoring import score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
 from pipeline.company_intelligence import run_company_intelligence
+from pipeline.construction_tier import compute_construction_tiers
 from pipeline.project_intelligence import rebuild_project_contacts
 from pipeline.run_coordinator import (
     assert_ready_for_import,
@@ -73,6 +74,15 @@ def run_populate_project_contacts_step() -> dict[str, Any]:
     session = get_session()
     try:
         return rebuild_project_contacts(session)
+    finally:
+        session.close()
+
+
+def run_construction_tiers_step(*, company_ids: list[int] | None = None) -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        return compute_construction_tiers(session, company_ids=company_ids)
     finally:
         session.close()
 
