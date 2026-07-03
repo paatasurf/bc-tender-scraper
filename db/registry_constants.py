@@ -1,0 +1,44 @@
+"""Constants for pluggable registry verification providers."""
+
+from __future__ import annotations
+
+REGISTRY_SOURCE_ODBUS = "odbus"
+REGISTRY_SOURCE_ORGBOOK = "orgbook"
+REGISTRY_SOURCE_BC_REGISTRY = "bc_registry"
+
+REGISTRY_SOURCE_DISPLAY_NAMES: dict[str, str] = {
+    REGISTRY_SOURCE_ODBUS: "Statistics Canada ODB",
+    REGISTRY_SOURCE_ORGBOOK: "BC OrgBook",
+    REGISTRY_SOURCE_BC_REGISTRY: "BC Registry",
+}
+
+# Verification Hub summary levels (derived from provider evidence only)
+VERIFICATION_LEVEL_NONE = "NONE"
+VERIFICATION_LEVEL_VERIFIED = "VERIFIED"
+VERIFICATION_LEVEL_MULTI_SOURCE = "MULTI_SOURCE_VERIFIED"
+VERIFICATION_LEVEL_OFFICIAL_REGISTRY = "OFFICIAL_REGISTRY_VERIFIED"
+
+# Official government registry sources (not directory/licence databases)
+OFFICIAL_REGISTRY_SOURCES = frozenset({REGISTRY_SOURCE_ORGBOOK, REGISTRY_SOURCE_BC_REGISTRY})
+
+MATCH_TIER_T1 = "T1"
+MATCH_TIER_T2 = "T2"
+MATCH_TIER_T3 = "T3"
+MATCH_TIER_T4 = "T4"
+MATCH_TIER_T5 = "T5"
+
+MATCH_TIER_CONFIDENCE: dict[str, float] = {
+    MATCH_TIER_T1: 0.95,
+    MATCH_TIER_T2: 0.85,
+    MATCH_TIER_T3: 0.70,
+    MATCH_TIER_T4: 0.60,
+    MATCH_TIER_T5: 0.50,
+}
+
+VERIFICATION_CONFIRMED_ACTIVE = "confirmed_active"
+VERIFICATION_CONFIRMED_INACTIVE = "confirmed_inactive"
+VERIFICATION_REVIEW_PENDING = "review_pending"
+VERIFICATION_NO_MATCH = "no_match"
+
+AUTO_MATCH_TIERS = frozenset({MATCH_TIER_T1, MATCH_TIER_T2, MATCH_TIER_T3})
+REVIEW_MATCH_TIERS = frozenset({MATCH_TIER_T4, MATCH_TIER_T5})
