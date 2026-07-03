@@ -425,7 +425,6 @@ def import_csvs(
     sync: Annotated[
         bool,
         Query(
-            False,
             description="When true, run the CSV import to completion and return tracked status/counts.",
         ),
     ] = False,
