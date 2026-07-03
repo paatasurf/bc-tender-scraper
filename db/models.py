@@ -61,6 +61,9 @@ class Permit(Base):
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     source_status_raw: Mapped[str] = mapped_column(String(100), default="")
+    company_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    canonical_merge_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    canonical_merge_method: Mapped[str] = mapped_column(String(50), default="")
 
 
 class EarlySignalEvent(Base):
@@ -243,10 +246,59 @@ class Company(Base):
     website: Mapped[str] = mapped_column(String(500), default="")
     google_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     google_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    display_name: Mapped[str] = mapped_column(String(300), default="")
+    entity_role: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'standalone'"))
+    canonical_company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True, index=True
+    )
+    applicant_signatory: Mapped[str] = mapped_column(String(300), default="")
+    canonical_merge_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    canonical_merge_method: Mapped[str] = mapped_column(String(50), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class CompanyApplicantAlias(Base):
+    __tablename__ = "company_applicant_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    canonical_company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    alias_company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id"), nullable=False, unique=True)
+    applicant_name_raw: Mapped[str] = mapped_column(String(300), nullable=False)
+    signatory_name: Mapped[str] = mapped_column(String(300), default="")
+    merge_run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("company_canonical_merge_runs.id"), nullable=True
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    merge_method: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CompanyCanonicalMergeRun(Base):
+    __tablename__ = "company_canonical_merge_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'planned'"))
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    report_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+
+class CompanyCanonicalMergeRollback(Base):
+    __tablename__ = "company_canonical_merge_rollback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("company_canonical_merge_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    before_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ArchCompany(Base):

@@ -20,7 +20,7 @@ def mark_stale_companies(session: Session, settings: GoogleEnrichmentSettings) -
               AND is_operating = true
               AND google_enrichment_status = :enriched_status
               AND google_last_updated IS NOT NULL
-              AND google_last_updated < NOW() - (:stale_days::text || ' days')::interval
+              AND google_last_updated < NOW() - make_interval(days => :stale_days)
             """
         ),
         {
@@ -79,11 +79,11 @@ def fetch_eligible_companies(
                     OR c.google_enrichment_status IN (:pending_status, :error_status)
                     OR (
                         c.google_enrichment_status IN (:enriched_status, :stale_status)
-                        AND c.google_last_updated < NOW() - (:stale_days::text || ' days')::interval
+                        AND c.google_last_updated < NOW() - make_interval(days => :stale_days)
                     )
                     OR (
                         c.google_enrichment_status = :no_match_status
-                        AND c.google_last_updated < NOW() - (:no_match_days::text || ' days')::interval
+                        AND c.google_last_updated < NOW() - make_interval(days => :no_match_days)
                     )
               )
             ORDER BY

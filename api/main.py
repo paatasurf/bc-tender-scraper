@@ -23,6 +23,7 @@ from db.connection import (
     is_transient_db_error,
     start_init_db_background,
 )
+from db.company_analytics import company_analytics_entity_filter
 from pipeline.opportunity_discovery import ARCHITECTURE_DEFAULT_MIN_SCORE, CONSTRUCTION_DEFAULT_MIN_SCORE
 from db.models import (
     ArchCompany,
@@ -578,8 +579,9 @@ def list_companies(
 ) -> dict[str, Any]:
     session = get_session()
     try:
-        query = select(Company)
-        count_query = select(func.count()).select_from(Company)
+        analytics_filter = company_analytics_entity_filter()
+        query = select(Company).where(analytics_filter)
+        count_query = select(func.count()).select_from(Company).where(analytics_filter)
         if search.strip():
             pattern = f"%{search.strip()}%"
             query = query.where(Company.name.ilike(pattern))

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from db.constants import BATCH_SIZE
 from db.models import Permit
 from db.permit_lifecycle_constants import PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
+from pipeline.company_resolution import CompanyResolver
 
 PERMIT_VARCHAR_LIMITS: dict[str, int] = {
     "address": 300,
@@ -46,6 +47,29 @@ def _dedupe_permit_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return list(deduped.values())
 
 
+def _attach_company_ids(
+    session: Session,
+    rows: list[dict[str, str]],
+    *,
+    source: str,
+) -> None:
+    resolver = CompanyResolver(session)
+    for row in rows:
+        raw = (row.get("applicant") or row.get("contractor") or "").strip()
+        if not raw:
+            continue
+        resolution = resolver.resolve(
+            raw,
+            source=f"permits:{source}",
+            city=row.get("city") or "",
+        )
+        if resolution.company_id is None:
+            continue
+        row["company_id"] = resolution.company_id
+        row["canonical_merge_confidence"] = resolution.confidence
+        row["canonical_merge_method"] = resolution.method
+
+
 def upsert_city_permits(
     session: Session,
     rows: list[dict[str, str]],
@@ -60,6 +84,8 @@ def upsert_city_permits(
     if full_refresh:
         session.execute(delete(Permit).where(Permit.source == source))
         session.commit()
+
+    _attach_company_ids(session, rows, source=source)
 
     table = Permit.__table__
     imported = 0

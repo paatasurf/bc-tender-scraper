@@ -334,6 +334,14 @@ def parse_name(raw: str) -> dict[str, Any]:
             "has_dba": True,
             "full": name,
         }
+    dba_space_match = re.search(r"\sDBA\s+(.+)$", name, re.I)
+    if dba_space_match:
+        return {
+            "legal": re.sub(r"\sDBA\s+.+$", "", name, flags=re.I).strip(),
+            "dba": dba_space_match.group(1).strip(),
+            "has_dba": True,
+            "full": name,
+        }
     slash = re.match(r"^(.+?)\s*/\s*(.+)$", name)
     if slash:
         return {

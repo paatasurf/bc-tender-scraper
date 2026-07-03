@@ -957,6 +957,14 @@ def _ensure_google_enrichment_schema(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_company_canonical_merge_schema(engine) -> None:
+    from db.company_canonical_ddl import company_canonical_migration_statements
+
+    with engine.begin() as conn:
+        for statement in company_canonical_migration_statements():
+            conn.execute(text(statement))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -979,6 +987,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_permit_lifecycle_columns(engine)
     _ensure_company_lifecycle_columns(engine)
     _ensure_google_enrichment_schema(engine)
+    _ensure_company_canonical_merge_schema(engine)
     _widen_commercial_text_columns(engine)
 
 

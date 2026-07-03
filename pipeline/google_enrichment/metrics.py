@@ -123,11 +123,11 @@ def fetch_operational_metrics(session: Session, settings: GoogleEnrichmentSettin
                             OR google_enrichment_status IN (:pending_status, :error_status)
                             OR (
                                 google_enrichment_status IN (:enriched_status, :stale_status)
-                                AND google_last_updated < NOW() - (:stale_days::text || ' days')::interval
+                                AND google_last_updated < NOW() - make_interval(days => :stale_days)
                             )
                             OR (
                                 google_enrichment_status = :no_match_status
-                                AND google_last_updated < NOW() - (:no_match_days::text || ' days')::interval
+                                AND google_last_updated < NOW() - make_interval(days => :no_match_days)
                             )
                       )
                 ) AS eligible,

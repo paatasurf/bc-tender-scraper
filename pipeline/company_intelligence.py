@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender, Company, Permit, Tender
 from pipeline.company_classification import classify_companies, compute_enrichment_status
+from pipeline.company_resolution import CompanyResolver, RESOLUTION_STATUS_REVIEW
 
 CLAUDE_MODEL = "claude-sonnet-4-5"
 REQUEST_DELAY_SECONDS = 0.5
@@ -104,26 +105,45 @@ class _CompanyStats:
 
 
 def populate_companies_from_permits(session: Session) -> int:
-    """Aggregate the permits table into one companies row per unique applicant."""
-    print("[Companies] Aggregating permits by applicant...")
-    stats: dict[str, _CompanyStats] = {}
+    """Aggregate permits onto canonical companies via resolve_company (not raw applicant)."""
+    print("[Companies] Aggregating permits by resolved canonical company...")
+    stats: dict[int, _CompanyStats] = {}
+    resolver = CompanyResolver(session)
+    review_count = 0
+    skipped_person = 0
 
     rows = session.execute(
         select(
+            Permit.id,
             Permit.applicant,
             Permit.permit_type,
             Permit.project_value,
             Permit.issue_date,
             Permit.address,
+            Permit.city,
+            Permit.source,
         )
     ).yield_per(1000)
 
-    for applicant, permit_type, project_value, issue_date, address in rows:
-        name = (applicant or "").strip()
-        if not name:
+    for permit_id, applicant, permit_type, project_value, issue_date, address, city, source in rows:
+        raw = (applicant or "").strip()
+        if not raw:
             continue
 
-        entry = stats.setdefault(name, _CompanyStats())
+        resolution = resolver.resolve(
+            raw,
+            source=f"permits:{source or 'unknown'}",
+            city=city or "",
+        )
+        if resolution.company_id is None:
+            if resolution.status == "person_skip":
+                skipped_person += 1
+            continue
+        if resolution.status == RESOLUTION_STATUS_REVIEW:
+            review_count += 1
+
+        company_id = int(resolution.company_id)
+        entry = stats.setdefault(company_id, _CompanyStats())
         entry.total_projects += 1
         entry.total_value += _parse_value(project_value)
 
@@ -142,40 +162,46 @@ def populate_companies_from_permits(session: Session) -> int:
             if not entry.last_project_date or issue_date > entry.last_project_date:
                 entry.last_project_date = issue_date
 
-    print(f"[Companies] Found {len(stats)} unique companies")
-
-    payload = [
-        {
-            "name": name,
-            "total_projects": entry.total_projects,
-            "total_value": round(entry.total_value, 2),
-            "avg_project_value": round(entry.total_value / entry.total_projects, 2)
-            if entry.total_projects
-            else 0.0,
-            "project_types": [item for item, _ in entry.project_types.most_common(MAX_LIST_ITEMS)],
-            "neighborhoods": [item for item, _ in entry.neighborhoods.most_common(MAX_LIST_ITEMS)],
-            "first_project_date": entry.first_project_date,
-            "last_project_date": entry.last_project_date,
-        }
-        for name, entry in stats.items()
-    ]
-
-    table = Company.__table__
-    upserted = 0
-    for start in range(0, len(payload), UPSERT_BATCH_SIZE):
-        batch = payload[start : start + UPSERT_BATCH_SIZE]
-        stmt = insert(table).values(batch)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["name"],
-            set_={column: stmt.excluded[column] for column in STATS_COLUMNS}
-            | {"updated_at": func.now()},
+        session.execute(
+            Permit.__table__.update()
+            .where(Permit.id == int(permit_id))
+            .values(
+                company_id=company_id,
+                canonical_merge_confidence=resolution.confidence,
+                canonical_merge_method=resolution.method,
+            )
         )
-        session.execute(stmt)
-        session.commit()
-        upserted += len(batch)
 
-    print(f"[Companies] Upserted {upserted} companies")
-    return upserted
+    session.commit()
+    print(
+        f"[Companies] Resolved {len(stats)} canonical companies "
+        f"(review={review_count}, person_skip={skipped_person}, "
+        f"confidence_log={len(resolver.confidence_log)})"
+    )
+
+    updated = 0
+    for company_id, entry in stats.items():
+        session.execute(
+            Company.__table__.update()
+            .where(Company.id == company_id)
+            .values(
+                total_projects=entry.total_projects,
+                total_value=round(entry.total_value, 2),
+                avg_project_value=round(entry.total_value / entry.total_projects, 2)
+                if entry.total_projects
+                else 0.0,
+                project_types=[item for item, _ in entry.project_types.most_common(MAX_LIST_ITEMS)],
+                neighborhoods=[item for item, _ in entry.neighborhoods.most_common(MAX_LIST_ITEMS)],
+                first_project_date=entry.first_project_date,
+                last_project_date=entry.last_project_date,
+                updated_at=func.now(),
+            )
+        )
+        updated += 1
+    session.commit()
+
+    print(f"[Companies] Updated stats on {updated} canonical companies")
+    return updated
 
 
 # ---------------------------------------------------------------------------
