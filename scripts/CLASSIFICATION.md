@@ -105,6 +105,7 @@ max timestamps, identity checksum, schema migration version).
 | `probe_vercel_bundles.py` | A | No | No | N/A | 2026-07-03 |  |
 | `report_opportunity_before_after.py` | A | No | No | N/A | 2026-07-03 |  |
 | `run_company_canonical_merge.py` | C | Yes | Yes | Local write; `--allow-production` + dry-run | 2026-07-03 | Effective escalates to Class D whenever init_db() runs. --apply requires fresh dry-run artifact. |
+| `run_parsed_identity_canonical_merge.py` | C | Yes | Yes | Local write; `--allow-production` + dry-run; `--use-production` read-only dry-run | 2026-07-04 | Scenario B applicant-field PI merge. Alias-only; no inserts. --apply requires fresh dry-run artifact. |
 | `run_construction_tiers.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
 | `run_odbus_import.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
 | `run_orgbook_import.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |

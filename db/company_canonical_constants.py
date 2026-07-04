@@ -34,6 +34,13 @@ MERGE_METHOD_DBA_APPLICANT = "dba_applicant"
 MERGE_METHOD_LEGAL_APPLICANT = "legal_applicant"
 MERGE_METHOD_EXACT_APPLICANT = "exact_applicant"
 MERGE_METHOD_CONTRACTOR = "contractor"
+MERGE_METHOD_PARSED_IDENTITY_APPLICANT = "parsed_identity_applicant"
+
+MERGE_TIER_PARSED_IDENTITY_SAFE = "parsed_identity_applicant_safe"
+MERGE_TIER_PARSED_IDENTITY_EXCLUDED = "parsed_identity_excluded"
+
+PARSED_IDENTITY_MAX_ROOTS_AUTO_MERGE = 100
+PARSED_IDENTITY_MIN_PARSE_CONFIDENCE = 0.8
 
 # Groups with at least one DBA member are eligible for safe auto-merge.
 MERGE_TIER_SAFE_DBA = "safe_dba_auto_merge"
