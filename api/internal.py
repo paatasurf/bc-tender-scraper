@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -23,7 +23,7 @@ from pipeline.internal_steps import (
     run_registry_verification_match_step,
     run_construction_tiers_step,
 )
-from pipeline.run_coordinator import PipelineOrderError
+from pipeline.run_coordinator import PipelineOrderError, get_run_state
 from pipeline.lifecycle_resolver import resolve_tender_lifecycle
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
@@ -163,17 +163,30 @@ def _enqueue_import_step(
     background_tasks: BackgroundTasks,
     run_id: str | None,
 ) -> dict[str, Any]:
-    actual_run_id = run_id or new_run_id()
-    try:
-        assert_import_allowed(actual_run_id if run_id else None)
-    except PipelineOrderError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    actual_run_id = _resolve_import_run_id(run_id)
     return _enqueue_step(
         background_tasks,
         "import-csvs",
         make_gated_import_worker(actual_run_id),
         actual_run_id,
     )
+
+
+def _resolve_import_run_id(run_id: str | None) -> str:
+    """Validate import ordering and bind omitted run ids to the active scrape run."""
+    try:
+        assert_import_allowed(run_id)
+        if run_id:
+            return run_id
+        state = get_run_state()
+        if state is None:
+            raise PipelineOrderError(
+                "Import blocked: no pipeline run has completed tender scrapers. "
+                "Run the full scrape phase first."
+            )
+        return state.run_id
+    except PipelineOrderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _run_status_path(run_id: str) -> str:
@@ -459,9 +472,21 @@ def backfill_closing_at(request: Request) -> dict[str, Any]:
 def import_csvs(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
+    sync: Annotated[
+        bool,
+        Query(description="When true, run import synchronously and return tracked counts."),
+    ] = False,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
-    return _enqueue_import_step(background_tasks, body.run_id if body else None)
+    run_id = body.run_id if body else None
+    if sync:
+        actual_run_id = _resolve_import_run_id(run_id)
+        return _run_step_sync(
+            "import-csvs",
+            make_gated_import_worker(actual_run_id),
+            actual_run_id,
+        )
+    return _enqueue_import_step(background_tasks, run_id)
 
 
 @router.post("/pipeline/tender-data")
