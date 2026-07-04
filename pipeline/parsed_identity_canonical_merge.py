@@ -58,6 +58,60 @@ _GENERIC_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+_GENERIC_BUCKET_COMPANY_NAMES = frozenset(
+    {
+        "architect",
+        "architects",
+        "construction",
+        "contractor",
+        "consultant",
+        "consultants",
+        "engineer",
+        "developer",
+        "design",
+        "builder",
+        "designer",
+        "demolition",
+        "contracting",
+        "management",
+        "renovation",
+        "excavation",
+        "excavating",
+    }
+)
+
+
+def is_generic_bucket_company_name(name: str) -> bool:
+    """True when companies.name is a single generic profession word (bucket row)."""
+    cleaned = re.sub(r"[^a-zA-Z0-9 ]", " ", (name or "").strip()).strip()
+    if not cleaned:
+        return True
+    tokens = cleaned.split()
+    if len(tokens) == 1 and tokens[0].casefold() in _GENERIC_BUCKET_COMPANY_NAMES:
+        return True
+    return cleaned.casefold() in _GENERIC_BUCKET_COMPANY_NAMES
+
+
+def _company_name_norm_key(name: str) -> str:
+    return normalize_vendor_name(name)
+
+
+def _is_ineligible_company_link(
+    company_name: str,
+    *,
+    norm_key: str,
+    total_projects: int,
+) -> bool:
+    """Drop generic buckets and cross-name permit/company mismatches."""
+    if is_generic_bucket_company_name(company_name):
+        return True
+    if _company_name_norm_key(company_name) != norm_key:
+        # Zero-project rows are always junk placeholders; non-zero mismatches
+        # indicate permits attached to the wrong company_id.
+        return True
+    return False
+
+
 def is_generic_business_name(business_name: str) -> bool:
     name = (business_name or "").strip()
     if len(name) < 12:
@@ -199,14 +253,22 @@ def _load_pi_company_links(session: Session) -> list[dict[str, Any]]:
 
 
 def _choose_primary_member(members: list[MergeGroupMember]) -> MergeGroupMember:
-    return sorted(members, key=_member_score, reverse=True)[0]
+    eligible = [member for member in members if not is_generic_bucket_company_name(member.name)]
+    pool = eligible or members
+    return sorted(pool, key=_member_score, reverse=True)[0]
 
 
 def _choose_primary_root(members: list[MergeGroupMember], company_rows: dict[int, dict[str, Any]]) -> int:
     scores: Counter[int] = Counter()
     for member in members:
+        if is_generic_bucket_company_name(member.name):
+            continue
         root = int(company_rows[member.company_id]["canonical_root"])
         scores[root] += member.total_projects
+    if not scores:
+        for member in members:
+            root = int(company_rows[member.company_id]["canonical_root"])
+            scores[root] += member.total_projects
     return max(scores, key=lambda root: (scores[root], -root))
 
 
@@ -217,11 +279,20 @@ def build_parsed_identity_merge_plan(session: Session) -> ParsedIdentityMergePla
     key_pi_rows: dict[str, int] = defaultdict(int)
     company_rows: dict[int, dict[str, Any]] = {}
 
+    skipped_ineligible_links = 0
     for row in links:
         company_id = int(row["company_id"])
         business_name = str(row["business_name"])
         norm_key = normalize_vendor_name(business_name)
         if not norm_key:
+            continue
+        company_name = str(row["company_name"])
+        if _is_ineligible_company_link(
+            company_name,
+            norm_key=norm_key,
+            total_projects=int(row["total_projects"]),
+        ):
+            skipped_ineligible_links += 1
             continue
         key_companies[norm_key].add(company_id)
         key_bnames[norm_key].add(business_name)
@@ -294,18 +365,24 @@ def build_parsed_identity_merge_plan(session: Session) -> ParsedIdentityMergePla
                 if int(company_rows[member.company_id]["canonical_root"]) == primary_root
             ]
             primary_member = _choose_primary_member(root_members)
-            merge_groups.append(
-                MergeGroup(
-                    canonical_key=norm_key,
-                    display_name=_clamp_name(rep_name),
-                    confidence=CONFIDENCE_NORMALIZED_KEY,
-                    method=MERGE_METHOD_PARSED_IDENTITY_APPLICANT,
-                    members=members,
-                    primary_company_id=primary_member.company_id,
-                    create_canonical_row=False,
-                    canonical_name_for_insert="",
+            if is_generic_bucket_company_name(primary_member.name) and not is_generic_business_name(
+                rep_name
+            ):
+                tier = MERGE_TIER_PARSED_IDENTITY_EXCLUDED
+                exclusion_reason = "generic_bucket_winner"
+            else:
+                merge_groups.append(
+                    MergeGroup(
+                        canonical_key=norm_key,
+                        display_name=_clamp_name(rep_name),
+                        confidence=CONFIDENCE_NORMALIZED_KEY,
+                        method=MERGE_METHOD_PARSED_IDENTITY_APPLICANT,
+                        members=members,
+                        primary_company_id=primary_member.company_id,
+                        create_canonical_row=False,
+                        canonical_name_for_insert="",
+                    )
                 )
-            )
 
         report = ParsedIdentityMergeGroupReport(
             norm_key=norm_key,
@@ -347,6 +424,7 @@ def build_parsed_identity_merge_plan(session: Session) -> ParsedIdentityMergePla
             "field_name_filter": "applicant",
             "parse_confidence_min": PARSED_IDENTITY_MIN_PARSE_CONFIDENCE,
             "max_roots_auto_merge": PARSED_IDENTITY_MAX_ROOTS_AUTO_MERGE - 1,
+            "skipped_ineligible_company_links": skipped_ineligible_links,
         },
     )
 
