@@ -138,3 +138,44 @@ def test_internal_import_rejected_before_scrape() -> None:
             with pytest.raises(HTTPException) as exc:
                 internal_api.import_csvs(background_tasks, None)
     assert exc.value.status_code == 409
+
+
+def test_internal_import_without_run_id_reuses_active_scrape_run() -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    active_state = coordinator.RunState(run_id="active-run")
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.assert_import_allowed") as assert_allowed:
+            with patch("api.internal.get_run_state", return_value=active_state):
+                with patch(
+                    "api.internal._enqueue_step",
+                    return_value={"status": "started", "run_id": "active-run"},
+                ) as enqueue_step:
+                    payload = internal_api.import_csvs(background_tasks, None)
+
+    assert payload["run_id"] == "active-run"
+    assert_allowed.assert_called_once_with(None)
+    assert enqueue_step.call_args.args[1] == "import-csvs"
+    assert enqueue_step.call_args.args[3] == "active-run"
+
+
+def test_internal_import_sync_uses_active_scrape_run() -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    active_state = coordinator.RunState(run_id="active-run")
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.assert_import_allowed") as assert_allowed:
+            with patch("api.internal.get_run_state", return_value=active_state):
+                with patch(
+                    "api.internal._run_step_sync",
+                    return_value={"status": "success", "run_id": "active-run", "counts": {"tenders": 3}},
+                ) as run_step_sync:
+                    payload = internal_api.import_csvs(background_tasks, None, sync=True)
+
+    assert payload["status"] == "success"
+    assert payload["run_id"] == "active-run"
+    assert_allowed.assert_called_once_with(None)
+    assert run_step_sync.call_args.args[0] == "import-csvs"
+    assert run_step_sync.call_args.args[2] == "active-run"
