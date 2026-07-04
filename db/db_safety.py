@@ -367,6 +367,16 @@ def begin_script_guard(
         return url
 
     if nominal_class == SafetyClass.C:
+        if allow_production:
+            url = _authorize_class_d(
+                script_name=script_name,
+                allow_production=True,
+                operation="Class C registry write",
+                nominal_class=SafetyClass.C,
+                escalated=False,
+            )
+            print("[db_safety] Proceeding at Class C against production...")
+            return url
         url = apply_script_database_url(use_production=False)
         print_database_banner(
             script_name=script_name,

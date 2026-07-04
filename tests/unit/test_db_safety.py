@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import io
 import sys
+from argparse import Namespace
 from unittest.mock import patch
 
 import pytest
 
+from db.classification import SafetyClass
 from db.db_safety import (
     PRODUCTION_CONFIRMATION,
     guard_destructive_db,
+    guard_destructive_db_from_args,
     guard_readonly_db,
     is_production_database_url,
     is_production_host,
@@ -162,3 +165,53 @@ def test_stdin_is_interactive_tty_rejects_stringio_with_mocked_isatty() -> None:
     with patch("sys.stdin", io.StringIO("x")):
         with patch("sys.stdin.isatty", return_value=True):
             assert _stdin_is_interactive_tty() is False
+
+
+def test_class_c_allow_production_routes_to_database_url_production(capsys, tmp_path) -> None:
+    """Class C --apply --allow-production must use DATABASE_URL_PRODUCTION, not local."""
+    local = "postgresql://u:p@localhost:5432/bc_tenders"
+    prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
+    log_path = tmp_path / "destructive_operations.log"
+    args = Namespace(allow_production=True)
+
+    with patch("db.db_safety.DESTRUCTIVE_LOG_PATH", log_path):
+        with patch("db.db_safety.load_app_env"):
+            with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+                with patch("db.db_safety.apply_script_database_url", return_value=prod) as apply_url:
+                    with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
+                        with patch("db.db_safety._input_is_unmocked_builtin", return_value=True):
+                            with patch("builtins.input", return_value=PRODUCTION_CONFIRMATION):
+                                result = guard_destructive_db_from_args(
+                                    args,
+                                    script_name="run_market_registry_load.py",
+                                    operation="market registry load",
+                                    nominal_class=SafetyClass.C,
+                                )
+
+    assert result == prod
+    apply_url.assert_called_once_with(use_production=True)
+    out = capsys.readouterr().out
+    assert "Environment: PRODUCTION" in out
+    assert "Host: acela.proxy.rlwy.net" in out
+    assert "Script: run_market_registry_load.py" in out
+    assert "Proceeding at Class C against production" in out
+
+
+def test_class_c_without_allow_production_stays_on_local_database_url(capsys) -> None:
+    local = "postgresql://u:p@localhost:5432/bc_tenders"
+    args = Namespace(allow_production=False)
+
+    with patch("db.db_safety.load_app_env"):
+        with patch("db.db_safety.apply_script_database_url", return_value=local) as apply_url:
+            result = guard_destructive_db_from_args(
+                args,
+                script_name="run_market_registry_load.py",
+                operation="market registry load",
+                nominal_class=SafetyClass.C,
+            )
+
+    assert result == local
+    apply_url.assert_called_once_with(use_production=False)
+    out = capsys.readouterr().out
+    assert "Environment: LOCAL" in out
+    assert "Host: localhost" in out
