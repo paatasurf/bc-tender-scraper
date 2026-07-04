@@ -35,6 +35,7 @@ MERGE_METHOD_LEGAL_APPLICANT = "legal_applicant"
 MERGE_METHOD_EXACT_APPLICANT = "exact_applicant"
 MERGE_METHOD_CONTRACTOR = "contractor"
 MERGE_METHOD_PARSED_IDENTITY_APPLICANT = "parsed_identity_applicant"
+MERGE_METHOD_MANUAL_BRIDGE_LEDCOR = "manual_bridge_ledcor"
 
 MERGE_TIER_PARSED_IDENTITY_SAFE = "parsed_identity_applicant_safe"
 MERGE_TIER_PARSED_IDENTITY_EXCLUDED = "parsed_identity_excluded"
