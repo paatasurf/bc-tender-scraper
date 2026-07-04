@@ -3,8 +3,20 @@
 **Generated:** 2026-07-04T06:28:37.802525+00:00  
 **Safe merge groups:** 167  
 **Excluded multi-root groups:** 34  
+**Dry-run artifact:** `exports/parsed_identity_merge_report.json`  
+**Implementation commit:** `a2d79cb` (Scenario B code)  
+**Apply verification:** `git_commit_sha` + `dataset_fingerprint` in artifact must match HEAD + live DB at apply time.
 
-Review every safe group below before `--apply`.
+### Before `--apply`
+
+Regenerate the artifact at the commit you intend to apply from (do not commit between report and apply):
+
+```powershell
+python scripts/run_parsed_identity_canonical_merge.py --report --review-md --use-production
+python scripts/run_parsed_identity_canonical_merge.py --apply --allow-production
+```
+
+Review every safe group below before approving apply.
 
 ## 1. LQ Design GROUP Ltd
 
