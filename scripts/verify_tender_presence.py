@@ -7,9 +7,18 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
 import config.env  # noqa: F401
 
 from db.connection import get_session, init_db
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.import_csv import import_all_csvs, _read_csv
 from db.models import ArchTender, CommercialTender, Tender
 from scraper.config import ARCH_TENDERS_CSV, COMMERCIAL_TENDERS_CSV, OUTPUT_CSV
@@ -113,7 +122,7 @@ def _compare_runs(before: dict, after: dict) -> dict:
 
 
 def main() -> int:
-    init_db()
+    guard_readonly_db(_SCRIPT)
     session = get_session()
     report: dict = {"generated_at": datetime.now(timezone.utc).isoformat()}
 

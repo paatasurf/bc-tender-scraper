@@ -3,16 +3,25 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import config.env  # noqa: F401
+from db.db_safety import add_production_safety_args, guard_readonly_db_from_args
+
+_SCRIPT = Path(__file__).name
 
 
 def classify_format(value: str) -> str:
@@ -119,6 +128,11 @@ def analyze_db() -> list[dict]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_production_safety_args(parser)
+    args = parser.parse_args()
+    guard_readonly_db_from_args(args, script_name=_SCRIPT)
+
     report = {
         "csv": [
             analyze_csv(ROOT / "tenders.csv", "closing_date", "tenders.closing_date"),

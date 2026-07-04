@@ -3,21 +3,36 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ENV_LOADED = False
 
 
 def load_app_env() -> None:
-    """Load .env from the project root without overriding Railway-injected variables."""
+    """Load env files without overriding explicit process environment variables.
+
+    Load order:
+      1. Snapshot keys already in ``os.environ`` (Railway / shell / test harness)
+      2. ``.env`` — shared secrets; production URL belongs in DATABASE_URL_PRODUCTION
+      3. ``.env.local`` — overrides ``.env`` for keys not in the startup snapshot
+      4. CWD ``.env`` fallback
+    """
     global _ENV_LOADED
     if _ENV_LOADED:
         return
 
-    # utf-8-sig tolerates the BOM that Windows editors often prepend to .env.
+    preserved_keys = set(os.environ.keys())
+
     load_dotenv(_PROJECT_ROOT / ".env", override=False, encoding="utf-8-sig")
-    # Fallback for processes whose working directory is not the project root.
+
+    local_path = _PROJECT_ROOT / ".env.local"
+    if local_path.is_file():
+        for key, value in dotenv_values(local_path, encoding="utf-8-sig").items():
+            if value is None or key in preserved_keys:
+                continue
+            os.environ[key] = value.strip()
+
     load_dotenv(override=False, encoding="utf-8-sig")
     _ENV_LOADED = True
 

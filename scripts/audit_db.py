@@ -1,7 +1,11 @@
+from pathlib import Path
+
 import os, sys
 sys.path.insert(0, r"C:\Users\DAVIDSURF\Projects\bc-tender-scraper")
 import config.env
 from db.connection import get_session
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from sqlalchemy import text
 
 s = get_session()

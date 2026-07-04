@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from sqlalchemy import text
 
-from db.connection import get_engine, get_session, init_db
+from db.connection import get_session, init_db
+from db.db_safety import add_production_safety_args, guard_destructive_db_from_args
 from scraper.building_permits import scrape_vancouver_permits
+
+_SCRIPT = Path(__file__).name
 
 
 def _stats() -> dict:
@@ -31,6 +42,11 @@ def _stats() -> dict:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_production_safety_args(parser)
+    args = parser.parse_args()
+    guard_destructive_db_from_args(args, script_name=_SCRIPT, operation="vancouver permit backfill")
+
     init_db()
     print("BEFORE", _stats())
     result = scrape_vancouver_permits(days=None, persist=True)

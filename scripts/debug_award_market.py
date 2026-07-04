@@ -1,9 +1,13 @@
 """Debug award market member selection for a company id."""
 from __future__ import annotations
 
+
+from pathlib import Path
 import sys
 
 from db.connection import get_session
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from pipeline.competitive_intel.awards import AwardCountResolver, select_award_market_members
 from pipeline.competitive_intel.cohort import build_market_cohort
 from pipeline.cip_builder import get_cip
@@ -11,6 +15,7 @@ from db.models import Company
 
 
 def main() -> None:
+    guard_readonly_db(_SCRIPT)
     company_id = int(sys.argv[1] if len(sys.argv) > 1 else 6999)
     session = get_session()
     try:

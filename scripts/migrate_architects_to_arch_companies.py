@@ -32,8 +32,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from db.connection import session_scope
+from db.db_safety import add_production_safety_args, guard_destructive_db_from_args, guard_readonly_db
 from db.models import ArchCompany, Company
 from pipeline.company_matching import normalize_vendor_name
+
+_SCRIPT = Path(__file__).name
 
 MIGRATION_SOURCE_TAG = "companies_migration"
 MIN_TOTAL_PROJECTS = 3
@@ -156,6 +159,7 @@ def migrate(*, commit: bool) -> dict[str, int | list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_production_safety_args(parser)
     parser.add_argument(
         "--commit",
         action="store_true",
@@ -163,6 +167,11 @@ def main() -> int:
     )
     args = parser.parse_args()
     dry_run = not args.commit
+
+    if dry_run:
+        guard_readonly_db(_SCRIPT)
+    else:
+        guard_destructive_db_from_args(args, script_name=_SCRIPT, operation="architect migration")
 
     print(f"Mode: {'DRY-RUN (no writes)' if dry_run else 'COMMIT (inserting rows)'}")
     print(

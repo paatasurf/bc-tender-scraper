@@ -1,6 +1,8 @@
 """Compare construction opportunity tender counts (local DB)."""
 from __future__ import annotations
 
+
+from pathlib import Path
 import os
 import sys
 
@@ -10,6 +12,8 @@ from dotenv import load_dotenv
 from sqlalchemy import select
 
 from db.connection import get_session
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.models import Company
 from pipeline.opportunity_discovery import discover_opportunities
 
@@ -17,6 +21,7 @@ COMPANY_IDS = [1735, 1517, 8756, 292, 5, 102, 84, 213, 268, 1921, 670, 420]
 
 
 def main() -> None:
+    guard_readonly_db(_SCRIPT)
     load_dotenv()
     session = get_session()
     try:

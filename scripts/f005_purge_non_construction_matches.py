@@ -32,12 +32,17 @@ import config.env  # noqa: F401  # load .env before db/pipeline imports
 from sqlalchemy import select
 
 from db.connection import session_scope
+from db.classification import SafetyClass
+from db.db_safety import add_production_safety_args, guard_destructive_db_from_args, guard_readonly_db
 from db.models import CommercialTender, Tender, TenderMatch
 from pipeline.opportunity_discovery import _is_non_construction_procurement
+
+_SCRIPT = Path(__file__).name
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_production_safety_args(parser)
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -45,6 +50,16 @@ def main() -> int:
     )
     args = parser.parse_args()
     dry_run = not args.apply
+
+    if dry_run:
+        guard_readonly_db(_SCRIPT)
+    else:
+        guard_destructive_db_from_args(
+            args,
+            script_name=_SCRIPT,
+            operation="purge tender_matches",
+            nominal_class=SafetyClass.B,
+        )
 
     print(f"Mode: {'DRY-RUN (no writes)' if dry_run else 'APPLY (deleting rows)'}")
 

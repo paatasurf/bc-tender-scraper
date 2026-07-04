@@ -1,7 +1,18 @@
 """Diagnostic: geographic overlap for company 1921 vs 670."""
 from __future__ import annotations
 
+
+from pathlib import Path
+
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from db.connection import get_session
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.models import Company
 from pipeline.cip_builder import get_cip
 from pipeline.competitive_intel.overlap import (
@@ -18,6 +29,7 @@ PEER_ID = 670
 
 
 def main() -> None:
+    guard_readonly_db(_SCRIPT)
     session = get_session()
     try:
         subject = session.get(Company, SUBJECT_ID)

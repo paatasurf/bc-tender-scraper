@@ -1,4 +1,6 @@
 .env
+.env.local
+logs/
 .pipeline.lock
 pipeline.log
 indeed_cookies.txt

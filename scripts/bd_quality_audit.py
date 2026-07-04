@@ -14,6 +14,8 @@ if str(ROOT) not in sys.path:
 
 import config.env  # noqa: F401
 from db.connection import get_session, init_db
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from pipeline.bd_recommendations import recommend_bd_intelligence
 
 VALIDATION_COHORT: list[tuple[int, str, str]] = [
@@ -304,6 +306,7 @@ def build_detail_examples(after_rows: list[dict], *, limit: int = 10) -> list[di
 
 
 def main() -> int:
+    guard_readonly_db(_SCRIPT)
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline", default="bd-quality-audit.json")
     parser.add_argument("--before", default="bd-quality-audit-v3.json", help="Pre-tuning run (Iteration B)")
@@ -322,7 +325,6 @@ def main() -> int:
     if args.skip_run and before_rows:
         after_rows = json.loads((ROOT / args.output).read_text(encoding="utf-8"))
     else:
-        init_db()
         session = get_session()
         try:
             print("Running Iteration C audit (refresh profiles)...", flush=True)

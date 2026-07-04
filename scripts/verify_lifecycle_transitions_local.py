@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+
+from pathlib import Path
 import json
 import os
 import sys
@@ -11,6 +13,8 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, func, select, text
 
 from db.connection import init_db
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.lifecycle_constants import (
     LIFECYCLE_STATUS_CLOSED,
     LIFECYCLE_STATUS_CLOSING_SOON,
@@ -40,8 +44,8 @@ def _status_counts(session, model) -> dict[str, int]:
 
 
 def main() -> int:
+    guard_readonly_db(_SCRIPT)
     _require_local_database_url()
-    init_db(raise_on_failure=True)
 
     from db.connection import get_session
 

@@ -280,6 +280,11 @@ def get_engine() -> Engine:
     )
 
 
+def clear_engine_cache() -> None:
+    """Clear cached engine after CLI scripts change DATABASE_URL."""
+    get_engine.cache_clear()
+
+
 def get_session_factory() -> sessionmaker[Session]:
     return sessionmaker(bind=get_engine(), autoflush=False, autocommit=False)
 
@@ -1012,6 +1017,10 @@ def _run_migrations(engine: Engine) -> None:
 def init_db(*, raise_on_failure: bool = False) -> bool:
     """Initialize schema. Retries through Postgres recovery; app may start degraded."""
     global _last_init_db_error
+
+    from db.db_safety import require_runtime_class_d
+
+    require_runtime_class_d("init_db()")
 
     import db.models  # noqa: F401  # register all ORM models before create_all
 

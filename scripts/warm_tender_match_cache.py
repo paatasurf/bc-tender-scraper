@@ -16,7 +16,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import config.env  # noqa: F401
+from db.classification import SafetyClass
 from db.connection import get_session
+from db.db_safety import add_production_safety_args, guard_destructive_db_from_args
 from db.models import ArchCompany, Company
 from pipeline.ai_matching import (
     HYBRID_AI_CANDIDATE_LIMIT,
@@ -31,8 +33,12 @@ from pipeline.opportunity_discovery import (
 )
 
 
+_SCRIPT = Path(__file__).name
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Warm hybrid tender match cache for one company.")
+    add_production_safety_args(parser)
     parser.add_argument("--company-id", type=int, required=True)
     parser.add_argument("--kind", choices=["construction", "architecture"], required=True)
     parser.add_argument(
@@ -48,6 +54,13 @@ def main() -> int:
         help=f"Rule top-N pairs to send to Haiku (default: {HYBRID_AI_CANDIDATE_LIMIT})",
     )
     args = parser.parse_args()
+
+    guard_destructive_db_from_args(
+        args,
+        script_name=_SCRIPT,
+        operation="tender match cache warm",
+        nominal_class=SafetyClass.B,
+    )
 
     session = get_session()
     try:

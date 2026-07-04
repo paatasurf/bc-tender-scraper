@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+
+from pathlib import Path
 import json
 import os
 import sys
@@ -11,6 +13,8 @@ from datetime import datetime, timezone
 import config.env  # noqa: F401
 
 from db.connection import get_session, init_db
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.models import CommercialTender, Tender
 from pipeline.opportunity_discovery import _load_tender_candidates, _scan_construction_rule_tenders_from_rows
 from pipeline.opportunity_discovery import CompanySignals
@@ -27,11 +31,10 @@ def _require_local_database_url() -> None:
 
 
 def main() -> int:
+    guard_readonly_db(_SCRIPT)
     _require_local_database_url()
     company_id = int(sys.argv[1]) if len(sys.argv) > 1 else 8638
     max_candidates = 400
-
-    init_db(raise_on_failure=True)
     session = get_session()
     try:
         from db.models import Company

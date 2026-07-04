@@ -3,19 +3,30 @@
 
 from __future__ import annotations
 
+
+from pathlib import Path
+
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import json
 from datetime import datetime, timezone
 
 import config.env  # noqa: F401
 
 from db.connection import get_session, init_db
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.models import ArchTender, CommercialTender, Tender
 from db.tender_lifecycle_ddl import TENDER_LIFECYCLE_TABLES
 from sqlalchemy import func, inspect, select, text
 
 
 def main() -> int:
-    init_db(raise_on_failure=True)
+    guard_readonly_db(_SCRIPT)
     session = get_session()
     report: dict = {"generated_at": datetime.now(timezone.utc).isoformat(), "tables": {}}
 

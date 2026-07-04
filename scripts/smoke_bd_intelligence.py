@@ -13,6 +13,8 @@ if str(ROOT) not in sys.path:
 
 import config.env  # noqa: F401
 from db.connection import get_session, init_db
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from pipeline.bd_recommendations import recommend_bd_intelligence
 
 
@@ -43,13 +45,12 @@ def _summarize(label: str, result: dict) -> None:
 
 
 def main() -> int:
+    guard_readonly_db(_SCRIPT)
     parser = argparse.ArgumentParser(description="Smoke test BD intelligence")
     parser.add_argument("--construction-id", type=int, default=1735, help="GHL Consultants")
     parser.add_argument("--architecture-id", type=int, default=126, help="DIALOG")
     parser.add_argument("--json", action="store_true", help="Dump full JSON for construction company")
     args = parser.parse_args()
-
-    init_db()
     session = get_session()
     try:
         construction = recommend_bd_intelligence(

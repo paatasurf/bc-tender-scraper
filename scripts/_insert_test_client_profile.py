@@ -1,14 +1,30 @@
 """One-off: insert/update test client profile and verify."""
+
 from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from sqlalchemy import text
 
 from db.connection import get_session
+from db.db_safety import add_production_safety_args, guard_destructive_db_from_args
 
+_SCRIPT = Path(__file__).name
 EMAIL = "paatasurf@gmail.com"
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_production_safety_args(parser)
+    args = parser.parse_args()
+    guard_destructive_db_from_args(args, script_name=_SCRIPT, operation="client profile upsert")
+
     session = get_session()
     try:
         existing = session.execute(

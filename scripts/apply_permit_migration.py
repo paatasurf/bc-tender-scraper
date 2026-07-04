@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from sqlalchemy import text
 
 from db.connection import get_engine
+from db.db_safety import add_production_safety_args, guard_destructive_db_from_args
+
+_SCRIPT = Path(__file__).name
 
 STATEMENTS = (
     "ALTER TABLE permits ADD COLUMN IF NOT EXISTS application_date VARCHAR(20) DEFAULT ''",
@@ -18,6 +29,11 @@ STATEMENTS = (
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_production_safety_args(parser)
+    args = parser.parse_args()
+    guard_destructive_db_from_args(args, script_name=_SCRIPT, operation="permit migration")
+
     engine = get_engine()
     with engine.begin() as conn:
         for stmt in STATEMENTS:

@@ -1,11 +1,22 @@
 """Simulate first resolve-permits run (read-only) using resolver logic."""
 from __future__ import annotations
 
+
+from pathlib import Path
+
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from db.connection import get_session
+from db.db_safety import guard_readonly_db
+_SCRIPT = Path(__file__).name
 from db.models import Permit
 from pipeline.permit_lifecycle_resolver import (
     PermitLifecycleSnapshot,
@@ -16,6 +27,7 @@ REF = datetime(2026, 7, 2, tzinfo=timezone.utc)
 
 
 def main() -> None:
+    guard_readonly_db(_SCRIPT)
     totals: dict[str, int] = {}
     by_source: dict[str, dict[str, int]] = {}
 
