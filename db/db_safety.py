@@ -13,6 +13,7 @@ the EFFECTIVE class. init_db() / DDL always escalates to Class D mid-run.
 from __future__ import annotations
 
 import getpass
+import io
 import os
 import sys
 import threading
@@ -178,11 +179,53 @@ def _log_destructive_operation(*, script_name: str, url: str, user: str) -> None
         handle.write(line)
 
 
+def _stdin_is_interactive_tty() -> bool:
+    """True only when stdin is the process interactive TTY (not pipe/mock/redirect)."""
+    if sys.stdin is not sys.__stdin__:
+        return False
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+        return False
+    if not os.isatty(fd):
+        return False
+    # Block unittest.mock patches on sys.stdin.isatty() when fd is not a TTY.
+    if hasattr(sys.stdin, "isatty") and not sys.stdin.isatty():
+        return False
+    return True
+
+
+def _input_is_unmocked_builtin() -> bool:
+    """True when builtins.input is the real interpreter builtin (not unittest.mock)."""
+    import builtins
+
+    fn = builtins.input
+    mod = getattr(type(fn), "__module__", "") or getattr(fn, "__module__", "")
+    if "mock" in mod.lower():
+        return False
+    return getattr(fn, "__name__", "") == "input" and getattr(fn, "__module__", "") in (
+        "builtins",
+        "_io",
+    )
+
+
 def _require_interactive_production_confirmation() -> bool:
-    if not sys.stdin.isatty():
+    if not _stdin_is_interactive_tty():
         print(
             "[db_safety] Refusing production write: interactive confirmation "
-            "required but stdin is not a TTY.",
+            "requires a real terminal (TTY). Piped, redirected, or mocked stdin "
+            "is not accepted.\n"
+            "  Run --apply in your own terminal and type the confirmation phrase "
+            "manually. Agents and CI cannot satisfy this gate.",
+            file=sys.stderr,
+        )
+        return False
+    if not _input_is_unmocked_builtin():
+        print(
+            "[db_safety] Refusing production write: mocked or patched input() "
+            "is not accepted for Class C/D production confirmation.\n"
+            "  Run --apply in your own terminal and type the confirmation phrase "
+            "manually.",
             file=sys.stderr,
         )
         return False

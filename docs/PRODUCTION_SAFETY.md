@@ -121,7 +121,30 @@ Blocked on production unless **both**:
 Same production gate as Class B. Class C `--apply` additionally requires a
 fresh dry-run artifact with matching `git_commit_sha` and `dataset_fingerprint`.
 
-Non-interactive stdin (CI, piped input): **always refused** for production writes.
+Non-interactive stdin (CI, piped input, agent shells, mocked `isatty` or
+`input()`): **always refused** for Class C/D production writes. The guard
+checks the underlying file descriptor (`os.isatty`) and rejects patched
+`builtins.input` — simulating the confirmation phrase is not sufficient.
+
+### Agent-initiated production applies (required pattern)
+
+Cursor agents, CI jobs, and other non-interactive runners **must not** execute
+`--apply` or `init_db()` against production. They may:
+
+1. Commit code and generate dry-run artifacts (`--dry-run --use-production`)
+2. Present the planned apply command and dry-run summary to the human
+3. Stop and wait for the human to run `--apply --allow-production` in their
+   **own terminal**, typing exactly:
+   `I UNDERSTAND THIS WILL MODIFY PRODUCTION`
+
+Example (human-run only):
+
+```powershell
+cd C:\Users\DAVIDSURF\Projects\bc-tender-scraper
+python scripts/run_odbus_import.py exports/odbus_cache/ODBus_v1.csv `
+  --filter primary_naics23 --apply --allow-production
+# Type the confirmation phrase when prompted — do not pipe or mock it.
+```
 
 Authorized production writes append to `logs/destructive_operations.log`:
 

@@ -80,19 +80,22 @@ def test_readonly_never_blocks_production(capsys) -> None:
     assert "Environment: PRODUCTION" in capsys.readouterr().out
 
 
-def test_allow_production_requires_confirmation_phrase() -> None:
+def test_allow_production_requires_confirmation_phrase(capsys) -> None:
     prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     local = "postgresql://u:p@localhost:5432/bc_tenders"
     with patch("db.db_safety.load_app_env"):
         with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
             with patch("db.db_safety.apply_script_database_url", return_value=prod):
-                with patch("sys.stdin", io.StringIO("wrong phrase\n")):
-                    with patch("sys.stdin.isatty", return_value=True):
-                        with pytest.raises(SystemExit):
-                            guard_destructive_db(
-                                script_name="merge.py",
-                                allow_production=True,
-                            )
+                with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
+                    with patch("db.db_safety._input_is_unmocked_builtin", return_value=True):
+                        with patch("builtins.input", return_value="wrong phrase"):
+                            with pytest.raises(SystemExit):
+                                guard_destructive_db(
+                                    script_name="merge.py",
+                                    allow_production=True,
+                                )
+    err = capsys.readouterr().err
+    assert "Confirmation phrase did not match" in err
 
 
 def test_allow_production_accepts_confirmation(capsys, tmp_path) -> None:
@@ -103,13 +106,59 @@ def test_allow_production_accepts_confirmation(capsys, tmp_path) -> None:
         with patch("db.db_safety.load_app_env"):
             with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
                 with patch("db.db_safety.apply_script_database_url", return_value=prod):
-                    stdin = io.StringIO(PRODUCTION_CONFIRMATION + "\n")
-                    with patch("sys.stdin", stdin):
-                        with patch("sys.stdin.isatty", return_value=True):
-                            result = guard_destructive_db(
-                                script_name="merge.py",
-                                allow_production=True,
-                            )
+                    with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
+                        with patch("db.db_safety._input_is_unmocked_builtin", return_value=True):
+                            with patch("builtins.input", return_value=PRODUCTION_CONFIRMATION):
+                                result = guard_destructive_db(
+                                    script_name="merge.py",
+                                    allow_production=True,
+                                )
     assert result == prod
     assert log_path.read_text(encoding="utf-8").startswith("")
     assert "merge.py" in log_path.read_text(encoding="utf-8")
+
+
+def test_production_write_refuses_mocked_isatty_with_piped_input(capsys) -> None:
+    """Agent-style bypass: mock isatty + StringIO with correct phrase must fail."""
+    prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
+    local = "postgresql://u:p@localhost:5432/bc_tenders"
+    with patch("db.db_safety.load_app_env"):
+        with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+            with patch("db.db_safety.apply_script_database_url", return_value=prod):
+                with patch("sys.stdin", io.StringIO(PRODUCTION_CONFIRMATION + "\n")):
+                    with patch("sys.stdin.isatty", return_value=True):
+                        with pytest.raises(SystemExit) as exc:
+                            guard_destructive_db(
+                                script_name="merge.py",
+                                allow_production=True,
+                            )
+                        assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "requires a real terminal (TTY)" in err
+
+
+def test_production_write_refuses_mocked_input_function(capsys) -> None:
+    """unittest.mock.patch on builtins.input must fail even if TTY checks pass."""
+    prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
+    local = "postgresql://u:p@localhost:5432/bc_tenders"
+    with patch("db.db_safety.load_app_env"):
+        with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+            with patch("db.db_safety.apply_script_database_url", return_value=prod):
+                with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
+                    with patch("builtins.input", return_value=PRODUCTION_CONFIRMATION):
+                        with pytest.raises(SystemExit) as exc:
+                            guard_destructive_db(
+                                script_name="merge.py",
+                                allow_production=True,
+                            )
+                        assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "mocked or patched input()" in err
+
+
+def test_stdin_is_interactive_tty_rejects_stringio_with_mocked_isatty() -> None:
+    from db.db_safety import _stdin_is_interactive_tty
+
+    with patch("sys.stdin", io.StringIO("x")):
+        with patch("sys.stdin.isatty", return_value=True):
+            assert _stdin_is_interactive_tty() is False
