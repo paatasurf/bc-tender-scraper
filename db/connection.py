@@ -978,6 +978,14 @@ def _ensure_registry_verification_schema(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_market_registry_schema(engine) -> None:
+    from db.market_registry_ddl import market_registry_migration_statements
+
+    with engine.begin() as conn:
+        for statement in market_registry_migration_statements():
+            conn.execute(text(statement))
+
+
 def _ensure_construction_tier_schema(engine) -> None:
     from db.construction_tier_ddl import construction_tier_migration_statements
 
@@ -1010,6 +1018,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_google_enrichment_schema(engine)
     _ensure_company_canonical_merge_schema(engine)
     _ensure_registry_verification_schema(engine)
+    _ensure_market_registry_schema(engine)
     _ensure_construction_tier_schema(engine)
     _widen_commercial_text_columns(engine)
 

@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from db.company_canonical_constants import ENTITY_ROLE_CANONICAL
+from db.market_registry_constants import OBSERVATION_STATUS_ACTIVE
 from db.models import Company, CompanyRegistryLink, OdbusReference
 from db.registry_constants import (
     MATCH_TIER_CONFIDENCE,
@@ -131,7 +132,9 @@ class OdbusMatchIndex:
 
 
 def build_odbus_match_index(session: Session) -> OdbusMatchIndex:
-    references = session.scalars(select(OdbusReference)).all()
+    references = session.scalars(
+        select(OdbusReference).where(OdbusReference.observation_status == OBSERVATION_STATUS_ACTIVE)
+    ).all()
     return OdbusMatchIndex(list(references))
 
 

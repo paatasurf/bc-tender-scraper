@@ -21,8 +21,20 @@ from pipeline.registry_verification.payload import registry_link_to_verification
 class OdbusProvider:
     source = REGISTRY_SOURCE_ODBUS
 
-    def import_reference_data(self, session: Session, *, path: str) -> dict[str, Any]:
-        return import_odbus_csv(session, path)
+    def import_reference_data(
+        self,
+        session: Session,
+        *,
+        path: str,
+        filter_mode: str | None = None,
+    ) -> dict[str, Any]:
+        from db.market_registry_constants import ODBUS_FILTER_PRIMARY_NAICS23
+
+        return import_odbus_csv(
+            session,
+            path,
+            filter_mode=filter_mode or ODBUS_FILTER_PRIMARY_NAICS23,
+        )
 
     def match_company(
         self,

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -324,7 +324,42 @@ class OdbusReference(Base):
     provider: Mapped[str] = mapped_column(String(200), default="")
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_observed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    observation_status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ingest_batch_id: Mapped[str] = mapped_column(String(36), default="legacy")
+
+
+class MarketRegistry(Base):
+    """Phase A staging observations — not canonical companies."""
+
+    __tablename__ = "market_registry"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_record_id: Mapped[str] = mapped_column(Text, nullable=False)
+    feed_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    promotion_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_confidence: Mapped[str] = mapped_column(String(1), nullable=False)
+    original_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(300), default="")
+    name_type: Mapped[str] = mapped_column(String(20), default="unknown")
+    city: Mapped[str] = mapped_column(String(100), default="")
+    normalized_city: Mapped[str] = mapped_column(String(100), default="")
+    province: Mapped[str] = mapped_column(String(10), default="BC")
+    business_number: Mapped[str] = mapped_column(String(30), default="")
+    licence_identifier: Mapped[str] = mapped_column(String(100), default="")
+    website: Mapped[str] = mapped_column(String(500), default="")
+    registry_identifiers: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    source_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    tenderscope_company_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("companies.id"), nullable=True)
+    odbus_idx: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seed_id: Mapped[str] = mapped_column(String(20), default="")
+    ingest_batch_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_observed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    observation_status: Mapped[str] = mapped_column(String(20), default="active")
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class OrgbookReference(Base):

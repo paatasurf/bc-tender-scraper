@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from db.company_canonical_constants import ENTITY_ROLE_CANONICAL
+from db.market_registry_constants import ODBUS_FILTER_PRIMARY_NAICS23
 from db.models import Company, CompanyRegistryLink, OdbusReference, OrgbookReference
 from db.registry_constants import (
     MATCH_TIER_T1,
@@ -285,7 +286,7 @@ def test_import_and_match_integration(odb_csv_path):
     session = get_session()
     suffix = uuid.uuid4().hex[:8]
     try:
-        import_odbus_csv(session, odb_csv_path)
+        import_odbus_csv(session, odb_csv_path, filter_mode=ODBUS_FILTER_PRIMARY_NAICS23)
         company = Company(
             name=f"ODB Test Canonical {suffix}",
             display_name="Pontem Group",
