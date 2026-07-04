@@ -263,9 +263,9 @@ def test_t4_only_when_review_enabled():
 
 @pytest.fixture(scope="module")
 def odb_csv_path(tmp_path_factory) -> Path:
-    database_url = __import__("os").environ.get("DATABASE_URL")
-    if not database_url:
-        pytest.skip("DATABASE_URL not configured")
+    from tests.db_test_safety import require_local_test_database
+
+    require_local_test_database()
     path = tmp_path_factory.mktemp("odbus") / "sample.csv"
     path.write_text(
         "idx,business_name,alt_business_name,city,prov_terr,status,derived_NAICS,source_NAICS_primary,licence_number,business_id_no,provider,latitude,longitude\n"
@@ -281,10 +281,17 @@ def test_import_and_match_integration(odb_csv_path):
     from db.connection import get_session, init_db
     from pipeline.registry_verification.odbus_import import import_odbus_csv
     from pipeline.registry_verification.hub import batch_match
+    from tests.db_test_safety import (
+        require_local_test_database,
+        teardown_odbus_test_fixture,
+        teardown_test_company,
+    )
 
+    require_local_test_database()
     init_db()
     session = get_session()
     suffix = uuid.uuid4().hex[:8]
+    company_id: int | None = None
     try:
         import_odbus_csv(session, odb_csv_path, filter_mode=ODBUS_FILTER_PRIMARY_NAICS23)
         company = Company(
@@ -295,9 +302,13 @@ def test_import_and_match_integration(odb_csv_path):
         )
         session.add(company)
         session.commit()
+        company_id = company.id
 
         results = batch_match(session, sources=[REGISTRY_SOURCE_ODBUS], company_ids=[company.id])
         assert results["providers"][REGISTRY_SOURCE_ODBUS]["matched"] == 1
         assert results["providers"][REGISTRY_SOURCE_ODBUS]["by_tier"]["T1"] == 1
     finally:
+        if company_id is not None:
+            teardown_test_company(session, company_id)
+        teardown_odbus_test_fixture(session)
         session.close()

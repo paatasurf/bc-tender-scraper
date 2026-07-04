@@ -53,14 +53,10 @@ def test_score_history_to_dict():
 
 @pytest.fixture(scope="module")
 def db_session():
-    import os
-    import uuid
-
-    if not os.environ.get("DATABASE_URL"):
-        pytest.skip("DATABASE_URL not configured")
-
     from db.connection import get_session, init_db
+    from tests.db_test_safety import require_local_test_database
 
+    require_local_test_database()
     init_db()
     session = get_session()
     yield session
@@ -70,6 +66,8 @@ def db_session():
 def test_record_and_fetch_score_history(db_session):
     import uuid
 
+    from tests.db_test_safety import teardown_test_company
+
     suffix = uuid.uuid4().hex[:8]
     company = Company(
         name=f"Score History Test {suffix}",
@@ -78,18 +76,21 @@ def test_record_and_fetch_score_history(db_session):
     )
     db_session.add(company)
     db_session.commit()
+    company_id = company.id
+    try:
+        calculated_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+        record_score_snapshot(
+            db_session,
+            company_id=company.id,
+            construction_score=80,
+            company_tier="tier_a",
+            calculated_at=calculated_at,
+            commit=True,
+        )
 
-    calculated_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
-    record_score_snapshot(
-        db_session,
-        company_id=company.id,
-        construction_score=80,
-        company_tier="tier_a",
-        calculated_at=calculated_at,
-        commit=True,
-    )
-
-    history = get_score_history(db_session, company.id, limit=5)
-    assert len(history) >= 1
-    assert history[0].construction_score == 80
-    assert history[0].company_tier == "tier_a"
+        history = get_score_history(db_session, company.id, limit=5)
+        assert len(history) >= 1
+        assert history[0].construction_score == 80
+        assert history[0].company_tier == "tier_a"
+    finally:
+        teardown_test_company(db_session, company_id)

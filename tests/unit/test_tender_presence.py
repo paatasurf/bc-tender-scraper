@@ -29,9 +29,9 @@ def test_stamp_presence_for_insert_sets_all_three_timestamps():
 
 @pytest.fixture(scope="module")
 def db_session() -> Session:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        pytest.skip("DATABASE_URL not configured")
+    from tests.db_test_safety import require_local_test_database
+
+    database_url = require_local_test_database()
     init_db()
     engine = create_engine(database_url)
     factory = sessionmaker(bind=engine)

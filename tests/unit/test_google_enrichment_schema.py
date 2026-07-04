@@ -57,11 +57,10 @@ def test_log_and_review_models_map_to_tables():
 
 @pytest.fixture(scope="module")
 def migrated_engine():
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        pytest.skip("DATABASE_URL not configured")
     from db.connection import init_db
+    from tests.db_test_safety import require_local_test_database
 
+    database_url = require_local_test_database()
     init_db()
     return create_engine(database_url)
 
