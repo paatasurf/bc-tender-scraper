@@ -38,6 +38,7 @@ from pipeline.capability_profile import (
     _parse_cities,
     _profile_completeness,
 )
+from pipeline.registry_provenance import merge_registry_provenance_into_profile
 from pipeline.cip_schema import CIP_VERSION, CompanyIntelligenceProfile, GeoConcentration, ProjectCluster, ValueRange
 from pipeline.fit.profile_confidence import bootstrap_from_signals
 from pipeline.company_matching import normalize_vendor_name
@@ -47,9 +48,33 @@ from pipeline.taxonomy import SOURCE_TO_SEGMENT, TRADE_PATTERNS, tag_company
 Kind = Literal["construction", "architecture"]
 
 
-def _load_company_permits(session: Session, normalized_name: str, limit: int = 500) -> list[Permit]:
+def _load_company_permits(
+    session: Session,
+    normalized_name: str,
+    *,
+    company_id: int | None = None,
+    limit: int = 500,
+) -> list[Permit]:
+    """Load permits for CIP sector inference.
+
+    Prefer ``permits.company_id`` (indexed) when linked; fall back to normalized
+    applicant name scan for legacy rows without company_id.
+    """
+    if company_id is not None:
+        by_id = list(
+            session.scalars(
+                select(Permit)
+                .where(Permit.company_id == company_id)
+                .order_by(Permit.id.desc())
+                .limit(limit)
+            ).all()
+        )
+        if by_id:
+            return by_id
+
     if not normalized_name:
         return []
+
     results: list[Permit] = []
     for permit in session.scalars(
         select(Permit).where(Permit.applicant != "").order_by(Permit.id.desc()).limit(limit * 4)
@@ -201,7 +226,7 @@ def build_cip(
         if company is None:
             raise ValueError(f"Company {company_id} not found")
         normalized = normalize_vendor_name(company.name) or (company.canonical_vendor_name or "")
-        permits = _load_company_permits(session, normalized)
+        permits = _load_company_permits(session, normalized, company_id=company_id)
         permit_texts = [
             f"{p.permit_type} {p.description} {p.address}" for p in permits
         ]
@@ -401,7 +426,10 @@ def persist_cip(session: Session, cip: CompanyIntelligenceProfile) -> None:
             return
         row.primary_trade = cip.primary_trade
         row.trade_tags = [cip.primary_trade, *cip.secondary_trades[:4]]
-        row.capability_profile_json = legacy
+        row.capability_profile_json = merge_registry_provenance_into_profile(
+            legacy,
+            existing_capability_profile_json=row.capability_profile_json if isinstance(row.capability_profile_json, dict) else None,
+        )
         row.capability_profile_at = now
         row.cip_json = payload
         row.cip_at = now
@@ -418,7 +446,10 @@ def persist_cip(session: Session, cip: CompanyIntelligenceProfile) -> None:
             return
         row.primary_trade = cip.primary_trade
         row.trade_tags = [cip.primary_trade, *cip.secondary_trades[:4]]
-        row.capability_profile_json = legacy
+        row.capability_profile_json = merge_registry_provenance_into_profile(
+            legacy,
+            existing_capability_profile_json=row.capability_profile_json if isinstance(row.capability_profile_json, dict) else None,
+        )
         row.capability_profile_at = now
         row.cip_json = payload
         row.cip_at = now

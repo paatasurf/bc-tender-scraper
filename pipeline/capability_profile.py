@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from db.models import ArchCompany, Company, ContractAward, Permit
 from pipeline.company_matching import normalize_vendor_name
-from pipeline.taxonomy import SOURCE_TO_SEGMENT, tag_company
+from pipeline.registry_provenance import merge_registry_provenance_into_profile
+from pipeline.taxonomy import SOURCE_TO_SEGMENT
 
 Kind = Literal["construction", "architecture"]
 CCP_VERSION = 1
@@ -229,7 +230,10 @@ def persist_capability_profile(session: Session, profile: CapabilityProfile) -> 
             return
         row.primary_trade = profile.primary_trade
         row.trade_tags = profile.trade_tags
-        row.capability_profile_json = payload
+        row.capability_profile_json = merge_registry_provenance_into_profile(
+            payload,
+            existing_capability_profile_json=row.capability_profile_json if isinstance(row.capability_profile_json, dict) else None,
+        )
         row.capability_profile_at = now
     else:
         row = session.get(Company, profile.company_id)
@@ -237,7 +241,10 @@ def persist_capability_profile(session: Session, profile: CapabilityProfile) -> 
             return
         row.primary_trade = profile.primary_trade
         row.trade_tags = profile.trade_tags
-        row.capability_profile_json = payload
+        row.capability_profile_json = merge_registry_provenance_into_profile(
+            payload,
+            existing_capability_profile_json=row.capability_profile_json if isinstance(row.capability_profile_json, dict) else None,
+        )
         row.capability_profile_at = now
     session.commit()
 

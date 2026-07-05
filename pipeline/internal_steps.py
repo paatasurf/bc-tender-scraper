@@ -132,6 +132,26 @@ def run_construction_tiers_step(*, company_ids: list[int] | None = None) -> dict
         session.close()
 
 
+def run_cip_backfill_step(
+    *,
+    dry_run: bool = True,
+    sample_size: int | None = None,
+    company_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    from pipeline.cip_backfill import backfill_company_cips
+
+    session = get_session()
+    try:
+        return backfill_company_cips(
+            session,
+            dry_run=dry_run,
+            sample_size=sample_size,
+            company_ids=company_ids,
+        )
+    finally:
+        session.close()
+
+
 def ensure_run_started(run_id: str) -> None:
     state = get_run_state()
     if state is None or state.run_id != run_id:
