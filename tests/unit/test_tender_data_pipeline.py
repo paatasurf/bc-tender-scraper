@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, sentinel
 
 import pytest
 
@@ -138,3 +138,49 @@ def test_internal_import_rejected_before_scrape() -> None:
             with pytest.raises(HTTPException) as exc:
                 internal_api.import_csvs(background_tasks, None)
     assert exc.value.status_code == 409
+
+
+def test_internal_import_without_body_uses_active_scrape_run(coordinator_state: Path) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-import-run")
+    coordinator.begin_tender_scrape("active-import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("active-import-run", step)
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.make_gated_import_worker", return_value=sentinel.worker) as make_worker:
+            with patch("api.internal._enqueue_step", return_value={"status": "started"}) as enqueue_step:
+                response = internal_api.import_csvs(background_tasks, None)
+
+    assert response == {"status": "started"}
+    make_worker.assert_called_once_with("active-import-run")
+    enqueue_step.assert_called_once_with(
+        background_tasks,
+        "import-csvs",
+        sentinel.worker,
+        "active-import-run",
+    )
+
+
+def test_internal_import_sync_without_body_uses_active_scrape_run(coordinator_state: Path) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-sync-import-run")
+    coordinator.begin_tender_scrape("active-sync-import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("active-sync-import-run", step)
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.make_gated_import_worker", return_value=sentinel.worker) as make_worker:
+            with patch("api.internal._run_step_sync", return_value={"status": "success"}) as run_step_sync:
+                response = internal_api.import_csvs(MagicMock(), None, sync=True)
+
+    assert response == {"status": "success"}
+    make_worker.assert_called_once_with("active-sync-import-run")
+    run_step_sync.assert_called_once_with(
+        "import-csvs",
+        sentinel.worker,
+        "active-sync-import-run",
+    )
