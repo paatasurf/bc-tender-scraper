@@ -2,7 +2,69 @@
 
 from __future__ import annotations
 
-from db.permit_import import _clamp_permit_row, _dedupe_permit_rows
+import os
+from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.orm import Session, sessionmaker
+
+from db.models import Permit
+from db.permit_import import (
+    _clamp_permit_row,
+    _dedupe_permit_rows,
+    _promote_blank_permit_if_exists,
+    upsert_city_permits,
+)
+
+
+def _require_local_database_url() -> str:
+    database_url = os.getenv("DATABASE_URL", "")
+    if not database_url:
+        pytest.skip("DATABASE_URL not configured")
+    lowered = database_url.lower()
+    if any(token in lowered for token in ("railway", "rlwy.net", "production")):
+        pytest.skip("Refusing permit import tests against production DATABASE_URL")
+    return database_url
+
+
+@pytest.fixture()
+def local_db_session() -> Session:
+    import config.env  # noqa: F401
+    from db.connection import init_db
+
+    database_url = _require_local_database_url()
+    engine = create_engine(database_url, connect_args={"connect_timeout": 3})
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        pytest.skip("Local Postgres unavailable for permit import integration test")
+
+    init_db()
+    factory = sessionmaker(bind=engine)
+    session = factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def test_promote_blank_permit_if_exists_updates_blank_row():
+    session = MagicMock()
+    session.scalar.return_value = 4317394
+    row = {
+        "external_id": "BP-2025-00202",
+        "address": "3380 VANNESS AVENUE, Vancouver, BC V5R 6B8",
+        "project_value": "144787150.0",
+        "applicant": "Tijana Sljivic",
+        "contractor": "Axiom Builders Inc",
+        "source": "vancouver",
+        "city": "Vancouver",
+    }
+    promoted = _promote_blank_permit_if_exists(session, row, source="vancouver")
+    assert promoted is True
+    session.execute.assert_called_once()
 
 
 def test_dedupe_permit_rows_keeps_last_duplicate():
@@ -11,10 +73,33 @@ def test_dedupe_permit_rows_keeps_last_duplicate():
         {"source": "surrey", "external_id": "A", "address": "1 Main Updated"},
         {"source": "surrey", "external_id": "B", "address": "2 Main"},
     ]
-    deduped = _dedupe_permit_rows(rows)
-    assert len(deduped) == 2
-    by_id = {row["external_id"]: row for row in deduped}
+    keyed, blank = _dedupe_permit_rows(rows)
+    assert len(keyed) == 2
+    assert blank == []
+    by_id = {row["external_id"]: row for row in keyed}
     assert by_id["A"]["address"] == "1 Main Updated"
+
+
+def test_dedupe_permit_rows_keeps_blank_fingerprint_once():
+    rows = [
+        {
+            "source": "vancouver",
+            "external_id": "",
+            "address": "3380 VANNESS AVENUE",
+            "project_value": "144787150.0",
+            "applicant": "Tijana Sljivic",
+        },
+        {
+            "source": "vancouver",
+            "external_id": "",
+            "address": "3380 VANNESS AVENUE",
+            "project_value": "144787150.0",
+            "applicant": "Tijana Sljivic",
+        },
+    ]
+    keyed, blank = _dedupe_permit_rows(rows)
+    assert keyed == []
+    assert len(blank) == 1
 
 
 def test_clamp_permit_row_truncates_varchar_fields():
@@ -29,3 +114,90 @@ def test_clamp_permit_row_truncates_varchar_fields():
     assert len(clamped["address"]) == 300
     assert len(clamped["contractor"]) == 300
     assert len(clamped["description"]) == 500
+
+
+def test_upsert_city_permits_promotes_blank_row_when_external_id_arrives(
+    local_db_session: Session,
+):
+    address = "750 W 32ND AVENUE, Vancouver, BC"
+    project_value = "200000000.0"
+    applicant = "Tavis McAuley DBA: McAuley Consulting"
+    external_id = "BP-TEST-DEDUP-1"
+
+    local_db_session.execute(
+        text(
+            """
+            DELETE FROM permits
+            WHERE source = 'vancouver'
+              AND (
+                external_id = :external_id
+                OR (
+                  address = :address
+                  AND project_value = :project_value
+                  AND applicant = :applicant
+                )
+              )
+            """
+        ),
+        {
+            "external_id": external_id,
+            "address": address,
+            "project_value": project_value,
+            "applicant": applicant,
+        },
+    )
+    local_db_session.commit()
+
+    base_row = {
+        "external_id": "",
+        "address": address,
+        "permit_type": "New Building",
+        "project_value": project_value,
+        "applicant": applicant,
+        "issue_date": "2026-04-17",
+        "application_date": "",
+        "description": "Stage 1 only",
+        "contractor": "",
+        "local_area": "",
+        "source": "vancouver",
+        "city": "Vancouver",
+    }
+    upsert_city_permits(local_db_session, [base_row], source="vancouver", full_refresh=False)
+
+    keyed_row = {
+        **base_row,
+        "external_id": external_id,
+        "application_date": "2024-11-07",
+        "contractor": "Scott Construction Ltd",
+        "description": "Stage 1/2/3 full permit",
+    }
+    upsert_city_permits(local_db_session, [keyed_row], source="vancouver", full_refresh=False)
+
+    count = local_db_session.scalar(
+        select(func.count())
+        .select_from(Permit)
+        .where(
+            Permit.source == "vancouver",
+            Permit.address == address,
+            Permit.project_value == project_value,
+            Permit.applicant == applicant,
+        )
+    )
+    row = local_db_session.scalar(
+        select(Permit).where(
+            Permit.source == "vancouver",
+            Permit.external_id == external_id,
+        )
+    )
+
+    assert count == 1
+    assert row is not None
+    assert row.contractor == "Scott Construction Ltd"
+    assert row.application_date == "2024-11-07"
+    assert row.description == "Stage 1/2/3 full permit"
+
+    local_db_session.execute(
+        text("DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"),
+        {"external_id": external_id},
+    )
+    local_db_session.commit()

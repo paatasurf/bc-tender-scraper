@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from db.constants import BATCH_SIZE
 from db.models import Permit
 from db.permit_lifecycle_constants import PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
-from pipeline.company_resolution import CompanyResolver
+from pipeline.permit_company_resolution import resolve_permit_company_from_row
 
 PERMIT_VARCHAR_LIMITS: dict[str, int] = {
     "address": 300,
@@ -27,6 +27,10 @@ PERMIT_VARCHAR_LIMITS: dict[str, int] = {
     "source_status_raw": 100,
 }
 
+_PERMIT_TABLE = Permit.__table__
+_SKIP_ON_UPDATE = {"id", "scraped_at"} | PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
+_IMPORTABLE_COLUMNS = {col.name for col in _PERMIT_TABLE.columns} - _SKIP_ON_UPDATE
+
 
 def _clamp_permit_row(row: dict[str, str]) -> dict[str, str]:
     clamped = dict(row)
@@ -37,14 +41,127 @@ def _clamp_permit_row(row: dict[str, str]) -> dict[str, str]:
     return clamped
 
 
-def _dedupe_permit_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    deduped: dict[tuple[str, str], dict[str, str]] = {}
+def _permit_fingerprint(
+    row: dict[str, str],
+    *,
+    source: str,
+) -> tuple[str, str, str, str]:
+    return (
+        source,
+        (row.get("address") or "").strip(),
+        (row.get("project_value") or "").strip(),
+        (row.get("applicant") or "").strip(),
+    )
+
+
+def _dedupe_permit_rows(
+    rows: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return (keyed_rows, blank_external_id_rows) after in-batch dedupe."""
+    keyed: dict[tuple[str, str], dict[str, str]] = {}
+    blank: dict[tuple[str, str, str, str], dict[str, str]] = {}
     for row in rows:
         external_id = row.get("external_id") or ""
-        if not external_id:
+        source = row.get("source") or ""
+        if external_id:
+            keyed[(source, external_id)] = row
             continue
-        deduped[(row.get("source") or "", external_id)] = row
-    return list(deduped.values())
+        fingerprint = _permit_fingerprint(row, source=source)
+        if not fingerprint[1] or not fingerprint[2]:
+            continue
+        blank[fingerprint] = row
+    return list(keyed.values()), list(blank.values())
+
+
+def _importable_row_values(row: dict[str, str], *, source: str) -> dict[str, object]:
+    values = {key: row[key] for key in _IMPORTABLE_COLUMNS if key in row}
+    values.setdefault("source", source)
+    return values
+
+
+def _fingerprint_match_filters(source: str, fingerprint: tuple[str, str, str, str]):
+    _, address, project_value, applicant = fingerprint
+    return (
+        Permit.source == source,
+        Permit.address == address,
+        Permit.project_value == project_value,
+        Permit.applicant == applicant,
+    )
+
+
+def _keyed_permit_exists_for_fingerprint(
+    session: Session,
+    row: dict[str, str],
+    *,
+    source: str,
+) -> bool:
+    fingerprint = _permit_fingerprint(row, source=source)
+    existing = session.scalar(
+        select(Permit.id)
+        .where(*_fingerprint_match_filters(source, fingerprint))
+        .where(Permit.external_id != "")
+        .limit(1)
+    )
+    return existing is not None
+
+
+def _upsert_blank_fingerprint_permit(
+    session: Session,
+    row: dict[str, str],
+    *,
+    source: str,
+) -> bool:
+    """Insert or update a permit row that lacks external_id (one row per fingerprint)."""
+    if row.get("external_id"):
+        return False
+    if _keyed_permit_exists_for_fingerprint(session, row, source=source):
+        return False
+
+    fingerprint = _permit_fingerprint(row, source=source)
+    existing_id = session.scalar(
+        select(Permit.id)
+        .where(*_fingerprint_match_filters(source, fingerprint))
+        .where(Permit.external_id == "")
+        .limit(1)
+    )
+    values = _importable_row_values(row, source=source)
+    values["external_id"] = ""
+
+    if existing_id is not None:
+        session.execute(update(Permit).where(Permit.id == existing_id).values(**values))
+        return True
+
+    session.execute(insert(_PERMIT_TABLE).values(values))
+    return True
+
+
+def _promote_blank_permit_if_exists(
+    session: Session,
+    row: dict[str, str],
+    *,
+    source: str,
+) -> bool:
+    """Upgrade a blank-external_id duplicate to the keyed row instead of inserting anew."""
+    external_id = row.get("external_id") or ""
+    if not external_id:
+        return False
+
+    fingerprint = _permit_fingerprint(row, source=source)
+    if not fingerprint[1] or not fingerprint[2]:
+        return False
+
+    existing_id = session.scalar(
+        select(Permit.id)
+        .where(*_fingerprint_match_filters(source, fingerprint))
+        .where(Permit.external_id == "")
+        .limit(1)
+    )
+    if existing_id is None:
+        return False
+
+    values = _importable_row_values(row, source=source)
+    session.execute(update(Permit).where(Permit.id == existing_id).values(**values))
+    return True
 
 
 def _attach_company_ids(
@@ -53,21 +170,13 @@ def _attach_company_ids(
     *,
     source: str,
 ) -> None:
-    resolver = CompanyResolver(session)
     for row in rows:
-        raw = (row.get("applicant") or row.get("contractor") or "").strip()
-        if not raw:
+        result = resolve_permit_company_from_row(session, row, source=source)
+        if result.company_id is None:
             continue
-        resolution = resolver.resolve(
-            raw,
-            source=f"permits:{source}",
-            city=row.get("city") or "",
-        )
-        if resolution.company_id is None:
-            continue
-        row["company_id"] = resolution.company_id
-        row["canonical_merge_confidence"] = resolution.confidence
-        row["canonical_merge_method"] = resolution.method
+        row["company_id"] = result.company_id
+        row["canonical_merge_confidence"] = result.confidence
+        row["canonical_merge_method"] = result.method
 
 
 def upsert_city_permits(
@@ -77,30 +186,43 @@ def upsert_city_permits(
     source: str,
     full_refresh: bool,
 ) -> int:
-    rows = [_clamp_permit_row(row) for row in _dedupe_permit_rows(rows)]
-    if not rows:
+    clamped = [_clamp_permit_row(row) for row in rows]
+    keyed_rows, blank_rows = _dedupe_permit_rows(clamped)
+    if not keyed_rows and not blank_rows:
         return 0
 
     if full_refresh:
         session.execute(delete(Permit).where(Permit.source == source))
         session.commit()
 
-    _attach_company_ids(session, rows, source=source)
+    all_rows = keyed_rows + blank_rows
+    _attach_company_ids(session, all_rows, source=source)
 
-    table = Permit.__table__
     imported = 0
-    skip_on_update = {"id", "scraped_at"} | PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
 
-    for start in range(0, len(rows), BATCH_SIZE):
-        batch = rows[start : start + BATCH_SIZE]
-        stmt = insert(table).values(batch)
+    for row in blank_rows:
+        if _upsert_blank_fingerprint_permit(session, row, source=source):
+            imported += 1
+        session.commit()
+
+    keyed_for_batch: list[dict[str, str]] = []
+    for row in keyed_rows:
+        if _promote_blank_permit_if_exists(session, row, source=source):
+            imported += 1
+            session.commit()
+            continue
+        keyed_for_batch.append(row)
+
+    for start in range(0, len(keyed_for_batch), BATCH_SIZE):
+        batch = keyed_for_batch[start : start + BATCH_SIZE]
+        stmt = insert(_PERMIT_TABLE).values(batch)
         if full_refresh:
             session.execute(stmt)
         else:
             update_cols = {
                 col.name: stmt.excluded[col.name]
-                for col in table.columns
-                if col.name not in skip_on_update
+                for col in _PERMIT_TABLE.columns
+                if col.name not in _SKIP_ON_UPDATE
             }
             stmt = stmt.on_conflict_do_update(
                 index_elements=["source", "external_id"],
