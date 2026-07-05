@@ -5,8 +5,11 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from db.company_analytics import company_analytics_entity_filter
+from db.company_canonical_constants import ENTITY_ROLE_STANDALONE
 from db.models import ArchCompany, Company
 from pipeline.cip_schema import CompanyIntelligenceProfile
+from pipeline.company_name_heuristics import is_probable_person_name
 from pipeline.competitive_intel.cohort_isolation import apply_cohort_type_isolation
 from pipeline.competitive_intel.overlap import city_set, shares_geography
 from pipeline.competitive_intel.types import CompanyRow, Kind, MarketCohort
@@ -81,6 +84,35 @@ def _apply_cohort_quality_gate(
     return [m for m in members if _passes_cohort_quality_gate(subject, m, kind=kind)]
 
 
+def construction_company_analytics_clause():
+    """SQL filter for construction CI multi-company pools (excludes alias + probable_person)."""
+    return company_analytics_entity_filter()
+
+
+def filter_construction_peer_pool(members: list[CompanyRow]) -> list[CompanyRow]:
+    """Post-filter construction peers: drop standalone rows that look like individuals."""
+    return _exclude_misclassified_person_standalone(members, kind="construction")
+
+
+def _exclude_misclassified_person_standalone(members: list[CompanyRow], *, kind: Kind) -> list[CompanyRow]:
+    """Drop standalone rows that look like individuals (same signal as mark_legacy_person_companies).
+
+    company_analytics_entity_filter() excludes applicant_alias and probable_person at SQL
+    level; standalone permit-applicant person names that were never reclassified still
+    leak through without this post-filter.
+    """
+    if kind != "construction":
+        return members
+    return [
+        member
+        for member in members
+        if not (
+            (getattr(member, "entity_role", "") or "") == ENTITY_ROLE_STANDALONE
+            and is_probable_person_name(getattr(member, "name", "") or "")
+        )
+    ]
+
+
 def _quality_clause(model, kind: Kind):
     if kind == "construction":
         return or_(model.total_projects >= 2, model.award_count >= 1)
@@ -115,10 +147,14 @@ def _fetch_cohort_rows(
         query = query.where(sector_filter)
     query = query.where(_quality_clause(model, kind))
 
+    if kind == "construction" and model is Company:
+        query = query.where(construction_company_analytics_clause())
+
     if use_city and city and kind == "construction":
         query = query.where(model.primary_city.ilike(city))
 
-    return list(session.scalars(query.limit(limit)).all())
+    rows = list(session.scalars(query.limit(limit)).all())
+    return filter_construction_peer_pool(rows) if kind == "construction" else rows
 
 
 def _filter_arch_city(

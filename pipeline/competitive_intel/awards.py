@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 from db.models import Company, ContractAward
 from pipeline.company_classification import parse_name
 from pipeline.company_matching import normalize_vendor_name
+from pipeline.competitive_intel.cohort import (
+    construction_company_analytics_clause,
+    filter_construction_peer_pool,
+)
 from pipeline.competitive_intel.cohort_isolation import apply_cohort_type_isolation
 from pipeline.competitive_intel.types import CompanyRow, Kind
 
@@ -44,7 +48,9 @@ def _load_vendor_groups(session: Session) -> tuple[dict[str, set[int]], dict[int
     key_to_ids: dict[str, set[int]] = defaultdict(set)
     id_to_keys: dict[int, set[str]] = {}
     for company_id, name, canonical in session.execute(
-        select(Company.id, Company.name, Company.canonical_vendor_name)
+        select(Company.id, Company.name, Company.canonical_vendor_name).where(
+            construction_company_analytics_clause()
+        )
     ).all():
         keys = vendor_keys_from_name(name or "", canonical or "")
         id_to_keys[int(company_id)] = keys
@@ -115,12 +121,16 @@ def select_award_market_members(
     sector_filter = _sector_clause(Company, subject)
 
     def _awarded_candidates(*, use_city: bool) -> list[CompanyRow]:
-        query = select(Company).where(Company.id != subject.id)
+        query = select(Company).where(
+            Company.id != subject.id,
+            construction_company_analytics_clause(),
+        )
         if sector_filter is not True:
             query = query.where(sector_filter)
         if use_city and city:
             query = query.where(Company.primary_city.ilike(city))
         rows = list(session.scalars(query.limit(AWARD_MARKET_QUERY_LIMIT)).all())
+        rows = filter_construction_peer_pool(rows)
         rows = apply_cohort_type_isolation(
             rows, subject, kind=kind, subject_cip=subject_cip, session=session
         )
