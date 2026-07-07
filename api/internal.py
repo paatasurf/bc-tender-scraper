@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
@@ -137,7 +138,7 @@ def _require_internal_key(request: Request) -> None:
     if not expected:
         raise HTTPException(status_code=403, detail="Forbidden")
     key = request.headers.get("X-Internal-Key")
-    if key != expected:
+    if key is None or not hmac.compare_digest(key, expected):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
