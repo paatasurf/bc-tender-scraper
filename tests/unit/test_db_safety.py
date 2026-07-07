@@ -44,6 +44,12 @@ def test_production_url_detection() -> None:
     assert is_production_database_url(local) is False
 
 
+def test_production_url_detection_warns_on_unparseable_url(capsys) -> None:
+    assert is_production_database_url("garbage") is False
+    err = capsys.readouterr().err
+    assert "[db_safety] Could not parse DATABASE_URL" in err
+
+
 def test_readonly_banner_on_simulated_production(capsys) -> None:
     url = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     print_database_banner(script_name="test_script.py", url=url, mode="READ-ONLY")

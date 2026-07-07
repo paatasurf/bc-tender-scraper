@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from scraper import vancouver_early_signal_enrichment as enrichment
 from scraper.shapeyourcity_development import (
     build_development_application_url,
     extract_address_from_project_name,
@@ -70,3 +71,32 @@ def test_score_project_match_prefers_region_and_type():
         project=project,
     )
     assert score >= 15
+
+
+def test_fetch_detail_fields_logs_and_recovers_on_detail_page_error(monkeypatch, capsys):
+    def _boom(session, url):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(enrichment, "fetch_html", _boom)
+
+    url = "https://vancouver.ca/home-property-development/development-applications.aspx?RN=DP-1"
+    detail = enrichment._fetch_detail_fields(None, {}, url)
+
+    assert detail == {}
+    out = capsys.readouterr().out
+    assert "[Vancouver Enrichment] Detail page fetch failed" in out
+    assert "boom" in out
+
+
+def test_fetch_detail_fields_logs_and_recovers_on_shapeyourcity_error(monkeypatch, capsys):
+    def _boom(session, url):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(enrichment, "fetch_html", _boom)
+
+    detail = enrichment._fetch_detail_fields(None, {"permalink": "3226-w-51st-ave"}, "")
+
+    assert detail == {}
+    out = capsys.readouterr().out
+    assert "[Vancouver Enrichment] ShapeYourCity fetch failed" in out
+    assert "kaboom" in out
