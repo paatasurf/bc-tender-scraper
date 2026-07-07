@@ -23,6 +23,7 @@ from db.permit_lifecycle_constants import (
     PERMIT_STALE_AGE_DAYS,
 )
 from pipeline.lifecycle_resolver import has_manual_lifecycle_override
+from shared.datetime_utils import parse_iso_date, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +39,11 @@ class PermitLifecycleSnapshot:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def _parse_iso_date(raw: str | None) -> date | None:
-    if not raw:
-        return None
-    text = str(raw).strip().replace("/", "-")[:10]
-    try:
-        return date.fromisoformat(text)
-    except ValueError:
-        return None
+    return parse_iso_date(raw)
 
 
 def permit_reference_date(*, issue_date: str | None, application_date: str | None) -> date | None:

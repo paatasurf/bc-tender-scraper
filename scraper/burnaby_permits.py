@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import io
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -17,6 +16,7 @@ from scraper.config import (
     BURNABY_PERMITS_INDEX_URL,
     BURNABY_SOURCE,
 )
+from scraper.permit_persist import scrape_and_persist_permits
 from scraper.utils import clean_text, create_session, polite_get
 
 FIELDNAMES = [
@@ -204,56 +204,18 @@ def iter_burnaby_permits(*, days: int | None = None) -> Iterator[dict[str, str]]
         yield from records
 
 
-def _write_csv(records: list[dict[str, str]], *, append: bool) -> None:
-    if not records:
-        return
-    mode = "a" if append else "w"
-    write_header = not append
-    with open(BURNABY_PERMITS_CSV, mode, encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
-        if write_header:
-            writer.writeheader()
-        writer.writerows(records)
-
-
 def scrape_burnaby_permits(*, days: int | None = None, persist: bool = True) -> dict[str, Any]:
     """Scrape Burnaby permits. Full history when days is None; incremental when days > 0."""
     records = list(iter_burnaby_permits(days=days))
-    incremental = days is not None and days > 0
-    _write_csv(records, append=incremental)
-
-    result: dict[str, Any] = {
-        "source": BURNABY_SOURCE,
-        "city": BURNABY_CITY,
-        "mode": "incremental" if incremental else "full",
-        "days": days,
-        "permits_scraped": len(records),
-        "csv_path": BURNABY_PERMITS_CSV,
-    }
-
-    if persist and records:
-        from db.connection import get_session, init_db
-        from db.permit_import import upsert_city_permits
-
-        init_db()
-        session = get_session()
-        try:
-            result["permits_persisted"] = upsert_city_permits(
-                session,
-                records,
-                source=BURNABY_SOURCE,
-                full_refresh=not incremental,
-            )
-        finally:
-            session.close()
-    else:
-        result["permits_persisted"] = 0
-
-    print(
-        f"[Burnaby Permits] Saved {len(records)} permits to {BURNABY_PERMITS_CSV}"
-        f" ({result.get('permits_persisted', 0)} persisted)"
+    return scrape_and_persist_permits(
+        records,
+        source=BURNABY_SOURCE,
+        city=BURNABY_CITY,
+        csv_path=BURNABY_PERMITS_CSV,
+        fieldnames=FIELDNAMES,
+        days=days,
+        persist=persist,
     )
-    return result
 
 
 def main() -> None:

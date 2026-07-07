@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from db.lifecycle_constants import LIFECYCLE_STATUS_AWARDED, LIFECYCLE_STATUS_CLOSED
 from db.models import ArchTender, CommercialTender, ContractAward, Tender
 from pipeline.lifecycle_resolver import TENDER_LIFECYCLE_MODELS, has_manual_lifecycle_override
+from shared.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class AwardIndexes:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def normalize_match_text(value: str | None) -> str:

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from scraper.config import BUILDING_PERMITS_CSV, VANCOUVER_PERMITS_API
+from scraper.permit_persist import persist_permits_to_db
 from scraper.utils import clean_text, create_session, polite_api_get
 
 PAGE_SIZE = 100
@@ -187,20 +188,11 @@ def scrape_vancouver_permits(*, days: int | None = None, persist: bool = True) -
     }
 
     if persist and records:
-        from db.connection import get_session, init_db
-        from db.permit_import import upsert_city_permits
-
-        init_db()
-        session = get_session()
-        try:
-            result["permits_persisted"] = upsert_city_permits(
-                session,
-                records,
-                source=VANCOUVER_SOURCE,
-                full_refresh=False,
-            )
-        finally:
-            session.close()
+        result["permits_persisted"] = persist_permits_to_db(
+            records,
+            source=VANCOUVER_SOURCE,
+            full_refresh=False,
+        )
     else:
         result["permits_persisted"] = 0
 

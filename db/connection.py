@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from config.env import get_env, load_app_env
+from db.ddl_utils import execute_ddl_statements
 from db.models import Base
 
 T = TypeVar("T")
@@ -427,23 +428,21 @@ def _ensure_ai_columns(engine) -> None:
         "ON arch_companies (google_place_id)",
         "ALTER TABLE reddit ADD COLUMN IF NOT EXISTS subreddit VARCHAR(100) DEFAULT ''",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _widen_commercial_text_columns(engine) -> None:
     if "commercial_tenders" not in inspect(engine).get_table_names():
         return
 
-    with engine.begin() as conn:
-        for column in COMMERCIAL_TEXT_COLUMNS:
-            conn.execute(
-                text(
-                    f"ALTER TABLE commercial_tenders "
-                    f"ALTER COLUMN {column} TYPE TEXT USING {column}::TEXT"
-                )
-            )
+    execute_ddl_statements(
+        engine,
+        (
+            f"ALTER TABLE commercial_tenders "
+            f"ALTER COLUMN {column} TYPE TEXT USING {column}::TEXT"
+            for column in COMMERCIAL_TEXT_COLUMNS
+        ),
+    )
 
 
 def _ensure_tender_matches_table(engine) -> None:
@@ -463,19 +462,14 @@ def _ensure_tender_matches_table(engine) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_tender_matches_company_tender "
         "ON tender_matches (company_id, tender_id)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _migrate_tender_matches_breakdown_json(engine) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "ALTER TABLE tender_matches "
-                "ADD COLUMN IF NOT EXISTS breakdown_json JSONB"
-            )
-        )
+    execute_ddl_statements(engine, (
+        "ALTER TABLE tender_matches "
+        "ADD COLUMN IF NOT EXISTS breakdown_json JSONB",
+    ))
 
 
 def _migrate_tender_matches_company_kind(engine) -> None:
@@ -494,9 +488,7 @@ def _migrate_tender_matches_company_kind(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_tender_matches_company_created "
         "ON tender_matches (company_kind, company_id, created_at DESC)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_company_intelligence_columns(engine) -> None:
@@ -511,9 +503,7 @@ def _ensure_company_intelligence_columns(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_companies_company_lifecycle ON companies (company_lifecycle)",
         "CREATE INDEX IF NOT EXISTS ix_companies_enrichment_status ON companies (enrichment_status)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_company_award_columns(engine) -> None:
@@ -537,9 +527,7 @@ def _ensure_company_award_columns(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_companies_last_award_date ON companies (last_award_date)",
         "CREATE INDEX IF NOT EXISTS ix_companies_data_sources ON companies USING GIN (data_sources)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_bd_intelligence_columns(engine) -> None:
@@ -559,9 +547,7 @@ def _ensure_bd_intelligence_columns(engine) -> None:
         "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS buyer_level VARCHAR(20) DEFAULT ''",
         "ALTER TABLE commercial_tenders ADD COLUMN IF NOT EXISTS estimated_value_numeric FLOAT",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_company_wiki_table(engine) -> None:
@@ -592,9 +578,7 @@ def _ensure_company_wiki_table(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_company_wiki_company_kind_col "
         "ON company_wiki (company_kind)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_cip_columns(engine) -> None:
@@ -620,9 +604,7 @@ def _ensure_cip_columns(engine) -> None:
         "ALTER TABLE arch_companies ADD COLUMN IF NOT EXISTS value_p75 FLOAT",
         "CREATE INDEX IF NOT EXISTS ix_arch_companies_dominant_sector ON arch_companies (dominant_sector)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_pipeline_runs_table(engine) -> None:
@@ -642,9 +624,7 @@ def _ensure_pipeline_runs_table(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_pipeline_runs_run_id ON pipeline_runs (run_id)",
         "CREATE INDEX IF NOT EXISTS ix_pipeline_runs_step ON pipeline_runs (step)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 
@@ -766,9 +746,7 @@ def _ensure_early_signal_events_table(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_early_signal_events_url_link "
         "ON early_signal_events (url_link) WHERE url_link <> ''",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_project_contacts_table(engine) -> None:
@@ -795,9 +773,7 @@ def _ensure_project_contacts_table(engine) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_project_contacts_project_role "
         "ON project_contacts (project_id, project_type, role)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_tender_outcomes_table(engine) -> None:
@@ -821,9 +797,7 @@ def _ensure_tender_outcomes_table(engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_tender_outcomes_recorded_at "
         "ON tender_outcomes (recorded_at DESC)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_tender_presence_columns(engine) -> None:
@@ -863,9 +837,7 @@ def _ensure_tender_presence_columns(engine) -> None:
         "ON commercial_tenders (last_seen_at DESC)",
         "CREATE INDEX IF NOT EXISTS ix_arch_tenders_last_seen_at ON arch_tenders (last_seen_at DESC)",
     )
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_lifecycle_delisted_status(engine) -> None:
@@ -890,9 +862,7 @@ def _ensure_lifecycle_delisted_status(engine) -> None:
                 'cancelled', 'outcome_unknown', 'archived', 'delisted'
             ))""",
     ]
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_tender_lifecycle_columns(engine) -> None:
@@ -911,9 +881,7 @@ def _ensure_tender_lifecycle_columns(engine) -> None:
         statements.extend(lifecycle_index_statements(table))
         statements.append(LIFECYCLE_STATUS_CHECK_SQL.format(table=table))
 
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_permit_lifecycle_columns(engine) -> None:
@@ -930,9 +898,7 @@ def _ensure_permit_lifecycle_columns(engine) -> None:
     statements.extend(permit_lifecycle_index_statements())
     statements.append(PERMIT_LIFECYCLE_STATUS_CHECK_SQL)
 
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_company_lifecycle_columns(engine) -> None:
@@ -949,49 +915,37 @@ def _ensure_company_lifecycle_columns(engine) -> None:
     statements.extend(company_lifecycle_index_statements())
     statements.append(COMPANY_LIFECYCLE_STATUS_CHECK_SQL)
 
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, statements)
 
 
 def _ensure_google_enrichment_schema(engine) -> None:
     from db.google_enrichment_ddl import google_enrichment_migration_statements
 
-    with engine.begin() as conn:
-        for statement in google_enrichment_migration_statements():
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, google_enrichment_migration_statements())
 
 
 def _ensure_company_canonical_merge_schema(engine) -> None:
     from db.company_canonical_ddl import company_canonical_migration_statements
 
-    with engine.begin() as conn:
-        for statement in company_canonical_migration_statements():
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, company_canonical_migration_statements())
 
 
 def _ensure_registry_verification_schema(engine) -> None:
     from db.registry_verification_ddl import registry_verification_migration_statements
 
-    with engine.begin() as conn:
-        for statement in registry_verification_migration_statements():
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, registry_verification_migration_statements())
 
 
 def _ensure_market_registry_schema(engine) -> None:
     from db.market_registry_ddl import market_registry_migration_statements
 
-    with engine.begin() as conn:
-        for statement in market_registry_migration_statements():
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, market_registry_migration_statements())
 
 
 def _ensure_construction_tier_schema(engine) -> None:
     from db.construction_tier_ddl import construction_tier_migration_statements
 
-    with engine.begin() as conn:
-        for statement in construction_tier_migration_statements():
-            conn.execute(text(statement))
+    execute_ddl_statements(engine, construction_tier_migration_statements())
 
 
 def _run_migrations(engine: Engine) -> None:
