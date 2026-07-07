@@ -52,7 +52,8 @@ def _fetch_detail_fields(session, project: dict[str, Any], url_link: str) -> dic
             title = html.lower()
             if NOT_FOUND_TITLE not in title:
                 detail = parse_vancouver_detail_page(html)
-        except Exception:
+        except Exception as exc:
+            print(f"[Vancouver Enrichment] Detail page fetch failed for {url_link}: {exc}")
             detail = {}
 
     if detail.get("address") and detail.get("applicant"):
@@ -66,7 +67,8 @@ def _fetch_detail_fields(session, project: dict[str, Any], url_link: str) -> dic
         page_url = build_shapeyourcity_url(permalink)
         html = fetch_html(session, page_url)
         page_detail = parse_shapeyourcity_detail_page(html)
-    except Exception:
+    except Exception as exc:
+        print(f"[Vancouver Enrichment] ShapeYourCity fetch failed for permalink={permalink}: {exc}")
         return detail
 
     merged = dict(detail)
