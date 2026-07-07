@@ -1,5 +1,6 @@
 import config.env  # noqa: F401  # load env before pipeline imports
 
+import hmac
 import logging
 import os
 import time
@@ -89,7 +90,7 @@ def verify_internal_key(request: Request):
     if not expected:
         raise HTTPException(status_code=403, detail="Forbidden")
     key = request.headers.get("X-Internal-Key")
-    if key != expected:
+    if key is None or not hmac.compare_digest(key, expected):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -116,10 +117,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+# Credentials cannot be combined with a wildcard origin: Starlette would reflect
+# the caller's Origin back with Access-Control-Allow-Credentials: true, letting
+# ANY site make credentialed cross-origin requests. Only allow credentials when
+# an explicit origin allowlist is configured.
+_cors_allow_credentials = bool(_cors_origins) and "*" not in _cors_origins
+if not _cors_origins:
+    _cors_origins = ["*"]
+if not _cors_allow_credentials and _cors_origins == ["*"]:
+    logger.warning(
+        "CORS_ORIGINS is '*'; credentialed cross-origin requests are disabled. "
+        "Set CORS_ORIGINS to an explicit comma-separated allowlist to enable them."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

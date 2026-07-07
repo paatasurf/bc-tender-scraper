@@ -4,6 +4,7 @@ import base64
 import logging
 import threading
 from typing import Any
+from urllib.parse import urlparse
 
 import jwt
 import requests
@@ -202,6 +203,32 @@ def _get_jwk_client(url: str, headers: dict[str, str] | None) -> PyJWKClient:
         return client
 
 
+def _trusted_issuer_hosts() -> frozenset[str]:
+    """Hosts whose JWKS may be trusted for signature verification.
+
+    Derived only from server-side configuration — never from the (untrusted)
+    token. Without this allowlist, an attacker could self-sign a token, point
+    its ``iss`` at a JWKS they control, and be accepted as an authenticated
+    paid user.
+    """
+    hosts: set[str] = set()
+
+    publishable = _get_publishable_key()
+    if publishable:
+        domain = _frontend_api_domain_from_publishable(publishable)
+        if domain:
+            hosts.add(domain.lower())
+
+    for env_name in ("CLERK_JWKS_URL", "CLERK_ISSUER"):
+        raw = get_env(env_name)
+        if raw:
+            host = urlparse(raw if "://" in raw else f"https://{raw}").hostname
+            if host:
+                hosts.add(host.lower())
+
+    return frozenset(hosts)
+
+
 def _issuer_jwks_url(token: str) -> str | None:
     try:
         claims = jwt.decode(
@@ -219,6 +246,17 @@ def _issuer_jwks_url(token: str) -> str | None:
     iss = claims.get("iss") if isinstance(claims, dict) else None
     if not isinstance(iss, str) or not iss.startswith("https://"):
         return None
+
+    issuer_host = urlparse(iss).hostname
+    trusted = _trusted_issuer_hosts()
+    if not issuer_host or issuer_host.lower() not in trusted:
+        logger.warning(
+            "Clerk JWT verification: refusing untrusted issuer host %s (trusted=%s)",
+            issuer_host,
+            sorted(trusted),
+        )
+        return None
+
     return iss.rstrip("/") + "/.well-known/jwks.json"
 
 
