@@ -60,6 +60,7 @@ class CompanyIntelligenceProfile:
     normalized_project_types: list[str]
     sector_focus: dict[str, float]
     dominant_sector: str
+    sector_confidence: str
     work_orientation: str
     buyer_types: list[str]
     client_types: list[str]
@@ -103,6 +104,7 @@ class CompanyIntelligenceProfile:
             "normalized_project_types": self.normalized_project_types,
             "sector_focus": self.sector_focus,
             "dominant_sector": self.dominant_sector,
+            "sector_confidence": self.sector_confidence,
             "work_orientation": self.work_orientation,
             "buyer_types": self.buyer_types,
             "client_types": self.client_types,
@@ -149,6 +151,7 @@ class CompanyIntelligenceProfile:
             normalized_project_types=list(data.get("normalized_project_types") or []),
             sector_focus=dict(data.get("sector_focus") or {}),
             dominant_sector=str(data.get("dominant_sector", "")),
+            sector_confidence=str(data.get("sector_confidence", "")),
             work_orientation=str(data.get("work_orientation", "construction")),
             buyer_types=list(data.get("buyer_types") or []),
             client_types=list(data.get("client_types") or []),
