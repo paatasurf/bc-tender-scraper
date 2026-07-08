@@ -24,6 +24,7 @@ from db.connection import (
     start_init_db_background,
 )
 from db.company_analytics import company_analytics_entity_filter
+from db.company_canonical_constants import company_canonical_name
 from pipeline.opportunity_discovery import ARCHITECTURE_DEFAULT_MIN_SCORE, CONSTRUCTION_DEFAULT_MIN_SCORE
 from db.models import (
     ArchCompany,
@@ -68,9 +69,21 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 
 def _company_to_api_dict(company: Company) -> dict[str, Any]:
-    """Expose construction_score, company_tier, and construction_tier breakdown."""
+    """Expose construction_score, company_tier, and construction_tier breakdown.
+
+    The ``name`` field is normalised: if ``display_name`` is populated it is
+    used as the canonical display name so the dashboard always shows clean names
+    (e.g. "Pontem Group") rather than raw DBA-prefixed names
+    (e.g. "Jack Hui DBA: Pontem Group").  The raw value is preserved as
+    ``name_raw`` for audit/debugging.
+    """
     payload = _row_to_dict(company)
     payload["construction_tier"] = payload.pop("construction_tier_json", None)
+    raw_name: str = payload.get("name", "") or ""
+    clean_name: str = (payload.get("display_name", "") or "").strip()
+    if clean_name:
+        payload["name"] = clean_name
+    payload["name_raw"] = raw_name
     return payload
 
 
@@ -614,8 +627,9 @@ def list_companies(
         count_query = select(func.count()).select_from(Company).where(analytics_filter)
         if search.strip():
             pattern = f"%{search.strip()}%"
-            query = query.where(Company.name.ilike(pattern))
-            count_query = count_query.where(Company.name.ilike(pattern))
+            name_match = or_(Company.name.ilike(pattern), Company.display_name.ilike(pattern))
+            query = query.where(name_match)
+            count_query = count_query.where(name_match)
 
         tier_filter = parse_tier_filter(tiers)
         if tier_filter:
@@ -947,6 +961,38 @@ def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
 
         return {
+            "company": company_canonical_name(company),
+            "tender_id": tender.id,
+            **_tender_response_fields(tender),
+            **match,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/companies/id/{company_id}/tender-match/{tender_id}")
+def company_tender_match_by_id(company_id: int, tender_id: int) -> dict[str, Any]:
+    from pipeline.company_intelligence import match_company_to_tender
+
+    if not get_anthropic_api_key():
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+
+    session = get_session()
+    try:
+        company = session.get(Company, company_id)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
+
+        tender = _find_tender(session, tender_id)
+        if tender is None:
+            raise HTTPException(status_code=404, detail=f"Tender {tender_id} not found")
+
+        try:
+            match = match_company_to_tender(company, tender)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+
+        return {
             "company": company.name,
             "tender_id": tender.id,
             **_tender_response_fields(tender),
@@ -1260,7 +1306,39 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
 
         return {
-            "company": company.name,
+            "company": company_canonical_name(company),
+            "tender_id": tender.id,
+            **_tender_response_fields(tender),
+            **match,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/arch-companies/id/{company_id}/tender-match/{tender_id}")
+def arch_company_tender_match_by_id(company_id: int, tender_id: int) -> dict[str, Any]:
+    from pipeline.arch_company_intelligence import match_arch_company_to_tender
+
+    if not get_anthropic_api_key():
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+
+    session = get_session()
+    try:
+        company = session.get(ArchCompany, company_id)
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"Architecture firm {company_id} not found")
+
+        tender = _find_tender(session, tender_id)
+        if tender is None:
+            raise HTTPException(status_code=404, detail=f"Tender {tender_id} not found")
+
+        try:
+            match = match_arch_company_to_tender(company, tender)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+
+        return {
+            "company": company_canonical_name(company),
             "tender_id": tender.id,
             **_tender_response_fields(tender),
             **match,

@@ -1,0 +1,6 @@
+# One public LinkedIn company URL per line.
+# Used by: python research/linkedin/run_pipeline.py
+#
+# Example:
+# https://www.linkedin.com/company/bird-construction/
+# https://www.linkedin.com/company/acres-enterprises-ltd-/

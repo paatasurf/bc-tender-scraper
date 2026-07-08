@@ -1,0 +1,4 @@
+# Optional dependencies for LIVE LinkedIn scraping only.
+# Install in a separate venv — not part of TenderScope production deps.
+linkedin-scraper>=3.1.2
+playwright>=1.40.0

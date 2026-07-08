@@ -9,6 +9,7 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from db.company_canonical_constants import company_canonical_name
 from db.models import ArchCompany, Company, ContractAward, Permit
 from pipeline.business_attributes import (
     ENTITY_CLASS_MAP,
@@ -39,6 +40,7 @@ from pipeline.capability_profile import (
     _profile_completeness,
 )
 from pipeline.registry_provenance import merge_registry_provenance_into_profile
+from pipeline.sector_confidence import classify_sector_confidence
 from pipeline.cip_schema import CIP_VERSION, CompanyIntelligenceProfile, GeoConcentration, ProjectCluster, ValueRange
 from pipeline.fit.profile_confidence import bootstrap_from_signals
 from pipeline.company_matching import normalize_vendor_name
@@ -192,12 +194,13 @@ def build_cip(
         company = session.get(ArchCompany, company_id)
         if company is None:
             raise ValueError(f"Architecture company {company_id} not found")
+        canonical = company_canonical_name(company)
         normalized = normalize_vendor_name(company.name)
         permits: list[Permit] = []
         specializations = list(company.website_specializations or [])
         project_types = list(company.project_types or [])
         primary, secondary, trade_sources, trade_conf = _resolve_trades(
-            name=company.name,
+            name=canonical,
             company_type="Architect",
             project_types=project_types,
             award_categories=[],
@@ -225,6 +228,7 @@ def build_cip(
         company = session.get(Company, company_id)
         if company is None:
             raise ValueError(f"Company {company_id} not found")
+        canonical = company_canonical_name(company)
         normalized = normalize_vendor_name(company.name) or (company.canonical_vendor_name or "")
         permits = _load_company_permits(session, normalized, company_id=company_id)
         permit_texts = [
@@ -234,7 +238,7 @@ def build_cip(
         award_categories = list(company.award_categories or [])
         specializations = list(company.award_categories or [])[:8]
         primary, secondary, trade_sources, trade_conf = _resolve_trades(
-            name=company.name,
+            name=canonical,
             company_type=company.company_type or "",
             project_types=project_types,
             award_categories=award_categories,
@@ -297,6 +301,11 @@ def build_cip(
     geo_reach = geographic_reach(city_shares)
 
     dominant_sector = max(sector_focus, key=sector_focus.get) if sector_focus else "commercial"
+    sector_confidence = (
+        classify_sector_confidence(sector_focus=sector_focus, permits=permits)
+        if kind == "construction"
+        else ("medium" if sector_focus else "low")
+    )
     normalized_pts = list(
         {
             normalize_permit_project_type(p.permit_type, p.description, p.address or "")
@@ -344,7 +353,7 @@ def build_cip(
         computed_at=datetime.now(timezone.utc).isoformat(),
         company_id=company_id,
         kind=kind,
-        name=company.name,
+        name=canonical,
         company_type=company_type,
         entity_class=entity_class,
         primary_trade=primary,
@@ -355,6 +364,7 @@ def build_cip(
         normalized_project_types=normalized_pts[:10],
         sector_focus=sector_focus,
         dominant_sector=dominant_sector,
+        sector_confidence=sector_confidence,
         work_orientation=orientation,
         buyer_types=buyer_types[:8],
         client_types=award_clients[:8],
@@ -455,6 +465,7 @@ def persist_cip(session: Session, cip: CompanyIntelligenceProfile) -> None:
         row.cip_at = now
         row.cip_version = CIP_VERSION
         row.dominant_sector = cip.dominant_sector
+        row.sector_confidence = cip.sector_confidence
         row.work_orientation = cip.work_orientation
         row.specialization_confidence = cip.specialization_confidence
         row.geographic_reach = cip.geographic_reach

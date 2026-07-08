@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from db.company_canonical_constants import company_canonical_name as company_display_name
 from db.models import ArchCompany, Company
 from pipeline.cip_schema import CompanyIntelligenceProfile
 from pipeline.scoring.explain import BreakdownFactor

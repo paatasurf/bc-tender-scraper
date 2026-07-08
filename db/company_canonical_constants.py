@@ -2,6 +2,28 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+
+def company_canonical_name(company: Any) -> str:
+    """Return the canonical display name for any Company-like ORM row.
+
+    Prefers ``display_name`` (the clean, graph-canonical name set by the
+    canonical merge pipeline) over ``name`` (the raw scraped value, which
+    may carry DBA prefixes such as "Jack Hui DBA: Pontem Group").
+
+    Falls back to ``name`` when ``display_name`` is absent or blank so the
+    function is safe to call on any row regardless of whether the merge
+    pipeline has run.
+
+    Use this everywhere a human-readable company name is required.
+    Do **not** use it for permit-applicant matching — that intentionally
+    uses the raw ``name`` to match against raw permit data.
+    """
+    display = (getattr(company, "display_name", "") or "").strip()
+    return display if display else (getattr(company, "name", "") or "")
+
+
 ENTITY_ROLE_CANONICAL = "canonical"
 ENTITY_ROLE_APPLICANT_ALIAS = "applicant_alias"
 ENTITY_ROLE_STANDALONE = "standalone"

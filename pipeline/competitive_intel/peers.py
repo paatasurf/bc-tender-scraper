@@ -18,6 +18,7 @@ from pipeline.competitive_intel.types import (
     MarketCohort,
     PeerCandidate,
     TopCompetitor,
+    company_display_name,
 )
 from sqlalchemy.orm import Session
 
@@ -40,7 +41,7 @@ def rank_by_similarity(
         scored.append(
             PeerCandidate(
                 company_id=peer.id,
-                name=peer.name,
+                name=company_display_name(peer),
                 row=peer,
                 cip=peer_cip,
                 similarity=sim / 100.0,
@@ -124,7 +125,7 @@ def select_top_competitors(
         results.append(
             TopCompetitor(
                 company_id=peer.company_id,
-                name=peer.name,
+                name=company_display_name(peer.row),
                 company_kind=kind,
                 threat_score=threat.score,
                 threat_breakdown=threat.to_explanation_dict(),
