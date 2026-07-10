@@ -28,7 +28,11 @@ def get_git_commit_sha() -> str:
             timeout=5,
         )
         return result.stdout.strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError) as exc:
+        print(
+            f"[provenance] Could not resolve git commit SHA (using 'unknown'): {exc}",
+            file=sys.stderr,
+        )
         return "unknown"
 
 

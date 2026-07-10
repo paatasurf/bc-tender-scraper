@@ -84,7 +84,12 @@ def is_production_database_url(url: str) -> bool:
         return False
     try:
         host = (make_url(url).host or "").lower()
-    except Exception:
+    except Exception as exc:
+        print(
+            f"[db_safety] Could not parse DATABASE_URL for production check "
+            f"(treating as non-production): {exc}",
+            file=sys.stderr,
+        )
         return False
     return is_production_host(host)
 
@@ -93,7 +98,8 @@ def _parse_url_parts(url: str) -> tuple[str, str]:
     try:
         parsed = make_url(url)
         return parsed.host or "unknown", parsed.database or "unknown"
-    except Exception:
+    except Exception as exc:
+        print(f"[db_safety] Could not parse DATABASE_URL: {exc}", file=sys.stderr)
         return "unknown", "unknown"
 
 
