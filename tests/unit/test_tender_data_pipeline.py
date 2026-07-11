@@ -138,3 +138,40 @@ def test_internal_import_rejected_before_scrape() -> None:
             with pytest.raises(HTTPException) as exc:
                 internal_api.import_csvs(background_tasks, None)
     assert exc.value.status_code == 409
+
+
+def test_internal_import_without_body_uses_active_run(coordinator_state: Path) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-run")
+    coordinator.begin_tender_scrape("active-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("active-run", step)
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._enqueue_step", return_value={"status": "started"}) as enqueue_step:
+            response = internal_api.import_csvs(background_tasks, None)
+
+    assert response == {"status": "started"}
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[3] == "active-run"
+
+
+def test_internal_import_sync_without_body_uses_active_run(coordinator_state: Path) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("sync-run")
+    coordinator.begin_tender_scrape("sync-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("sync-run", step)
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._run_step_sync", return_value={"status": "success"}) as run_step_sync:
+            response = internal_api.import_csvs(background_tasks, None, sync=True)
+
+    assert response == {"status": "success"}
+    run_step_sync.assert_called_once()
+    assert run_step_sync.call_args.args[0] == "import-csvs"
+    assert run_step_sync.call_args.args[2] == "sync-run"
