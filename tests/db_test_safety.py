@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -16,8 +18,18 @@ _REFUSAL_MESSAGE = (
 )
 
 
+def _ci_skips_db_integration() -> bool:
+    """GitHub Actions sets CI=true; Phase 1 CI has no Postgres service."""
+    if os.environ.get("CI", "").strip().lower() not in {"1", "true", "yes"}:
+        return False
+    # Opt-in local/CI Postgres for future jobs.
+    return not bool(os.environ.get("CI_DATABASE_URL", "").strip())
+
+
 def require_local_test_database() -> str:
     """Return DATABASE_URL after refusing production hosts."""
+    if _ci_skips_db_integration():
+        pytest.skip("DB integration tests skipped on CI (set CI_DATABASE_URL to enable)")
     load_app_env()
     url = get_env("DATABASE_URL")
     if not url:
