@@ -1,0 +1,19 @@
+# Ruff — Phase 1 quality gate (serious defects only for app code).
+# Full style cleanup is out of scope for the infrastructure phase.
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = [
+    "E9",   # runtime syntax errors
+    "F63",  # invalid print/assert
+    "F7",   # syntax errors in statements
+    "F82",  # undefined names
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["F401", "F811"]
+"scripts/**" = ["E9", "F63", "F7", "F82"]
+
+[format]
+quote-style = "double"

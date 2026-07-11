@@ -61,6 +61,10 @@ def test_ddl_targets_all_tender_tables():
 
 @pytest.fixture(scope="module")
 def migrated_engine():
+    from tests.db_test_safety import _ci_skips_db_integration
+
+    if _ci_skips_db_integration():
+        pytest.skip("DB integration tests skipped on CI (set CI_DATABASE_URL to enable)")
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         pytest.skip("DATABASE_URL not configured")
