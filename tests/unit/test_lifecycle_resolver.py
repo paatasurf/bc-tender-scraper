@@ -164,6 +164,10 @@ def test_resolve_lifecycle_endpoint_requires_internal_key():
 
 
 def _require_local_database_url() -> str:
+    from tests.db_test_safety import _ci_skips_db_integration
+
+    if _ci_skips_db_integration():
+        pytest.skip("DB integration tests skipped on CI (set CI_DATABASE_URL to enable)")
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url:
         pytest.skip("DATABASE_URL not configured")

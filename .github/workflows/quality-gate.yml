@@ -1,0 +1,165 @@
+# TenderScope — Phase 1 CI/CD Foundation (bc-tender-scraper)
+#
+# Engineering infrastructure only. No business-logic changes.
+# Docs: docs/engineering/
+
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: quality-gate-scraper-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Never point CI at production. Empty URL → DB-dependent tests skip safely.
+      DATABASE_URL: ""
+      DATABASE_URL_PRODUCTION: ""
+      ALLOW_MANUAL_PIPELINE: "false"
+      SCHEDULER_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Record environment
+        run: |
+          mkdir -p reports
+          {
+            echo "python_version=$(python --version 2>&1)"
+            echo "pip_version=$(python -m pip --version 2>&1)"
+            echo "runner_os=${{ runner.os }}"
+            echo "ref=${{ github.ref }}"
+            echo "sha=${{ github.sha }}"
+          } | tee reports/environment.txt
+
+      - name: Install runtime + development dependencies
+        id: deps
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          echo "Installing requirements.txt ..."
+          pip install -r requirements.txt
+          echo "Installing requirements-dev.txt ..."
+          pip install -r requirements-dev.txt
+          echo "dependency_install=ok" | tee reports/deps-status.txt
+          pip freeze > reports/pip-freeze.txt
+
+      - name: Syntax check (compileall)
+        run: |
+          python -m compileall -q api db pipeline intelligence config scraper
+          echo "syntax_check=ok" | tee -a reports/deps-status.txt
+
+      - name: Import smoke (core packages)
+        run: |
+          python - <<'PY'
+          import importlib
+          mods = [
+              "api.main",
+              "db.models",
+              "db.db_safety",
+              "pipeline.unified_opportunities",
+              "pipeline.competitive_intel.service",
+              "pipeline.company_resolution",
+              "pipeline.company_canonical_merge",
+          ]
+          failed = []
+          for name in mods:
+              try:
+                  importlib.import_module(name)
+                  print(f"OK  {name}")
+              except Exception as exc:  # noqa: BLE001 — report all import failures
+                  failed.append((name, exc))
+                  print(f"FAIL {name}: {exc}")
+          if failed:
+              raise SystemExit(1)
+          print("import_smoke=ok")
+          PY
+          echo "import_smoke=ok" | tee -a reports/deps-status.txt
+
+      - name: Formatting check (ruff format)
+        continue-on-error: true
+        run: |
+          # Advisory in Phase 1: large pre-existing format drift must not block the test gate.
+          ruff format --check api db pipeline intelligence config || {
+            echo "format_check=drift" | tee -a reports/deps-status.txt
+            echo "::warning::ruff format drift (advisory Phase 1)"
+          }
+
+      - name: Static analysis (ruff — syntax / undefined names)
+        continue-on-error: true
+        run: |
+          # Advisory until known F821 debt in pipeline/ is cleaned in a follow-up PR.
+          ruff check api db pipeline intelligence config --config ruff.toml || {
+            echo "ruff_check=issues" | tee -a reports/deps-status.txt
+            echo "::warning::ruff check reported issues (advisory Phase 1)"
+          }
+
+      - name: Unit test suite (blocking)
+        run: |
+          set -euo pipefail
+          START=$(date +%s)
+          pytest tests/unit \
+            -v \
+            --tb=short \
+            --cov=api --cov=db --cov=pipeline --cov=intelligence \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:reports/coverage.xml \
+            --junitxml=reports/unit-junit.xml \
+            | tee reports/pytest-unit.txt
+          END=$(date +%s)
+          echo "pytest_elapsed_seconds=$((END-START))" | tee reports/timing.txt
+
+      - name: CI report
+        if: always()
+        run: |
+          python scripts/ci_report_summary.py \
+            --reports-dir reports \
+            --repo bc-tender-scraper \
+            --out reports/ci-report.md \
+            --soft
+          {
+            echo ""
+            echo "## Environment"
+            cat reports/environment.txt
+            echo ""
+            echo "## Dependency / static status"
+            cat reports/deps-status.txt
+            if [ -f reports/timing.txt ]; then
+              echo ""
+              echo "## Timing"
+              cat reports/timing.txt
+            fi
+          } >> reports/ci-report.md
+          cat reports/ci-report.md
+
+      - name: Upload CI reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-reports-scraper-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14

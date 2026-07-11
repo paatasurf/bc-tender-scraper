@@ -113,15 +113,33 @@ def test_expired_deadline_zero_freshness():
 
 
 def test_location_does_not_use_street_address():
-    company = _company(
+    """Street-only neighborhoods must not score; city parsed from address is allowed."""
+    street_only = _company(
+        neighborhoods=["123 Main Street"],
+        primary_city="",
+        primary_province="",
+        geographic_reach="",
+        google_address="",
+    )
+    factor = score_location(
+        street_only, _federal_tender(location="Vancouver BC"), "federal"
+    )
+    assert factor.points == 0
+
+    # City/region from a formatted address is constitution-compliant (not street matching).
+    with_city_in_address = _company(
         neighborhoods=[],
         primary_city="",
         primary_province="",
         geographic_reach="",
         google_address="123 Main Street, Victoria, BC",
     )
-    factor = score_location(company, _federal_tender(location="Victoria BC"), "federal")
-    assert factor.points == 0
+    city_factor = score_location(
+        with_city_in_address, _federal_tender(location="Victoria BC"), "federal"
+    )
+    assert city_factor.points > 0
+    assert "street" not in (city_factor.detail or "").lower()
+    assert "victoria" in (city_factor.detail or "").lower()
 
 
 def test_location_uses_neighborhood_tokens():

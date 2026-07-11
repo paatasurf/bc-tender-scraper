@@ -33,6 +33,7 @@ def make_cip(
         normalized_project_types=["building"],
         sector_focus=sector_focus or {"institutional": 0.6, "commercial": 0.4},
         dominant_sector="institutional",
+        sector_confidence="high",
         work_orientation="construction",
         buyer_types=["municipal"],
         client_types=[],
