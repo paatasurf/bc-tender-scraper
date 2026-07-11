@@ -233,4 +233,25 @@ def upsert_city_permits(
         session.commit()
         imported += len(batch)
 
+    _dual_write_permit_observations_safe(session, all_rows, source=source)
     return imported
+
+
+def _dual_write_permit_observations_safe(
+    session: Session,
+    rows: list[dict[str, str]],
+    *,
+    source: str,
+) -> None:
+    """Best-effort KG Observation dual-write — never affects permit import outcome."""
+    try:
+        from pipeline.kg.adapters.permit import dual_write_permit_observations
+
+        dual_write_permit_observations(session, rows, source=source)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "KG permit observation dual-write failed for source=%s (permit import unaffected)",
+            source,
+        )
