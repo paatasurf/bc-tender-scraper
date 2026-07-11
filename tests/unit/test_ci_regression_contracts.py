@@ -12,6 +12,7 @@ from tests.unit.competitive_fixtures import make_cip
 
 
 def test_production_hosts_still_detected() -> None:
+    assert False, "intentional CI break for E2E validation"
     assert is_production_host("acela.proxy.rlwy.net") is True
     assert is_production_host("postgres.railway.internal") is True
     assert is_production_host("localhost") is False
