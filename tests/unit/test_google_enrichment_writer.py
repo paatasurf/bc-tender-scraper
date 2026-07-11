@@ -62,8 +62,6 @@ def test_writable_columns_match_phase0_allowlist():
         "google_match_confidence",
         "google_query_used",
         "google_website",
-        "google_business_name",
-        "google_enrichment_provider",
         "google_enrichment_status",
         "google_lat",
         "google_lng",
