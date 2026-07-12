@@ -21,9 +21,7 @@ def test_production_database_url_refusal_contract() -> None:
     assert is_production_database_url(
         "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     )
-    assert not is_production_database_url(
-        "postgresql://u:p@localhost:5432/bc_tenders"
-    )
+    assert not is_production_database_url("postgresql://u:p@localhost:5432/bc_tenders")
 
 
 def test_cip_schema_requires_sector_confidence() -> None:
@@ -70,7 +68,10 @@ def test_quality_gate_workflow_allows_skipped_opencode_review() -> None:
 
     workflow = Path(".github/workflows/quality-gate.yml").read_text(encoding="utf-8")
     assert "if: github.event_name == 'pull_request'" in workflow
-    assert 'if [ "$job" = "opencode-review" ] && [ "$result" = "skipped" ]; then' in workflow
+    assert (
+        'if [ "$job" = "opencode-review" ] && [ "$result" = "skipped" ]; then'
+        in workflow
+    )
     assert (
         "needs.quality-gate.result == 'success'" in workflow
     ), "deploy must be explicitly gated on a green Quality Gate"
