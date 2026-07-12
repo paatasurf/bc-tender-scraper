@@ -344,6 +344,11 @@ jobs:
         run: |
           set -euo pipefail
           bash <(curl -fsSL cli.new)
+          # The installer only wires `railway` into ~/.bash_profile for future
+          # login shells; each subsequent step here runs a fresh non-login
+          # shell that won't source it. Export the install dir via
+          # GITHUB_PATH so later steps in this job can find the binary.
+          echo "$HOME/.railway/bin" >> "$GITHUB_PATH"
 
       - name: Deploy to Railway
         id: railway_deploy
