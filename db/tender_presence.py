@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Sequence, Type
 
 from sqlalchemy import case, func, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
+from db.constants import BATCH_SIZE
 from db.lifecycle_constants import LIFECYCLE_IMPORT_SKIP_COLUMNS
 from db.models import ArchTender, CommercialTender, Tender
+from shared.datetime_utils import utc_now
 
 TENDER_CONTENT_COLUMNS: tuple[str, ...] = (
     "title",
@@ -50,7 +51,7 @@ PRESENCE_SKIP_ON_UPDATE = frozenset({"id", "scraped_at", "first_seen_at"}) | LIF
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def _stamp_presence_for_insert(row: dict[str, Any], *, seen_at: datetime) -> dict[str, Any]:

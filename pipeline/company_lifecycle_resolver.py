@@ -25,6 +25,7 @@ from db.company_lifecycle_constants import (
 )
 from db.models import Company, ContractAward, TenderOutcome
 from pipeline.lifecycle_resolver import has_manual_lifecycle_override
+from shared.datetime_utils import normalize_dt, parse_iso_date, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -38,25 +39,15 @@ class CompanyLifecycleSnapshot:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def _normalize_dt(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+    return normalize_dt(value)
 
 
 def _parse_iso_date(raw: str | None) -> date | None:
-    if not raw:
-        return None
-    text_value = str(raw).strip().replace("/", "-")[:10]
-    try:
-        return date.fromisoformat(text_value)
-    except ValueError:
-        return None
+    return parse_iso_date(raw)
 
 
 def iso_date_to_activity_timestamp(raw: str | None) -> datetime | None:

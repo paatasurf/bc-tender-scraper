@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from shared.datetime_utils import utc_now
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _STATE_PATH = _PROJECT_ROOT / ".pipeline" / "run_coordinator.json"
@@ -42,7 +44,7 @@ class RunState:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def _iso(dt: datetime) -> str:

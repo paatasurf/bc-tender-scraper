@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
+
+from shared.datetime_utils import utc_now
 
 from db.connection import get_session, init_db
 from db.import_contract_awards import import_contract_awards
@@ -48,7 +50,7 @@ AUXILIARY_SCRAPER_RUNNERS: tuple[tuple[str, Any], ...] = (
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def run_tender_scrapers(run_id: str) -> dict[str, Any]:

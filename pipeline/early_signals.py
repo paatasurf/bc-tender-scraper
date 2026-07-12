@@ -20,6 +20,7 @@ from pipeline.opportunity_discovery import (
     _score_construction_permit,
 )
 from pipeline.scoring.explain import BreakdownFactor
+from shared.datetime_utils import parse_iso_date
 
 Kind = Literal["construction", "architecture"]
 SignalType = Literal[
@@ -44,12 +45,7 @@ SIGNAL_TYPE_LABELS: dict[str, str] = {
 
 
 def _parse_iso_date(raw: str | None) -> date | None:
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(str(raw).replace("/", "-")[:10])
-    except ValueError:
-        return None
+    return parse_iso_date(raw)
 
 
 def pipeline_lag_days(permit: Permit) -> int | None:

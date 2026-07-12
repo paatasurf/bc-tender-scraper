@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
@@ -13,6 +12,7 @@ from scraper.config import (
     SURREY_PERMITS_CSV,
     SURREY_SOURCE,
 )
+from scraper.permit_persist import scrape_and_persist_permits
 from scraper.utils import clean_text, create_session, polite_api_get
 
 DEFAULT_PAGE_SIZE = 500
@@ -184,56 +184,18 @@ def iter_surrey_permits(*, days: int | None = None) -> Iterator[dict[str, str]]:
     print(f"[Surrey Permits] Completed pagination: {pages} pages, {fetched} API rows")
 
 
-def _write_csv(records: list[dict[str, str]], *, append: bool) -> None:
-    if not records:
-        return
-    mode = "a" if append else "w"
-    write_header = not append
-    with open(SURREY_PERMITS_CSV, mode, encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
-        if write_header:
-            writer.writeheader()
-        writer.writerows(records)
-
-
 def scrape_surrey_permits(*, days: int | None = None, persist: bool = True) -> dict[str, Any]:
     """Scrape Surrey permits. Full history when days is None; incremental when days > 0."""
     records = list(iter_surrey_permits(days=days))
-    incremental = days is not None and days > 0
-    _write_csv(records, append=incremental)
-
-    result: dict[str, Any] = {
-        "source": SURREY_SOURCE,
-        "city": SURREY_CITY,
-        "mode": "incremental" if incremental else "full",
-        "days": days,
-        "permits_scraped": len(records),
-        "csv_path": SURREY_PERMITS_CSV,
-    }
-
-    if persist and records:
-        from db.connection import get_session, init_db
-        from db.permit_import import upsert_city_permits
-
-        init_db()
-        session = get_session()
-        try:
-            result["permits_persisted"] = upsert_city_permits(
-                session,
-                records,
-                source=SURREY_SOURCE,
-                full_refresh=not incremental,
-            )
-        finally:
-            session.close()
-    else:
-        result["permits_persisted"] = 0
-
-    print(
-        f"[Surrey Permits] Saved {len(records)} permits to {SURREY_PERMITS_CSV}"
-        f" ({result.get('permits_persisted', 0)} persisted)"
+    return scrape_and_persist_permits(
+        records,
+        source=SURREY_SOURCE,
+        city=SURREY_CITY,
+        csv_path=SURREY_PERMITS_CSV,
+        fieldnames=FIELDNAMES,
+        days=days,
+        persist=persist,
     )
-    return result
 
 
 def main() -> None:
