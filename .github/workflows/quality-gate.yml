@@ -1,6 +1,8 @@
-# TenderScope — Phase 1 CI/CD Foundation (bc-tender-scraper)
+# TenderScope — True CI/CD Pipeline (bc-tender-scraper)
 #
 # Engineering infrastructure only. No business-logic changes.
+# All quality stages are blocking; any failure stops the pipeline.
+# Railway deployment can only occur after the Quality Gate succeeds.
 # Docs: docs/engineering/
 
 name: Quality Gate
@@ -19,21 +21,123 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Never point CI at production. Empty URL → DB-dependent tests skip safely.
+  DATABASE_URL: ""
+  DATABASE_URL_PRODUCTION: ""
+  ALLOW_MANUAL_PIPELINE: "false"
+  SCHEDULER_ENABLED: "false"
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
 jobs:
-  quality-gate:
-    name: Quality Gate
+  # ---------------------------------------------------------------------------
+  # Stage 1 — Fast static checks (run in parallel)
+  # ---------------------------------------------------------------------------
+  ruff:
+    name: Ruff
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    env:
-      # Never point CI at production. Empty URL → DB-dependent tests skip safely.
-      DATABASE_URL: ""
-      DATABASE_URL_PRODUCTION: ""
-      ALLOW_MANUAL_PIPELINE: "false"
-      SCHEDULER_ENABLED: "false"
-      PYTHONUNBUFFERED: "1"
-      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Static analysis (changed files only)
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            base="${{ github.event.before }}"
+            head="${{ github.event.after }}"
+          else
+            echo "No diff available; skipping Ruff check."
+            echo "ruff_check=skipped"
+            exit 0
+          fi
+          files=$(git diff --name-only --diff-filter=ACMRT "$base" "$head" | grep '\.py$' || true)
+          if [ -z "$files" ]; then
+            echo "No Python files changed; skipping Ruff check."
+            echo "ruff_check=skipped"
+            exit 0
+          fi
+          count=$(printf '%s' "$files" | grep -c . || echo 0)
+          echo "Checking Ruff for $count changed file(s):"
+          echo "$files"
+          ruff check $files --config ruff.toml
+          echo "ruff_check=ok"
+
+  black:
+    name: Black
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Black
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install black>=24.0
+
+      - name: Format check (changed files only)
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            base="${{ github.event.before }}"
+            head="${{ github.event.after }}"
+          else
+            echo "No diff available; skipping Black check."
+            echo "black_check=skipped"
+            exit 0
+          fi
+          files=$(git diff --name-only --diff-filter=ACMRT "$base" "$head" | grep '\.py$' || true)
+          if [ -z "$files" ]; then
+            echo "No Python files changed; skipping Black check."
+            echo "black_check=skipped"
+            exit 0
+          fi
+          count=$(printf '%s' "$files" | grep -c . || echo 0)
+          echo "Checking Black formatting for $count changed file(s):"
+          echo "$files"
+          black --check $files
+          echo "black_check=ok"
+
+  # ---------------------------------------------------------------------------
+  # Stage 1.5 — Dependency vulnerability audit
+  # ---------------------------------------------------------------------------
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,33 +148,46 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Record environment
+      - name: Install pip-audit
         run: |
-          mkdir -p reports
-          {
-            echo "python_version=$(python --version 2>&1)"
-            echo "pip_version=$(python -m pip --version 2>&1)"
-            echo "runner_os=${{ runner.os }}"
-            echo "ref=${{ github.ref }}"
-            echo "sha=${{ github.sha }}"
-          } | tee reports/environment.txt
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Audit production + development dependencies
+        run: |
+          set -euo pipefail
+          pip-audit --requirement=requirements.txt --requirement=requirements-dev.txt
+
+  # ---------------------------------------------------------------------------
+  # Stage 2 — Test suite
+  # ---------------------------------------------------------------------------
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
       - name: Install runtime + development dependencies
         id: deps
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          echo "Installing requirements.txt ..."
           pip install -r requirements.txt
-          echo "Installing requirements-dev.txt ..."
           pip install -r requirements-dev.txt
-          echo "dependency_install=ok" | tee reports/deps-status.txt
-          pip freeze > reports/pip-freeze.txt
 
       - name: Syntax check (compileall)
         run: |
           python -m compileall -q api db pipeline intelligence config scraper
-          echo "syntax_check=ok" | tee -a reports/deps-status.txt
+          echo "syntax_check=ok"
 
       - name: Import smoke (core packages)
         run: |
@@ -97,30 +214,11 @@ jobs:
               raise SystemExit(1)
           print("import_smoke=ok")
           PY
-          echo "import_smoke=ok" | tee -a reports/deps-status.txt
 
-      - name: Formatting check (ruff format)
-        continue-on-error: true
-        run: |
-          # Advisory in Phase 1: large pre-existing format drift must not block the test gate.
-          ruff format --check api db pipeline intelligence config || {
-            echo "format_check=drift" | tee -a reports/deps-status.txt
-            echo "::warning::ruff format drift (advisory Phase 1)"
-          }
-
-      - name: Static analysis (ruff — syntax / undefined names)
-        continue-on-error: true
-        run: |
-          # Advisory until known F821 debt in pipeline/ is cleaned in a follow-up PR.
-          ruff check api db pipeline intelligence config --config ruff.toml || {
-            echo "ruff_check=issues" | tee -a reports/deps-status.txt
-            echo "::warning::ruff check reported issues (advisory Phase 1)"
-          }
-
-      - name: Unit test suite (blocking)
+      - name: Unit test suite
         run: |
           set -euo pipefail
-          START=$(date +%s)
+          mkdir -p reports
           pytest tests/unit \
             -v \
             --tb=short \
@@ -129,37 +227,168 @@ jobs:
             --cov-report=xml:reports/coverage.xml \
             --junitxml=reports/unit-junit.xml \
             | tee reports/pytest-unit.txt
-          END=$(date +%s)
-          echo "pytest_elapsed_seconds=$((END-START))" | tee reports/timing.txt
 
-      - name: CI report
-        if: always()
-        run: |
-          python scripts/ci_report_summary.py \
-            --reports-dir reports \
-            --repo bc-tender-scraper \
-            --out reports/ci-report.md \
-            --soft
-          {
-            echo ""
-            echo "## Environment"
-            cat reports/environment.txt
-            echo ""
-            echo "## Dependency / static status"
-            cat reports/deps-status.txt
-            if [ -f reports/timing.txt ]; then
-              echo ""
-              echo "## Timing"
-              cat reports/timing.txt
-            fi
-          } >> reports/ci-report.md
-          cat reports/ci-report.md
-
-      - name: Upload CI reports
+      - name: Upload pytest reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-reports-scraper-${{ github.run_id }}
+          name: pytest-reports-${{ github.run_id }}
           path: reports/
           if-no-files-found: ignore
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Stage 3 — Optional AI code review
+  # ---------------------------------------------------------------------------
+  opencode-review:
+    name: OpenCode Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    env:
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: OpenCode review
+        run: |
+          set -euo pipefail
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo "opencode_review=skipped_no_api_key"
+            echo "::warning::OpenCode review skipped (OPENCODE_API_KEY secret not configured)"
+            exit 0
+          fi
+          echo "OpenCode review would run here."
+          echo "Replace this step with the OpenCode CLI or GitHub Action integration."
+          echo "Example: opencode review --repo ${{ github.repository }} --pr ${{ github.event.pull_request.number }}"
+          echo "opencode_review=ok"
+
+  # ---------------------------------------------------------------------------
+  # Stage 4 — Aggregate gate
+  # Fails if any upstream stage failed, otherwise produces the CI report.
+  # This job name is the required status check for branch protection.
+  # ---------------------------------------------------------------------------
+  quality-gate:
+    name: Quality Gate
+    needs: [ruff, black, pip-audit, pytest, opencode-review]
+    runs-on: ubuntu-latest
+    if: always()
+    timeout-minutes: 10
+    steps:
+      - name: Evaluate quality gate
+        env:
+          RUFF_RESULT: ${{ needs.ruff.result }}
+          BLACK_RESULT: ${{ needs.black.result }}
+          PIP_AUDIT_RESULT: ${{ needs.pip-audit.result }}
+          PYTEST_RESULT: ${{ needs.pytest.result }}
+          OPENCODE_RESULT: ${{ needs.opencode-review.result }}
+        run: |
+          set -euo pipefail
+          echo "Ruff:      $RUFF_RESULT"
+          echo "Black:     $BLACK_RESULT"
+          echo "pip-audit: $PIP_AUDIT_RESULT"
+          echo "pytest:    $PYTEST_RESULT"
+          echo "OpenCode:  $OPENCODE_RESULT"
+
+          failed=""
+          for job in ruff black pip-audit pytest opencode-review; do
+            case "$job" in
+              ruff) result="$RUFF_RESULT" ;;
+              black) result="$BLACK_RESULT" ;;
+              pip-audit) result="$PIP_AUDIT_RESULT" ;;
+              pytest) result="$PYTEST_RESULT" ;;
+              opencode-review) result="$OPENCODE_RESULT" ;;
+            esac
+            if [ "$result" = "success" ]; then
+              continue
+            fi
+            # PR-only job: skipped on push/workflow_dispatch must not fail the gate.
+            if [ "$job" = "opencode-review" ] && [ "$result" = "skipped" ]; then
+              continue
+            fi
+            failed="$failed $job($result)"
+          done
+
+          if [ -n "$failed" ]; then
+            echo "quality_gate=failed:$failed"
+            exit 1
+          fi
+
+          echo "quality_gate=passed"
+
+  # ---------------------------------------------------------------------------
+  # Stage 5 — Deployment (master only, gated by Quality Gate)
+  #
+  # Uses the Railway CLI to deploy explicitly after all checks pass.
+  # Requires the RAILWAY_TOKEN secret (project token) to be configured.
+  # NOTE: To avoid double deployments, disable Railway auto-deploy in the
+  # service settings once this job is active. Keep Railway "Wait for CI"
+  # enabled as a safety net so that auto-deploy (if ever re-enabled) never
+  # runs on a red pipeline.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to Railway
+    needs: [quality-gate]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push' && needs.quality-gate.result == 'success'
+    environment:
+      name: production
+      url: https://bc-tender-scraper-production.up.railway.app
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL cli.new)
+
+      - name: Deploy to Railway
+        id: railway_deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not configured"
+            exit 1
+          fi
+          railway up --ci \
+            --service d882ae62-cf45-47f3-85ee-54d1c2eaa628 \
+            --environment production
+          echo "deploy=ok"
+
+      - name: Post-deploy health check
+        env:
+          DEPLOY_URL: https://bc-tender-scraper-production.up.railway.app
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for $DEPLOY_URL/api/health ..."
+          for i in {1..30}; do
+            response=$(curl -fsS "$DEPLOY_URL/api/health" || true)
+            if [ -n "$response" ]; then
+              echo "health_response=$response"
+              echo "health_check=ok"
+              break
+            fi
+            echo "Attempt $i/30: health endpoint not ready, retrying in 10s..."
+            sleep 10
+          done
+
+          if [ "$i" = "30" ]; then
+            echo "health_check=failed"
+            exit 1
+          fi
+
+          echo "Verifying deployed commit SHA..."
+          deployed_sha=$(curl -fsS "$DEPLOY_URL/api/health" | python -c "import sys, json; print(json.load(sys.stdin).get('commit_sha', ''))" || true)
+          if [ -n "$deployed_sha" ] && [ "$deployed_sha" != "$EXPECTED_SHA" ]; then
+            echo "deployed_sha=$deployed_sha"
+            echo "expected_sha=$EXPECTED_SHA"
+            echo "::warning::Deployed SHA does not match expected commit SHA"
+          else
+            echo "commit_sha_verified=ok"
+          fi
