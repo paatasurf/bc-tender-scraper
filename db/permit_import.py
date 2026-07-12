@@ -214,7 +214,10 @@ def upsert_city_permits(
         keyed_for_batch.append(row)
 
     for start in range(0, len(keyed_for_batch), BATCH_SIZE):
-        batch = keyed_for_batch[start : start + BATCH_SIZE]
+        batch = [
+            _importable_row_values(row, source=source)
+            for row in keyed_for_batch[start : start + BATCH_SIZE]
+        ]
         stmt = insert(_PERMIT_TABLE).values(batch)
         if full_refresh:
             session.execute(stmt)
