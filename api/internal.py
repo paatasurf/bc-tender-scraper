@@ -20,6 +20,7 @@ from pipeline.internal_steps import (
     run_odbus_import_step,
     run_orgbook_import_step,
     run_populate_project_contacts_step,
+    run_populate_award_companies_step,
     run_registry_verification_match_step,
     run_construction_tiers_step,
 )
@@ -711,7 +712,7 @@ def get_runs_for_id(run_id: str) -> dict[str, Any]:
 
 @router.get("/google-enrichment/metrics")
 def google_enrichment_metrics(request: Request) -> dict[str, Any]:
-    """Operational health metrics for Google enrichment (internal ops only)."""
+    """Aggregated Google enrichment inventory + ops health (internal monitoring only)."""
     _require_internal_key(request)
     from db.connection import init_db
     from pipeline.google_enrichment.metrics import get_google_enrichment_metrics
@@ -755,6 +756,37 @@ def google_enrichment_run(
         _worker,
         run_id=payload.run_id,
     )
+
+
+@router.get("/kg/validation-snapshot")
+def kg_validation_snapshot(request: Request) -> dict[str, Any]:
+    """Read-only P1/P2 staging gate metrics (X-Internal-Key required)."""
+    _require_internal_key(request)
+    from pipeline.kg_validation_snapshot import collect_kg_validation_snapshot
+
+    session = get_session()
+    try:
+        return collect_kg_validation_snapshot(session)
+    finally:
+        session.close()
+
+
+@router.post("/kg/populate-award-companies")
+def kg_populate_award_companies(
+    request: Request,
+    dry_run: bool = Query(True, description="When true, no company inserts (shadow-safe)."),
+    sync: bool = Query(True, description="Must be true; sync run for staging validation."),
+    run_id: str | None = Query(None, max_length=36),
+) -> dict[str, Any]:
+    """Award population cycle for P2 shadow validation (X-Internal-Key required)."""
+    _require_internal_key(request)
+    if not sync:
+        raise HTTPException(status_code=400, detail="Only sync=true is supported for this endpoint")
+
+    def _worker() -> dict[str, Any]:
+        return run_populate_award_companies_step(dry_run=dry_run)
+
+    return _run_step_sync("populate-award-companies", _worker, run_id)
 
 
 @router.post("/send-alerts")

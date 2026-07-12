@@ -117,6 +117,21 @@ def populate_companies_from_awards(
         f"({duplicate_spellings_collapsed} duplicate spellings collapsed)"
     )
 
+    gateway_stats: dict[str, int] = {}
+    try:
+        from pipeline.registry_gateway import get_registry_gateway
+
+        payload, gateway_stats = get_registry_gateway(session).filter_award_populate_payload(
+            payload,
+            trigger_source="contract_awards",
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "[AwardCompanies] Registry Gateway filter failed — proceeding with legacy path"
+        )
+
     if dry_run:
         print("[AwardCompanies] Dry run — no rows inserted")
         return {
@@ -127,6 +142,8 @@ def populate_companies_from_awards(
             "skipped_existing": skipped_existing,
             "skipped_junk": skipped_junk,
             "duplicate_spellings_collapsed": duplicate_spellings_collapsed,
+            "gateway_blocked": gateway_stats.get("blocked", 0),
+            "gateway_logged": gateway_stats.get("logged", 0),
         }
 
     table = Company.__table__
@@ -147,4 +164,6 @@ def populate_companies_from_awards(
         "skipped_existing": skipped_existing,
         "skipped_junk": skipped_junk,
         "duplicate_spellings_collapsed": duplicate_spellings_collapsed,
+        "gateway_blocked": gateway_stats.get("blocked", 0),
+        "gateway_logged": gateway_stats.get("logged", 0),
     }

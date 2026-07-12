@@ -78,6 +78,17 @@ def run_populate_project_contacts_step() -> dict[str, Any]:
         session.close()
 
 
+def run_populate_award_companies_step(*, dry_run: bool = True) -> dict[str, Any]:
+    init_db()
+    session = get_session()
+    try:
+        from pipeline.populate_companies_from_awards import populate_companies_from_awards
+
+        return populate_companies_from_awards(session, dry_run=dry_run)
+    finally:
+        session.close()
+
+
 def run_odbus_import_step(csv_path: str) -> dict[str, Any]:
     init_db()
     session = get_session()

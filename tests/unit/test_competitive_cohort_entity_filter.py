@@ -33,18 +33,25 @@ def test_filter_construction_peer_pool_drops_person_standalone_names():
         entity_role=ENTITY_ROLE_STANDALONE,
         company_type="General Contractor",
     )
+    nickname_person = make_company(
+        id=7873,
+        name="Yi Chieh (Ashanti) Lee",
+        entity_role=ENTITY_ROLE_STANDALONE,
+        company_type="General Contractor",
+    )
     dba_gc = make_company(
         id=8638,
         name="Jack Hui DBA: Pontem Group",
         entity_role=ENTITY_ROLE_STANDALONE,
     )
 
-    filtered = filter_construction_peer_pool([real_gc, tijana, shalindro, dba_gc])
+    filtered = filter_construction_peer_pool([real_gc, tijana, shalindro, nickname_person, dba_gc])
     names = {row.name for row in filtered}
     assert "Pacific Build Co Ltd" in names
     assert "Jack Hui DBA: Pontem Group" in names
     assert "Tijana Sljivic" not in names
     assert "Shalindro Dosanjh" not in names
+    assert "Yi Chieh (Ashanti) Lee" not in names
 
 
 def test_fetch_cohort_rows_applies_analytics_entity_filter_for_construction():

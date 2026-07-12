@@ -279,6 +279,7 @@ class CompanyApplicantAlias(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+
 class CompanyCanonicalMergeRun(Base):
     __tablename__ = "company_canonical_merge_runs"
 
@@ -348,7 +349,6 @@ class MarketRegistry(Base):
     normalized_city: Mapped[str] = mapped_column(String(100), default="")
     province: Mapped[str] = mapped_column(String(10), default="BC")
     business_number: Mapped[str] = mapped_column(String(30), default="")
-    licence_identifier: Mapped[str] = mapped_column(String(100), default="")
     website: Mapped[str] = mapped_column(String(500), default="")
     registry_identifiers: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     source_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
@@ -627,6 +627,65 @@ class GoogleEnrichmentReview(Base):
     reviewed_by: Mapped[str] = mapped_column(String(100), default="")
     review_notes: Mapped[str] = mapped_column(Text, default="")
     chosen_place_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class KgObservation(Base):
+    """Append-only Knowledge Graph observation (Phase 1 spine).
+
+    Payload is immutable. Status may move to superseded/quarantined; raw_payload is never updated.
+    """
+
+    __tablename__ = "kg_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'1'"))
+    adapter_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'1'"))
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False, server_default=text("''"))
+    superseded_by_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("kg_observations.id"), nullable=True
+    )
+
+
+class KgOutboxEvent(Base):
+    """Transactional outbox skeleton for KG domain events (no consumers in Phase 1)."""
+
+    __tablename__ = "kg_outbox_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(String(40), nullable=False, server_default=text("'observation'"))
+    aggregate_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'pending'"))
+
+
+class KgEngineDecisionRecord(Base):
+    """Registry Gateway decision audit (Phase 2 — shadow/enforce modes)."""
+
+    __tablename__ = "kg_engine_decision_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_path: Mapped[str] = mapped_column(String(120), nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(80), nullable=False, server_default=text("''"))
+    raw_identity: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    canonical_key: Mapped[str] = mapped_column(String(300), nullable=False, server_default=text("''"))
+    company_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    policy_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'1'"))
+    gateway_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'legacy'"))
+    legacy_proceeded: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    reject_reason: Mapped[str] = mapped_column(String(80), nullable=False, server_default=text("''"))
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ArchTender(TenderLifecycleColumnsMixin, Base):
