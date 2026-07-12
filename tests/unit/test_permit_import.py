@@ -9,10 +9,16 @@ import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import CompileError
+
 from db.models import Permit
 from db.permit_import import (
+    _IMPORTABLE_COLUMNS,
+    _SKIP_ON_UPDATE,
     _clamp_permit_row,
     _dedupe_permit_rows,
+    _importable_row_values,
     _promote_blank_permit_if_exists,
     upsert_city_permits,
 )
@@ -104,6 +110,76 @@ def test_dedupe_permit_rows_keeps_blank_fingerprint_once():
     keyed, blank = _dedupe_permit_rows(rows)
     assert keyed == []
     assert len(blank) == 1
+
+
+def _mixed_company_resolution_batch() -> list[dict[str, object]]:
+    """Simulate post-_attach_company_ids rows: one resolved, one unresolved."""
+    base = {
+        "external_id": "REPRO-1",
+        "address": "1 Main St",
+        "permit_type": "",
+        "project_value": "",
+        "applicant": "",
+        "issue_date": "",
+        "application_date": "",
+        "description": "",
+        "contractor": "",
+        "local_area": "",
+        "source": "vancouver",
+        "city": "Vancouver",
+    }
+    resolved = {
+        **base,
+        "external_id": "REPRO-RESOLVED",
+        "company_id": 123,
+        "canonical_merge_confidence": 0.9,
+        "canonical_merge_method": "exact_name",
+    }
+    unresolved = {**base, "external_id": "REPRO-UNRESOLVED"}
+    return [resolved, unresolved]
+
+
+def _compile_keyed_permit_upsert(batch: list[dict[str, object]]) -> None:
+    from sqlalchemy.dialects.postgresql import insert
+
+    stmt = insert(Permit.__table__).values(batch)
+    update_cols = {
+        col.name: stmt.excluded[col.name]
+        for col in Permit.__table__.columns
+        if col.name not in _SKIP_ON_UPDATE
+    }
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["source", "external_id"],
+        index_where=text("external_id <> ''"),
+        set_=update_cols,
+    )
+    stmt.compile(dialect=postgresql.dialect())
+
+
+def test_mixed_key_permit_batch_fails_sqlalchemy_compile():
+    """Regression: raw keyed rows after company resolution have uneven dict keys."""
+    batch = _mixed_company_resolution_batch()
+    assert len({tuple(sorted(row.keys())) for row in batch}) == 2
+
+    with pytest.raises(CompileError, match="company_id"):
+        _compile_keyed_permit_upsert(batch)
+
+
+def test_importable_row_values_normalizes_mixed_key_batch_for_insert():
+    """Regression: batch loop must map rows through _importable_row_values before insert."""
+    source = "vancouver"
+    batch = [
+        _importable_row_values(row, source=source)
+        for row in _mixed_company_resolution_batch()
+    ]
+
+    assert all(set(row.keys()) == _IMPORTABLE_COLUMNS for row in batch)
+    assert batch[0]["company_id"] == 123
+    assert batch[1]["company_id"] is None
+    assert batch[1]["canonical_merge_confidence"] is None
+    assert batch[1]["canonical_merge_method"] is None
+
+    _compile_keyed_permit_upsert(batch)
 
 
 def test_clamp_permit_row_truncates_varchar_fields():
