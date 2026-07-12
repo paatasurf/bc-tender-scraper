@@ -132,6 +132,34 @@ jobs:
           echo "black_check=ok"
 
   # ---------------------------------------------------------------------------
+  # Stage 1.5 — Dependency vulnerability audit
+  # ---------------------------------------------------------------------------
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pip-audit
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Audit production + development dependencies
+        run: |
+          set -euo pipefail
+          pip-audit --requirement=requirements.txt --requirement=requirements-dev.txt
+
+  # ---------------------------------------------------------------------------
   # Stage 2 — Test suite
   # ---------------------------------------------------------------------------
   pytest:
@@ -243,7 +271,7 @@ jobs:
   # ---------------------------------------------------------------------------
   quality-gate:
     name: Quality Gate
-    needs: [ruff, black, pytest, opencode-review]
+    needs: [ruff, black, pip-audit, pytest, opencode-review]
     runs-on: ubuntu-latest
     if: always()
     timeout-minutes: 10
@@ -252,20 +280,23 @@ jobs:
         env:
           RUFF_RESULT: ${{ needs.ruff.result }}
           BLACK_RESULT: ${{ needs.black.result }}
+          PIP_AUDIT_RESULT: ${{ needs.pip-audit.result }}
           PYTEST_RESULT: ${{ needs.pytest.result }}
           OPENCODE_RESULT: ${{ needs.opencode-review.result }}
         run: |
           set -euo pipefail
-          echo "Ruff:     $RUFF_RESULT"
-          echo "Black:    $BLACK_RESULT"
-          echo "pytest:   $PYTEST_RESULT"
-          echo "OpenCode: $OPENCODE_RESULT"
+          echo "Ruff:      $RUFF_RESULT"
+          echo "Black:     $BLACK_RESULT"
+          echo "pip-audit: $PIP_AUDIT_RESULT"
+          echo "pytest:    $PYTEST_RESULT"
+          echo "OpenCode:  $OPENCODE_RESULT"
 
           failed=""
-          for job in ruff black pytest opencode-review; do
+          for job in ruff black pip-audit pytest opencode-review; do
             case "$job" in
               ruff) result="$RUFF_RESULT" ;;
               black) result="$BLACK_RESULT" ;;
+              pip-audit) result="$PIP_AUDIT_RESULT" ;;
               pytest) result="$PYTEST_RESULT" ;;
               opencode-review) result="$OPENCODE_RESULT" ;;
             esac
@@ -284,9 +315,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # Stage 5 — Deployment (master only, gated by Quality Gate)
   #
-  # IMPORTANT: To make this the only deployment path, disable Railway
-  # auto-deploy in the Railway project settings and store a Railway token
-  # as the RAILWAY_TOKEN secret. Until then this job is a safe placeholder.
+  # Uses the Railway CLI to deploy explicitly after all checks pass.
+  # Requires the RAILWAY_TOKEN secret (project token) to be configured.
+  # NOTE: To avoid double deployments, disable Railway auto-deploy in the
+  # service settings once this job is active. Keep Railway "Wait for CI"
+  # enabled as a safety net so that auto-deploy (if ever re-enabled) never
+  # runs on a red pipeline.
   # ---------------------------------------------------------------------------
   deploy:
     name: Deploy to Railway
@@ -296,21 +330,60 @@ jobs:
     environment:
       name: production
       url: https://bc-tender-scraper-production.up.railway.app
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Railway CLI
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL cli.new)
+
       - name: Deploy to Railway
+        id: railway_deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "deploy=skipped_no_token"
-            echo "::warning::Railway deployment skipped (RAILWAY_TOKEN secret not configured)"
-            echo "Configure RAILWAY_TOKEN and disable Railway auto-deploy to enable explicit deployment."
-            exit 0
+            echo "::error::RAILWAY_TOKEN secret is not configured"
+            exit 1
           fi
-          echo "deploy=would_run"
-          echo "Replace this step with: railway up"
+          railway up --ci \
+            --service d882ae62-cf45-47f3-85ee-54d1c2eaa628 \
+            --environment production
+          echo "deploy=ok"
+
+      - name: Post-deploy health check
+        env:
+          DEPLOY_URL: https://bc-tender-scraper-production.up.railway.app
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for $DEPLOY_URL/api/health ..."
+          for i in {1..30}; do
+            response=$(curl -fsS "$DEPLOY_URL/api/health" || true)
+            if [ -n "$response" ]; then
+              echo "health_response=$response"
+              echo "health_check=ok"
+              break
+            fi
+            echo "Attempt $i/30: health endpoint not ready, retrying in 10s..."
+            sleep 10
+          done
+
+          if [ "$i" = "30" ]; then
+            echo "health_check=failed"
+            exit 1
+          fi
+
+          echo "Verifying deployed commit SHA..."
+          deployed_sha=$(curl -fsS "$DEPLOY_URL/api/health" | python -c "import sys, json; print(json.load(sys.stdin).get('commit_sha', ''))" || true)
+          if [ -n "$deployed_sha" ] && [ "$deployed_sha" != "$EXPECTED_SHA" ]; then
+            echo "deployed_sha=$deployed_sha"
+            echo "expected_sha=$EXPECTED_SHA"
+            echo "::warning::Deployed SHA does not match expected commit SHA"
+          else
+            echo "commit_sha_verified=ok"
+          fi
