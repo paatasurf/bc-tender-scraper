@@ -1010,6 +1010,14 @@ def _ensure_registry_gateway_schema(engine) -> None:
             conn.execute(text(statement))
 
 
+def _ensure_permit_company_columns(engine) -> None:
+    from db.permit_company_ddl import permit_company_migration_statements
+
+    with engine.begin() as conn:
+        for statement in permit_company_migration_statements():
+            conn.execute(text(statement))
+
+
 def _run_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_tender_matches_table(engine)
@@ -1030,6 +1038,7 @@ def _run_migrations(engine: Engine) -> None:
     _ensure_tender_lifecycle_columns(engine)
     _ensure_lifecycle_delisted_status(engine)
     _ensure_permit_lifecycle_columns(engine)
+    _ensure_permit_company_columns(engine)
     _ensure_company_lifecycle_columns(engine)
     _ensure_google_enrichment_schema(engine)
     _ensure_company_canonical_merge_schema(engine)
