@@ -74,7 +74,7 @@ def _dedupe_permit_rows(
 
 
 def _importable_row_values(row: dict[str, str], *, source: str) -> dict[str, object]:
-    values = {key: row[key] for key in _IMPORTABLE_COLUMNS if key in row}
+    values = {key: row.get(key) for key in _IMPORTABLE_COLUMNS}
     values.setdefault("source", source)
     return values
 
