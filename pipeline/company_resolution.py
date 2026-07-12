@@ -206,14 +206,30 @@ class CompanyResolver:
             company_id = _pick_primary_id(self.session, existing_ids, forced_id=forced_id)
         elif create_if_missing:
             insert_name = _clamp_name(parsed.display_name)
-            company_id, created = self._create_company(
-                name=insert_name,
-                display_name=parsed.display_name,
+            allowed, reject_reason = self._gateway_allow_create(
+                raw_name=cleaned,
                 canonical_key=key,
-                signatory=parsed.signatory if parsed.has_dba else "",
-                confidence=confidence,
+                trigger_source=source,
                 method=method,
             )
+            if allowed:
+                company_id, created = self._create_company(
+                    name=insert_name,
+                    display_name=parsed.display_name,
+                    canonical_key=key,
+                    signatory=parsed.signatory if parsed.has_dba else "",
+                    confidence=confidence,
+                    method=method,
+                    trigger_source=source,
+                    raw_name=cleaned,
+                )
+            elif gateway_enforce_logs_enabled():
+                logger.info(
+                    "[CompanyResolver] gateway blocked create raw=%r reason=%s source=%s",
+                    cleaned,
+                    reject_reason,
+                    source,
+                )
 
         if company_id is not None:
             self._key_to_ids.setdefault(key, set()).add(company_id)
@@ -263,6 +279,27 @@ class CompanyResolver:
                 return True
         return False
 
+    def _gateway_allow_create(
+        self,
+        *,
+        raw_name: str,
+        canonical_key: str,
+        trigger_source: str,
+        method: str,
+    ) -> tuple[bool, str]:
+        try:
+            from pipeline.registry_gateway import get_registry_gateway
+
+            return get_registry_gateway(self.session).allow_resolver_create(
+                raw_name=raw_name,
+                canonical_key=canonical_key,
+                trigger_source=trigger_source,
+                method=method,
+            )
+        except Exception:
+            logger.exception("[CompanyResolver] gateway check failed вЂ” allowing legacy create")
+            return True, ""
+
     def _create_company(
         self,
         *,
@@ -272,6 +309,8 @@ class CompanyResolver:
         signatory: str,
         confidence: float,
         method: str,
+        trigger_source: str = "",
+        raw_name: str = "",
     ) -> tuple[int, bool]:
         existing = self.session.execute(
             select(Company.id).where(func.lower(Company.name) == name.lower())
@@ -291,7 +330,49 @@ class CompanyResolver:
         self.session.add(company)
         self.session.flush()
         self._id_to_row[int(company.id)] = company
+        self._gateway_record_create(
+            raw_name=raw_name or display_name,
+            canonical_key=canonical_key,
+            trigger_source=trigger_source,
+            company_id=int(company.id),
+            method=method,
+            confidence=confidence,
+        )
         return int(company.id), True
+
+    def _gateway_record_create(
+        self,
+        *,
+        raw_name: str,
+        canonical_key: str,
+        trigger_source: str,
+        company_id: int,
+        method: str,
+        confidence: float,
+    ) -> None:
+        try:
+            from pipeline.registry_gateway import get_registry_gateway
+
+            get_registry_gateway(self.session).record_resolver_create_outcome(
+                raw_name=raw_name,
+                canonical_key=canonical_key,
+                trigger_source=trigger_source,
+                company_id=company_id,
+                created=True,
+                method=method,
+                confidence=confidence,
+            )
+        except Exception:
+            logger.exception("[CompanyResolver] gateway record failed вЂ” create succeeded")
+
+
+def gateway_enforce_logs_enabled() -> bool:
+    try:
+        from pipeline.registry_gateway.flags import gateway_enforce_enabled
+
+        return gateway_enforce_enabled()
+    except Exception:
+        return False
 
 
 def _clamp_name(value: str) -> str:
@@ -340,7 +421,7 @@ def _pick_primary_id(
     if not companies:
         return sorted(company_ids)[0]
 
-    # Follow alias → canonical; then prefer canonical entity_role over standalone.
+    # Follow alias в†’ canonical; then prefer canonical entity_role over standalone.
     targets: dict[int, Company] = {}
     for company in companies:
         if (
