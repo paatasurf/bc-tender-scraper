@@ -62,3 +62,15 @@ def test_company_intelligence_profile_fields_stable() -> None:
         "sector_focus",
     }
     assert required.issubset(set(fields.keys()))
+
+
+def test_quality_gate_workflow_allows_skipped_opencode_review() -> None:
+    """OpenCode runs only on pull_request; push/workflow_dispatch must not fail the gate."""
+    from pathlib import Path
+
+    workflow = Path(".github/workflows/quality-gate.yml").read_text(encoding="utf-8")
+    assert "if: github.event_name == 'pull_request'" in workflow
+    assert 'if [ "$job" = "opencode-review" ] && [ "$result" = "skipped" ]; then' in workflow
+    assert (
+        "needs.quality-gate.result == 'success'" in workflow
+    ), "deploy must be explicitly gated on a green Quality Gate"

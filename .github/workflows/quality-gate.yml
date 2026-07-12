@@ -300,9 +300,14 @@ jobs:
               pytest) result="$PYTEST_RESULT" ;;
               opencode-review) result="$OPENCODE_RESULT" ;;
             esac
-            if [ "$result" != "success" ]; then
-              failed="$failed $job($result)"
+            if [ "$result" = "success" ]; then
+              continue
             fi
+            # PR-only job: skipped on push/workflow_dispatch must not fail the gate.
+            if [ "$job" = "opencode-review" ] && [ "$result" = "skipped" ]; then
+              continue
+            fi
+            failed="$failed $job($result)"
           done
 
           if [ -n "$failed" ]; then
@@ -326,7 +331,7 @@ jobs:
     name: Deploy to Railway
     needs: [quality-gate]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push' && needs.quality-gate.result == 'success'
     environment:
       name: production
       url: https://bc-tender-scraper-production.up.railway.app
