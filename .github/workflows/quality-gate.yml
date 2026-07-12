@@ -331,7 +331,7 @@ jobs:
     name: Deploy to Railway
     needs: [quality-gate]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push' && needs.quality-gate.result == 'success'
+    if: always() && github.ref == 'refs/heads/master' && github.event_name == 'push' && needs.quality-gate.result == 'success'
     environment:
       name: production
       url: https://bc-tender-scraper-production.up.railway.app
