@@ -44,6 +44,12 @@ def test_production_url_detection() -> None:
     assert is_production_database_url(local) is False
 
 
+def test_production_url_detection_warns_on_unparseable_url(capsys) -> None:
+    assert is_production_database_url("garbage") is False
+    err = capsys.readouterr().err
+    assert "[db_safety] Could not parse DATABASE_URL" in err
+
+
 def test_readonly_banner_on_simulated_production(capsys) -> None:
     url = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     print_database_banner(script_name="test_script.py", url=url, mode="READ-ONLY")
@@ -68,7 +74,9 @@ def test_destructive_allows_local(capsys) -> None:
     with patch("db.db_safety.load_app_env"):
         with patch("db.db_safety.resolve_script_database_url", return_value=url):
             with patch("db.db_safety.apply_script_database_url", return_value=url):
-                result = guard_destructive_db(script_name="merge.py", allow_production=False)
+                result = guard_destructive_db(
+                    script_name="merge.py", allow_production=False
+                )
     assert result == url
     out = capsys.readouterr().out
     assert "Environment: LOCAL" in out
@@ -87,10 +95,14 @@ def test_allow_production_requires_confirmation_phrase(capsys) -> None:
     prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     local = "postgresql://u:p@localhost:5432/bc_tenders"
     with patch("db.db_safety.load_app_env"):
-        with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+        with patch(
+            "db.db_safety.resolve_script_database_url", side_effect=[local, prod]
+        ):
             with patch("db.db_safety.apply_script_database_url", return_value=prod):
                 with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
-                    with patch("db.db_safety._input_is_unmocked_builtin", return_value=True):
+                    with patch(
+                        "db.db_safety._input_is_unmocked_builtin", return_value=True
+                    ):
                         with patch("builtins.input", return_value="wrong phrase"):
                             with pytest.raises(SystemExit):
                                 guard_destructive_db(
@@ -107,11 +119,19 @@ def test_allow_production_accepts_confirmation(capsys, tmp_path) -> None:
     log_path = tmp_path / "destructive_operations.log"
     with patch("db.db_safety.DESTRUCTIVE_LOG_PATH", log_path):
         with patch("db.db_safety.load_app_env"):
-            with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+            with patch(
+                "db.db_safety.resolve_script_database_url", side_effect=[local, prod]
+            ):
                 with patch("db.db_safety.apply_script_database_url", return_value=prod):
-                    with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
-                        with patch("db.db_safety._input_is_unmocked_builtin", return_value=True):
-                            with patch("builtins.input", return_value=PRODUCTION_CONFIRMATION):
+                    with patch(
+                        "db.db_safety._stdin_is_interactive_tty", return_value=True
+                    ):
+                        with patch(
+                            "db.db_safety._input_is_unmocked_builtin", return_value=True
+                        ):
+                            with patch(
+                                "builtins.input", return_value=PRODUCTION_CONFIRMATION
+                            ):
                                 result = guard_destructive_db(
                                     script_name="merge.py",
                                     allow_production=True,
@@ -126,7 +146,9 @@ def test_production_write_refuses_mocked_isatty_with_piped_input(capsys) -> None
     prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     local = "postgresql://u:p@localhost:5432/bc_tenders"
     with patch("db.db_safety.load_app_env"):
-        with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+        with patch(
+            "db.db_safety.resolve_script_database_url", side_effect=[local, prod]
+        ):
             with patch("db.db_safety.apply_script_database_url", return_value=prod):
                 with patch("sys.stdin", io.StringIO(PRODUCTION_CONFIRMATION + "\n")):
                     with patch("sys.stdin.isatty", return_value=True):
@@ -145,7 +167,9 @@ def test_production_write_refuses_mocked_input_function(capsys) -> None:
     prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
     local = "postgresql://u:p@localhost:5432/bc_tenders"
     with patch("db.db_safety.load_app_env"):
-        with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
+        with patch(
+            "db.db_safety.resolve_script_database_url", side_effect=[local, prod]
+        ):
             with patch("db.db_safety.apply_script_database_url", return_value=prod):
                 with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
                     with patch("builtins.input", return_value=PRODUCTION_CONFIRMATION):
@@ -167,7 +191,9 @@ def test_stdin_is_interactive_tty_rejects_stringio_with_mocked_isatty() -> None:
             assert _stdin_is_interactive_tty() is False
 
 
-def test_class_c_allow_production_routes_to_database_url_production(capsys, tmp_path) -> None:
+def test_class_c_allow_production_routes_to_database_url_production(
+    capsys, tmp_path
+) -> None:
     """Class C --apply --allow-production must use DATABASE_URL_PRODUCTION, not local."""
     local = "postgresql://u:p@localhost:5432/bc_tenders"
     prod = "postgresql://u:p@acela.proxy.rlwy.net:47306/railway"
@@ -176,11 +202,21 @@ def test_class_c_allow_production_routes_to_database_url_production(capsys, tmp_
 
     with patch("db.db_safety.DESTRUCTIVE_LOG_PATH", log_path):
         with patch("db.db_safety.load_app_env"):
-            with patch("db.db_safety.resolve_script_database_url", side_effect=[local, prod]):
-                with patch("db.db_safety.apply_script_database_url", return_value=prod) as apply_url:
-                    with patch("db.db_safety._stdin_is_interactive_tty", return_value=True):
-                        with patch("db.db_safety._input_is_unmocked_builtin", return_value=True):
-                            with patch("builtins.input", return_value=PRODUCTION_CONFIRMATION):
+            with patch(
+                "db.db_safety.resolve_script_database_url", side_effect=[local, prod]
+            ):
+                with patch(
+                    "db.db_safety.apply_script_database_url", return_value=prod
+                ) as apply_url:
+                    with patch(
+                        "db.db_safety._stdin_is_interactive_tty", return_value=True
+                    ):
+                        with patch(
+                            "db.db_safety._input_is_unmocked_builtin", return_value=True
+                        ):
+                            with patch(
+                                "builtins.input", return_value=PRODUCTION_CONFIRMATION
+                            ):
                                 result = guard_destructive_db_from_args(
                                     args,
                                     script_name="run_market_registry_load.py",
@@ -202,7 +238,9 @@ def test_class_c_without_allow_production_stays_on_local_database_url(capsys) ->
     args = Namespace(allow_production=False)
 
     with patch("db.db_safety.load_app_env"):
-        with patch("db.db_safety.apply_script_database_url", return_value=local) as apply_url:
+        with patch(
+            "db.db_safety.apply_script_database_url", return_value=local
+        ) as apply_url:
             result = guard_destructive_db_from_args(
                 args,
                 script_name="run_market_registry_load.py",
