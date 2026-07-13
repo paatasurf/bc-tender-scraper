@@ -39,7 +39,10 @@ def test_extract_applicant_from_description_html():
         "<p>Thinkspace Architecture Planning Interior Design has applied to the City of "
         "Vancouver to develop a new two-storey Child Day Care Facility.</p>"
     )
-    assert extract_applicant_from_text(html) == "Thinkspace Architecture Planning Interior Design"
+    assert (
+        extract_applicant_from_text(html)
+        == "Thinkspace Architecture Planning Interior Design"
+    )
 
 
 def test_project_to_enrichment():
@@ -73,7 +76,9 @@ def test_score_project_match_prefers_region_and_type():
     assert score >= 15
 
 
-def test_fetch_detail_fields_logs_and_recovers_on_detail_page_error(monkeypatch, capsys):
+def test_fetch_detail_fields_logs_and_recovers_on_detail_page_error(
+    monkeypatch, capsys
+):
     def _boom(session, url):
         raise RuntimeError("boom")
 
@@ -88,7 +93,9 @@ def test_fetch_detail_fields_logs_and_recovers_on_detail_page_error(monkeypatch,
     assert "boom" in out
 
 
-def test_fetch_detail_fields_logs_and_recovers_on_shapeyourcity_error(monkeypatch, capsys):
+def test_fetch_detail_fields_logs_and_recovers_on_shapeyourcity_error(
+    monkeypatch, capsys
+):
     def _boom(session, url):
         raise RuntimeError("kaboom")
 
