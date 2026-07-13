@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hmac
 import os
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -24,7 +25,7 @@ from pipeline.internal_steps import (
     run_registry_verification_match_step,
     run_construction_tiers_step,
 )
-from pipeline.run_coordinator import PipelineOrderError
+from pipeline.run_coordinator import PipelineOrderError, get_run_state
 from pipeline.lifecycle_resolver import resolve_tender_lifecycle
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
@@ -62,7 +63,9 @@ class InternalRunRequest(BaseModel):
 
 class OdbusImportRequest(BaseModel):
     run_id: str | None = Field(default=None, max_length=36)
-    csv_path: str = Field(..., min_length=1, max_length=1000, description="Path to ODBus_v1.csv")
+    csv_path: str = Field(
+        ..., min_length=1, max_length=1000, description="Path to ODBus_v1.csv"
+    )
 
 
 class OrgbookImportRequest(BaseModel):
@@ -77,8 +80,18 @@ class OrgbookImportRequest(BaseModel):
 
 class VerificationHubImportRequest(BaseModel):
     run_id: str | None = Field(default=None, max_length=36)
-    source: str = Field(..., min_length=1, max_length=30, description="Provider source key (odbus, orgbook).")
-    path: str = Field(..., min_length=1, max_length=1000, description="Path to provider reference export.")
+    source: str = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        description="Provider source key (odbus, orgbook).",
+    )
+    path: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Path to provider reference export.",
+    )
 
 
 class RegistryVerificationMatchRequest(BaseModel):
@@ -137,7 +150,7 @@ def _require_internal_key(request: Request) -> None:
     if not expected:
         raise HTTPException(status_code=403, detail="Forbidden")
     key = request.headers.get("X-Internal-Key")
-    if key != expected:
+    if key is None or not hmac.compare_digest(key, expected):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -164,17 +177,29 @@ def _enqueue_import_step(
     background_tasks: BackgroundTasks,
     run_id: str | None,
 ) -> dict[str, Any]:
-    actual_run_id = run_id or new_run_id()
-    try:
-        assert_import_allowed(actual_run_id if run_id else None)
-    except PipelineOrderError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    actual_run_id = _resolve_import_run_id(run_id)
     return _enqueue_step(
         background_tasks,
         "import-csvs",
         make_gated_import_worker(actual_run_id),
         actual_run_id,
     )
+
+
+def _resolve_import_run_id(run_id: str | None) -> str:
+    try:
+        assert_import_allowed(run_id)
+    except PipelineOrderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if run_id:
+        return run_id
+    state = get_run_state()
+    if state is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Import blocked: no active pipeline run is available for import.",
+        )
+    return state.run_id
 
 
 def _run_status_path(run_id: str) -> str:
@@ -460,9 +485,21 @@ def backfill_closing_at(request: Request) -> dict[str, Any]:
 def import_csvs(
     background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
+    sync: Annotated[
+        bool,
+        Query(description="When true, run import synchronously and return counts."),
+    ] = False,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
-    return _enqueue_import_step(background_tasks, body.run_id if body else None)
+    run_id = body.run_id if body else None
+    if sync:
+        actual_run_id = _resolve_import_run_id(run_id)
+        return _run_step_sync(
+            "import-csvs",
+            make_gated_import_worker(actual_run_id),
+            actual_run_id,
+        )
+    return _enqueue_import_step(background_tasks, run_id)
 
 
 @router.post("/pipeline/tender-data")
@@ -606,7 +643,9 @@ def verification_hub_import(
 
     if sync:
         return _run_step_sync("verification-hub-import", _worker, body.run_id)
-    return _enqueue_step(background_tasks, "verification-hub-import", _worker, body.run_id)
+    return _enqueue_step(
+        background_tasks, "verification-hub-import", _worker, body.run_id
+    )
 
 
 @router.post("/registry-verification/match")
@@ -655,7 +694,9 @@ def construction_tiers(
 
     if sync:
         return _run_step_sync("construction-tiers", _worker, payload.run_id)
-    return _enqueue_step(background_tasks, "construction-tiers", _worker, payload.run_id)
+    return _enqueue_step(
+        background_tasks, "construction-tiers", _worker, payload.run_id
+    )
 
 
 @router.get("/steps/{pipeline_run_id}")
@@ -700,7 +741,9 @@ def get_runs_for_id(run_id: str) -> dict[str, Any]:
     try:
         records = list_runs_for_run_id(session, run_id)
         if not records:
-            raise HTTPException(status_code=404, detail=f"No pipeline runs found for run_id '{run_id}'")
+            raise HTTPException(
+                status_code=404, detail=f"No pipeline runs found for run_id '{run_id}'"
+            )
         return {
             "run_id": run_id,
             "total": len(records),
@@ -774,14 +817,20 @@ def kg_validation_snapshot(request: Request) -> dict[str, Any]:
 @router.post("/kg/populate-award-companies")
 def kg_populate_award_companies(
     request: Request,
-    dry_run: bool = Query(True, description="When true, no company inserts (shadow-safe)."),
-    sync: bool = Query(True, description="Must be true; sync run for staging validation."),
+    dry_run: bool = Query(
+        True, description="When true, no company inserts (shadow-safe)."
+    ),
+    sync: bool = Query(
+        True, description="Must be true; sync run for staging validation."
+    ),
     run_id: str | None = Query(None, max_length=36),
 ) -> dict[str, Any]:
     """Award population cycle for P2 shadow validation (X-Internal-Key required)."""
     _require_internal_key(request)
     if not sync:
-        raise HTTPException(status_code=400, detail="Only sync=true is supported for this endpoint")
+        raise HTTPException(
+            status_code=400, detail="Only sync=true is supported for this endpoint"
+        )
 
     def _worker() -> dict[str, Any]:
         return run_populate_award_companies_step(dry_run=dry_run)
@@ -799,4 +848,3 @@ def send_alerts() -> dict[str, Any]:
     from intelligence.email_alerts import send_all_alert_digests
 
     return send_all_alert_digests()
-
