@@ -174,7 +174,9 @@ class TestIterSearchPages:
         response_empty.text = html_empty
         response_empty.raise_for_status = MagicMock()
 
-        with patch("scraper.job_bank.polite_get", side_effect=[response_with, response_empty]):
+        with patch(
+            "scraper.job_bank.polite_get", side_effect=[response_with, response_empty]
+        ):
             pages = list(_iter_search_pages(MagicMock()))
 
         assert len(pages) == 1

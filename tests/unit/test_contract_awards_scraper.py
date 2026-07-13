@@ -53,10 +53,12 @@ def _make_detail_html(
 
 class TestIterAwardListings:
     def test_yields_listings_from_table(self):
-        html = _make_listing_html([
-            ("Road Repair", "Construction", "2024-01-15", "/award-notice/123"),
-            ("Bridge Work", "Construction", "2024-02-01", "/award-notice/456"),
-        ])
+        html = _make_listing_html(
+            [
+                ("Road Repair", "Construction", "2024-01-15", "/award-notice/123"),
+                ("Bridge Work", "Construction", "2024-02-01", "/award-notice/456"),
+            ]
+        )
         session = MagicMock()
         response = MagicMock()
         response.text = html
@@ -83,10 +85,12 @@ class TestIterAwardListings:
         assert results == []
 
     def test_deduplicates_urls(self):
-        html = _make_listing_html([
-            ("Road Repair", "Construction", "2024-01-15", "/award-notice/123"),
-            ("Road Repair Dup", "Construction", "2024-01-15", "/award-notice/123"),
-        ])
+        html = _make_listing_html(
+            [
+                ("Road Repair", "Construction", "2024-01-15", "/award-notice/123"),
+                ("Road Repair Dup", "Construction", "2024-01-15", "/award-notice/123"),
+            ]
+        )
         response = MagicMock()
         response.text = html
         response.raise_for_status = MagicMock()
@@ -121,7 +125,11 @@ class TestParseAwardDetail:
             award_date="2024-03-15",
         )
         soup = BeautifulSoup(html, "html.parser")
-        listing = {"tender_title": "Highway Paving", "date": "2024-01-01", "url": "https://example.com/award/1"}
+        listing = {
+            "tender_title": "Highway Paving",
+            "date": "2024-01-01",
+            "url": "https://example.com/award/1",
+        }
 
         result = _parse_award_detail(soup, listing)
 
@@ -134,7 +142,11 @@ class TestParseAwardDetail:
     def test_falls_back_to_listing_title_when_no_h1(self):
         html = _make_detail_html(winner="Winner Corp")
         soup = BeautifulSoup(html, "html.parser")
-        listing = {"tender_title": "Fallback Title", "date": "2024-05-01", "url": "http://x.com/1"}
+        listing = {
+            "tender_title": "Fallback Title",
+            "date": "2024-05-01",
+            "url": "http://x.com/1",
+        }
 
         result = _parse_award_detail(soup, listing)
 
@@ -143,7 +155,11 @@ class TestParseAwardDetail:
     def test_extracts_value_from_field_item_fallback(self):
         html = _make_detail_html(value_field="$250,000")
         soup = BeautifulSoup(html, "html.parser")
-        listing = {"tender_title": "Test", "date": "2024-06-01", "url": "http://x.com/2"}
+        listing = {
+            "tender_title": "Test",
+            "date": "2024-06-01",
+            "url": "http://x.com/2",
+        }
 
         result = _parse_award_detail(soup, listing)
 
@@ -152,7 +168,11 @@ class TestParseAwardDetail:
     def test_uses_listing_date_when_no_date_element(self):
         html = _make_detail_html(winner="Builder Inc")
         soup = BeautifulSoup(html, "html.parser")
-        listing = {"tender_title": "Test", "date": "2024-07-01", "url": "http://x.com/3"}
+        listing = {
+            "tender_title": "Test",
+            "date": "2024-07-01",
+            "url": "http://x.com/3",
+        }
 
         result = _parse_award_detail(soup, listing)
 

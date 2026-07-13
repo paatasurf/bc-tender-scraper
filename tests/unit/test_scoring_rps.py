@@ -71,7 +71,9 @@ class TestOverlapScore:
         assert detail == ""
 
     def test_no_match_returns_zero(self):
-        score, detail = _overlap_score(["plumbing", "hvac"], "road construction project")
+        score, detail = _overlap_score(
+            ["plumbing", "hvac"], "road construction project"
+        )
         assert score == 0
         assert detail == ""
 
@@ -82,7 +84,9 @@ class TestOverlapScore:
 
     def test_multiple_matches_cap_at_100(self):
         needles = ["road", "construction", "building", "commercial", "project"]
-        score, detail = _overlap_score(needles, "road construction building commercial project")
+        score, detail = _overlap_score(
+            needles, "road construction building commercial project"
+        )
         assert score == 100
 
     def test_case_insensitive(self):
@@ -134,22 +138,34 @@ class TestGeoScore:
         assert "Burnaby" in detail
 
     def test_neighborhood_match(self):
-        profile = _make_profile(service_cities=[], neighborhoods=["Kitsilano", "Downtown"])
-        opp = _make_opp(geography_text="Downtown area", organization="Corp", title="Job")
+        profile = _make_profile(
+            service_cities=[], neighborhoods=["Kitsilano", "Downtown"]
+        )
+        opp = _make_opp(
+            geography_text="Downtown area", organization="Corp", title="Job"
+        )
         score, detail = _geo_score(profile, opp)
         assert score == 80
         assert "Downtown" in detail
 
     def test_bc_market_fallback(self):
         profile = _make_profile(service_cities=["Victoria"], neighborhoods=[])
-        opp = _make_opp(geography_text="somewhere", organization="Corp", title="Vancouver project")
+        opp = _make_opp(
+            geography_text="somewhere", organization="Corp", title="Vancouver project"
+        )
         score, detail = _geo_score(profile, opp)
         assert score == 65
         assert "British Columbia" in detail
 
     def test_outside_core_area(self):
-        profile = _make_profile(service_cities=["Vancouver"], neighborhoods=["Kitsilano"])
-        opp = _make_opp(geography_text="Calgary Alberta", organization="Alberta Corp", title="Alberta Job")
+        profile = _make_profile(
+            service_cities=["Vancouver"], neighborhoods=["Kitsilano"]
+        )
+        opp = _make_opp(
+            geography_text="Calgary Alberta",
+            organization="Alberta Corp",
+            title="Alberta Job",
+        )
         score, detail = _geo_score(profile, opp)
         assert score == 30
         assert "Outside" in detail
@@ -162,7 +178,9 @@ class TestAwardSignalRaw:
             award_clients=["City of Victoria"],
             market_segments=["provincial"],
         )
-        opp = _make_opp(text_blob="electrical work in Kelowna", market_segment="federal")
+        opp = _make_opp(
+            text_blob="electrical work in Kelowna", market_segment="federal"
+        )
         score, detail = _award_signal_raw(profile, opp)
         assert score == 0
         assert detail == ""
@@ -184,7 +202,9 @@ class TestAwardSignalRaw:
             award_clients=["City of Vancouver"],
             market_segments=[],
         )
-        opp = _make_opp(text_blob="project for city of vancouver", organization="City of Vancouver")
+        opp = _make_opp(
+            text_blob="project for city of vancouver", organization="City of Vancouver"
+        )
         score, detail = _award_signal_raw(profile, opp)
         assert score == 35
         assert "client" in detail.lower()
@@ -265,7 +285,9 @@ class TestScoreActiveTender:
         )
         result = score_active_tender(profile, opp)
 
-        boost_factors = [b for b in result.breakdown if b.factor == "award_confidence_boost"]
+        boost_factors = [
+            b for b in result.breakdown if b.factor == "award_confidence_boost"
+        ]
         assert len(boost_factors) == 1
         assert boost_factors[0].points in (4, 8)
 

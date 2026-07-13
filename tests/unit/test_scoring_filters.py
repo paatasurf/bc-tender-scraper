@@ -74,7 +74,10 @@ class TestPassesCapabilityGate:
         assert passes_capability_gate(profile, opp) is True
 
     def test_high_match_score_passes(self):
-        profile = _make_profile(primary_trade="general_building", trade_tags=["general_building", "concrete"])
+        profile = _make_profile(
+            primary_trade="general_building",
+            trade_tags=["general_building", "concrete"],
+        )
         opp = _make_opp(trade_tags=["general_building", "concrete"])
         assert passes_capability_gate(profile, opp) is True
 
@@ -88,7 +91,9 @@ class TestPassesCapabilityGate:
     def test_custom_min_match_threshold(self):
         # general_building in opp_tags with matching primary -> score = 100
         # so min_match=101 should fail
-        profile = _make_profile(primary_trade="general_building", trade_tags=["general_building"])
+        profile = _make_profile(
+            primary_trade="general_building", trade_tags=["general_building"]
+        )
         opp = _make_opp(trade_tags=["general_building"])
         assert passes_capability_gate(profile, opp, min_match=101) is False
         # but at min_match=100 it should pass

@@ -129,5 +129,7 @@ class TestScorePipelinePermit:
         opp = _make_opp(payload={"type": "Residential"})
         result = score_pipeline_permit(profile, opp)
 
-        ptype_factor = next(b for b in result.breakdown if b.factor == "project_type_fit")
+        ptype_factor = next(
+            b for b in result.breakdown if b.factor == "project_type_fit"
+        )
         assert "Residential" in ptype_factor.detail
