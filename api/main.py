@@ -1,12 +1,21 @@
 import config.env  # noqa: F401  # load env before pipeline imports
 
+import hmac
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -25,7 +34,10 @@ from db.connection import (
 )
 from db.company_analytics import company_analytics_entity_filter
 from db.company_canonical_constants import company_canonical_name
-from pipeline.opportunity_discovery import ARCHITECTURE_DEFAULT_MIN_SCORE, CONSTRUCTION_DEFAULT_MIN_SCORE
+from pipeline.opportunity_discovery import (
+    ARCHITECTURE_DEFAULT_MIN_SCORE,
+    CONSTRUCTION_DEFAULT_MIN_SCORE,
+)
 from db.models import (
     ArchCompany,
     ArchTender,
@@ -102,7 +114,7 @@ def verify_internal_key(request: Request):
     if not expected:
         raise HTTPException(status_code=403, detail="Forbidden")
     key = request.headers.get("X-Internal-Key")
-    if key != expected:
+    if key is None or not hmac.compare_digest(key, expected):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -129,10 +141,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+# Credentials cannot be combined with a wildcard origin: Starlette would reflect
+# the caller's Origin back with Access-Control-Allow-Credentials: true, letting
+# ANY site make credentialed cross-origin requests. Only allow credentials when
+# an explicit origin allowlist is configured.
+_cors_allow_credentials = bool(_cors_origins) and "*" not in _cors_origins
+if not _cors_origins:
+    _cors_origins = ["*"]
+if not _cors_allow_credentials and _cors_origins == ["*"]:
+    logger.warning(
+        "CORS_ORIGINS is '*'; credentialed cross-origin requests are disabled. "
+        "Set CORS_ORIGINS to an explicit comma-separated allowlist to enable them."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -146,14 +176,18 @@ async def company_intelligence_plan_gate(request: Request, call_next):
     # Return 401 directly in async middleware — do not rely on HTTPException
     # raised from sync helpers (get_user_plan / JWKS) propagating cleanly.
     if _extract_bearer_token(request) is None:
-        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+        return JSONResponse(
+            status_code=401, content={"detail": "Authentication required"}
+        )
 
     try:
         assert_company_intelligence_access(request)
     except (HTTPException, StarletteHTTPException) as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     except Exception:
-        logger.exception("Company intelligence plan gate failed for %s", request.url.path)
+        logger.exception(
+            "Company intelligence plan gate failed for %s", request.url.path
+        )
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid authorization token"},
@@ -268,15 +302,26 @@ def stats() -> dict[str, int]:
         return {
             "tenders": session.scalar(select(func.count()).select_from(Tender)) or 0,
             "permits": session.scalar(select(func.count()).select_from(Permit)) or 0,
-            "reddit": session.scalar(select(func.count()).select_from(RedditSignal)) or 0,
+            "reddit": session.scalar(select(func.count()).select_from(RedditSignal))
+            or 0,
             "news": session.scalar(select(func.count()).select_from(NewsSignal)) or 0,
-            "linkedin": session.scalar(select(func.count()).select_from(LinkedInSignal)) or 0,
+            "linkedin": session.scalar(select(func.count()).select_from(LinkedInSignal))
+            or 0,
             "jobs": session.scalar(select(func.count()).select_from(Job)) or 0,
-            "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender)) or 0,
-            "commercial_tenders": session.scalar(select(func.count()).select_from(CommercialTender)) or 0,
-            "contract_awards": session.scalar(select(func.count()).select_from(ContractAward)) or 0,
+            "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender))
+            or 0,
+            "commercial_tenders": session.scalar(
+                select(func.count()).select_from(CommercialTender)
+            )
+            or 0,
+            "contract_awards": session.scalar(
+                select(func.count()).select_from(ContractAward)
+            )
+            or 0,
             "contract_awards_matched": session.scalar(
-                select(func.count()).select_from(ContractAward).where(ContractAward.company_id.isnot(None))
+                select(func.count())
+                .select_from(ContractAward)
+                .where(ContractAward.company_id.isnot(None))
             )
             or 0,
         }
@@ -292,8 +337,15 @@ def list_tenders(
     session = get_session()
     try:
         total = session.scalar(select(func.count()).select_from(Tender)) or 0
-        rows = session.scalars(select(Tender).order_by(Tender.id.desc()).offset(offset).limit(limit)).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        rows = session.scalars(
+            select(Tender).order_by(Tender.id.desc()).offset(offset).limit(limit)
+        ).all()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -329,8 +381,15 @@ def list_permits(
             query = query.where(applicant_filter)
             count_query = count_query.where(applicant_filter)
         total = session.scalar(count_query) or 0
-        rows = session.scalars(query.order_by(Permit.id.desc()).offset(offset).limit(limit)).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        rows = session.scalars(
+            query.order_by(Permit.id.desc()).offset(offset).limit(limit)
+        ).all()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -344,9 +403,17 @@ def list_reddit(
     try:
         total = session.scalar(select(func.count()).select_from(RedditSignal)) or 0
         rows = session.scalars(
-            select(RedditSignal).order_by(RedditSignal.upvotes.desc(), RedditSignal.id.desc()).offset(offset).limit(limit)
+            select(RedditSignal)
+            .order_by(RedditSignal.upvotes.desc(), RedditSignal.id.desc())
+            .offset(offset)
+            .limit(limit)
         ).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -425,8 +492,15 @@ def list_jobs(
     session = get_session()
     try:
         total = session.scalar(select(func.count()).select_from(Job)) or 0
-        rows = session.scalars(select(Job).order_by(Job.id.desc()).offset(offset).limit(limit)).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        rows = session.scalars(
+            select(Job).order_by(Job.id.desc()).offset(offset).limit(limit)
+        ).all()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -493,7 +567,9 @@ def contract_awards_summary() -> dict[str, Any]:
         total = session.scalar(select(func.count()).select_from(ContractAward)) or 0
         matched = (
             session.scalar(
-                select(func.count()).select_from(ContractAward).where(ContractAward.company_id.isnot(None))
+                select(func.count())
+                .select_from(ContractAward)
+                .where(ContractAward.company_id.isnot(None))
             )
             or 0
         )
@@ -502,7 +578,12 @@ def contract_awards_summary() -> dict[str, Any]:
             .group_by(ContractAward.source)
             .order_by(func.count().desc())
         ).all()
-        value_sum = session.scalar(select(func.coalesce(func.sum(ContractAward.award_value), 0.0))) or 0.0
+        value_sum = (
+            session.scalar(
+                select(func.coalesce(func.sum(ContractAward.award_value), 0.0))
+            )
+            or 0.0
+        )
         return {
             "total_awards": total,
             "matched_awards": matched,
@@ -524,7 +605,9 @@ def contract_awards_top_vendors(
             select(
                 ContractAward.winner_company,
                 func.count(ContractAward.id).label("award_count"),
-                func.coalesce(func.sum(ContractAward.award_value), 0.0).label("total_value"),
+                func.coalesce(func.sum(ContractAward.award_value), 0.0).label(
+                    "total_value"
+                ),
                 func.max(ContractAward.company_id).label("company_id"),
             )
             .group_by(ContractAward.winner_company)
@@ -556,9 +639,17 @@ def list_arch_tenders(
     try:
         total = session.scalar(select(func.count()).select_from(ArchTender)) or 0
         rows = session.scalars(
-            select(ArchTender).order_by(ArchTender.id.desc()).offset(offset).limit(limit)
+            select(ArchTender)
+            .order_by(ArchTender.id.desc())
+            .offset(offset)
+            .limit(limit)
         ).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -572,9 +663,17 @@ def list_commercial_tenders(
     try:
         total = session.scalar(select(func.count()).select_from(CommercialTender)) or 0
         rows = session.scalars(
-            select(CommercialTender).order_by(CommercialTender.id.desc()).offset(offset).limit(limit)
+            select(CommercialTender)
+            .order_by(CommercialTender.id.desc())
+            .offset(offset)
+            .limit(limit)
         ).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -627,7 +726,9 @@ def list_companies(
         count_query = select(func.count()).select_from(Company).where(analytics_filter)
         if search.strip():
             pattern = f"%{search.strip()}%"
-            name_match = or_(Company.name.ilike(pattern), Company.display_name.ilike(pattern))
+            name_match = or_(
+                Company.name.ilike(pattern), Company.display_name.ilike(pattern)
+            )
             query = query.where(name_match)
             count_query = count_query.where(name_match)
 
@@ -650,7 +751,9 @@ def list_companies(
         )
 
         total = session.scalar(count_query) or 0
-        rows = session.scalars(query.order_by(order_column).offset(offset).limit(limit)).all()
+        rows = session.scalars(
+            query.order_by(order_column).offset(offset).limit(limit)
+        ).all()
         return {
             "total": total,
             "limit": limit,
@@ -671,7 +774,9 @@ def get_company_by_id(company_id: int) -> dict[str, Any]:
     try:
         company = session.get(Company, company_id)
         if company is None:
-            raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Company {company_id} not found"
+            )
         payload = _company_to_api_dict(company)
         payload.update(get_company_verification_hub(session, company_id))
         return payload
@@ -714,7 +819,9 @@ def get_company_wiki(
             },
             "data_snapshot": wiki.data_snapshot,
             "model_used": wiki.model_used,
-            "generated_at": wiki.generated_at.isoformat() if wiki.generated_at else None,
+            "generated_at": (
+                wiki.generated_at.isoformat() if wiki.generated_at else None
+            ),
             "updated_at": wiki.updated_at.isoformat() if wiki.updated_at else None,
         }
     finally:
@@ -924,8 +1031,12 @@ def early_signals(
 
 def _tender_response_fields(tender: Any) -> dict[str, Any]:
     """Common tender fields for API responses."""
-    deadline = getattr(tender, "closing_date", None) or getattr(tender, "deadline", "") or ""
-    value_raw = getattr(tender, "estimated_value", None) or getattr(tender, "value", "") or ""
+    deadline = (
+        getattr(tender, "closing_date", None) or getattr(tender, "deadline", "") or ""
+    )
+    value_raw = (
+        getattr(tender, "estimated_value", None) or getattr(tender, "value", "") or ""
+    )
     budget = getattr(tender, "ai_budget_estimate", "") or ""
     return {
         "tender_title": tender.title,
@@ -943,7 +1054,9 @@ def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
     from pipeline.company_intelligence import match_company_to_tender
 
     if not get_anthropic_api_key():
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+        raise HTTPException(
+            status_code=503, detail="ANTHROPIC_API_KEY is not configured"
+        )
 
     session = get_session()
     try:
@@ -958,7 +1071,9 @@ def company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
         try:
             match = match_company_to_tender(company, tender)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"AI match failed: {exc}"
+            ) from exc
 
         return {
             "company": company_canonical_name(company),
@@ -975,13 +1090,17 @@ def company_tender_match_by_id(company_id: int, tender_id: int) -> dict[str, Any
     from pipeline.company_intelligence import match_company_to_tender
 
     if not get_anthropic_api_key():
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+        raise HTTPException(
+            status_code=503, detail="ANTHROPIC_API_KEY is not configured"
+        )
 
     session = get_session()
     try:
         company = session.get(Company, company_id)
         if company is None:
-            raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Company {company_id} not found"
+            )
 
         tender = _find_tender(session, tender_id)
         if tender is None:
@@ -990,7 +1109,9 @@ def company_tender_match_by_id(company_id: int, tender_id: int) -> dict[str, Any
         try:
             match = match_company_to_tender(company, tender)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"AI match failed: {exc}"
+            ) from exc
 
         return {
             "company": company.name,
@@ -1027,7 +1148,12 @@ def list_arch_companies(
         rows = session.scalars(
             query.order_by(ArchCompany.total_value.desc()).offset(offset).limit(limit)
         ).all()
-        return {"total": total, "limit": limit, "offset": offset, "data": [_row_to_dict(row) for row in rows]}
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "data": [_row_to_dict(row) for row in rows],
+        }
     finally:
         session.close()
 
@@ -1038,7 +1164,9 @@ def get_arch_company(name: str) -> dict[str, Any]:
     try:
         company = _find_arch_company(session, name)
         if company is None:
-            raise HTTPException(status_code=404, detail=f"Architecture firm '{name}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"Architecture firm '{name}' not found"
+            )
         return _row_to_dict(company)
     finally:
         session.close()
@@ -1193,7 +1321,9 @@ def competitive_intelligence_competitor_activity(
     company_id: int = Query(..., ge=1),
     peer_limit: int = Query(5, ge=3, le=5),
 ) -> dict[str, Any]:
-    from pipeline.competitive_intel.tender_activity import get_competitor_tender_activity
+    from pipeline.competitive_intel.tender_activity import (
+        get_competitor_tender_activity,
+    )
 
     session = get_session()
     try:
@@ -1275,7 +1405,9 @@ def arch_company_capability_profile(
     session = get_session()
     try:
         try:
-            cip = get_cip(session, company_id=company_id, kind="architecture", refresh=refresh)
+            cip = get_cip(
+                session, company_id=company_id, kind="architecture", refresh=refresh
+            )
             return cip.to_dict()
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1288,13 +1420,17 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
     from pipeline.arch_company_intelligence import match_arch_company_to_tender
 
     if not get_anthropic_api_key():
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+        raise HTTPException(
+            status_code=503, detail="ANTHROPIC_API_KEY is not configured"
+        )
 
     session = get_session()
     try:
         company = _find_arch_company(session, name)
         if company is None:
-            raise HTTPException(status_code=404, detail=f"Architecture firm '{name}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"Architecture firm '{name}' not found"
+            )
 
         tender = _find_tender(session, tender_id)
         if tender is None:
@@ -1303,7 +1439,9 @@ def arch_company_tender_match(name: str, tender_id: int) -> dict[str, Any]:
         try:
             match = match_arch_company_to_tender(company, tender)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"AI match failed: {exc}"
+            ) from exc
 
         return {
             "company": company_canonical_name(company),
@@ -1320,13 +1458,17 @@ def arch_company_tender_match_by_id(company_id: int, tender_id: int) -> dict[str
     from pipeline.arch_company_intelligence import match_arch_company_to_tender
 
     if not get_anthropic_api_key():
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+        raise HTTPException(
+            status_code=503, detail="ANTHROPIC_API_KEY is not configured"
+        )
 
     session = get_session()
     try:
         company = session.get(ArchCompany, company_id)
         if company is None:
-            raise HTTPException(status_code=404, detail=f"Architecture firm {company_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Architecture firm {company_id} not found"
+            )
 
         tender = _find_tender(session, tender_id)
         if tender is None:
@@ -1335,7 +1477,9 @@ def arch_company_tender_match_by_id(company_id: int, tender_id: int) -> dict[str
         try:
             match = match_arch_company_to_tender(company, tender)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"AI match failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"AI match failed: {exc}"
+            ) from exc
 
         return {
             "company": company_canonical_name(company),
@@ -1362,7 +1506,9 @@ def scrape_surrey_permits_route(
     try:
         return scrape_surrey_permits(days=days, persist=True)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Surrey permits scrape failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Surrey permits scrape failed: {exc}"
+        ) from exc
 
 
 @app.get("/api/scrape/burnaby-permits")
@@ -1380,7 +1526,9 @@ def scrape_burnaby_permits_route(
     try:
         return scrape_burnaby_permits(days=days, persist=True)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Burnaby permits scrape failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Burnaby permits scrape failed: {exc}"
+        ) from exc
 
 
 @pipeline_router.get("/status")
@@ -1519,7 +1667,9 @@ def trigger_ai_matching(
     construction_sync = request.sync and kind == "construction"
 
     if not architecture_sync and not construction_sync and not get_anthropic_api_key():
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+        raise HTTPException(
+            status_code=503, detail="ANTHROPIC_API_KEY is not configured"
+        )
 
     if request.sync:
         if request.company_id is None:
@@ -1552,7 +1702,9 @@ def trigger_ai_matching(
             except RuntimeError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
             except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"AI matching failed: {exc}") from exc
+                raise HTTPException(
+                    status_code=502, detail=f"AI matching failed: {exc}"
+                ) from exc
 
             return {
                 "status": "complete",
