@@ -4,6 +4,7 @@ import base64
 import logging
 import threading
 from typing import Any
+from urllib.parse import urlparse
 
 import jwt
 import requests
@@ -57,7 +58,9 @@ def is_public_get_path(path: str, method: str) -> bool:
     """GET routes that skip JWT/plan gate (public dashboard data)."""
     if method != "GET":
         return False
-    return any(_matches_path_prefix(path, prefix) for prefix in PUBLIC_GET_PATH_PREFIXES)
+    return any(
+        _matches_path_prefix(path, prefix) for prefix in PUBLIC_GET_PATH_PREFIXES
+    )
 
 
 def requires_company_intelligence_access(request: Request) -> bool:
@@ -202,6 +205,32 @@ def _get_jwk_client(url: str, headers: dict[str, str] | None) -> PyJWKClient:
         return client
 
 
+def _trusted_issuer_hosts() -> frozenset[str]:
+    """Hosts whose JWKS may be trusted for signature verification.
+
+    Derived only from server-side configuration — never from the (untrusted)
+    token. Without this allowlist, an attacker could self-sign a token, point
+    its ``iss`` at a JWKS they control, and be accepted as an authenticated
+    paid user.
+    """
+    hosts: set[str] = set()
+
+    publishable = _get_publishable_key()
+    if publishable:
+        domain = _frontend_api_domain_from_publishable(publishable)
+        if domain:
+            hosts.add(domain.lower())
+
+    for env_name in ("CLERK_JWKS_URL", "CLERK_ISSUER"):
+        raw = get_env(env_name)
+        if raw:
+            host = urlparse(raw if "://" in raw else f"https://{raw}").hostname
+            if host:
+                hosts.add(host.lower())
+
+    return frozenset(hosts)
+
+
 def _issuer_jwks_url(token: str) -> str | None:
     try:
         claims = jwt.decode(
@@ -219,6 +248,17 @@ def _issuer_jwks_url(token: str) -> str | None:
     iss = claims.get("iss") if isinstance(claims, dict) else None
     if not isinstance(iss, str) or not iss.startswith("https://"):
         return None
+
+    issuer_host = urlparse(iss).hostname
+    trusted = _trusted_issuer_hosts()
+    if not issuer_host or issuer_host.lower() not in trusted:
+        logger.warning(
+            "Clerk JWT verification: refusing untrusted issuer host %s (trusted=%s)",
+            issuer_host,
+            sorted(trusted),
+        )
+        return None
+
     return iss.rstrip("/") + "/.well-known/jwks.json"
 
 
@@ -230,7 +270,9 @@ def _resolve_signing_key(token: str) -> tuple[Any, list[str]]:
     errors: list[str] = []
     tried: set[str] = set()
 
-    def _try_url(url: str, headers: dict[str, str] | None) -> tuple[Any, list[str]] | None:
+    def _try_url(
+        url: str, headers: dict[str, str] | None
+    ) -> tuple[Any, list[str]] | None:
         if not url or url in tried:
             return None
         tried.add(url)
@@ -268,7 +310,9 @@ def _verify_jwt(token: str) -> dict[str, Any]:
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
 
     alg = header.get("alg")
     if not isinstance(alg, str) or alg.lower() == "none":
@@ -288,10 +332,14 @@ def _verify_jwt(token: str) -> dict[str, Any]:
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(status_code=401, detail="Token expired") from exc
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
     except Exception as exc:
         logger.exception("Clerk JWT verification failed unexpectedly")
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
 
     if not isinstance(payload, dict):
         raise HTTPException(status_code=401, detail="Invalid authorization token")
@@ -351,7 +399,9 @@ def _fetch_clerk_public_metadata(user_id: str) -> dict[str, Any]:
         )
     except requests.RequestException as exc:
         logger.warning("Clerk user lookup failed for %s: %s", user_id, exc)
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
 
     if resp.status_code != 200:
         logger.warning(
@@ -366,7 +416,9 @@ def _fetch_clerk_public_metadata(user_id: str) -> dict[str, Any]:
         payload = resp.json()
     except ValueError as exc:
         logger.warning("Clerk user lookup returned non-JSON for %s", user_id)
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
 
     metadata = _extract_public_metadata(payload if isinstance(payload, dict) else {})
     logger.info(
@@ -443,8 +495,12 @@ def get_user_plan(request: Request) -> str:
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Clerk plan check failed while verifying JWT for %s", request.url.path)
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        logger.exception(
+            "Clerk plan check failed while verifying JWT for %s", request.url.path
+        )
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
 
     sub = payload.get("sub")
     if not isinstance(sub, str) or not sub:
@@ -516,7 +572,9 @@ def assert_company_intelligence_access(request: Request) -> None:
         raise
     except Exception as exc:
         logger.exception("Clerk plan gate failed unexpectedly for %s", request.url.path)
-        raise HTTPException(status_code=401, detail="Invalid authorization token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization token"
+        ) from exc
 
     allowed = plan in PAID_PLANS
     logger.info(
