@@ -88,53 +88,29 @@ def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> N
 
     session = MagicMock()
 
-    with patch(
-        "pipeline.tender_data_pipeline.run_tender_scrapers",
-        side_effect=_fake_tender_scrapers,
-    ):
-        with patch(
-            "pipeline.tender_data_pipeline.run_auxiliary_scrapers",
-            side_effect=_fake_auxiliary,
-        ):
-            with patch(
-                "pipeline.tender_data_pipeline.verify_tender_csvs",
-                side_effect=_fake_csv_verify,
-            ):
+    with patch("pipeline.tender_data_pipeline.run_tender_scrapers", side_effect=_fake_tender_scrapers):
+        with patch("pipeline.tender_data_pipeline.run_auxiliary_scrapers", side_effect=_fake_auxiliary):
+            with patch("pipeline.tender_data_pipeline.verify_tender_csvs", side_effect=_fake_csv_verify):
                 with patch("pipeline.tender_data_pipeline.init_db"):
-                    with patch(
-                        "pipeline.tender_data_pipeline.get_session",
-                        return_value=session,
-                    ):
+                    with patch("pipeline.tender_data_pipeline.get_session", return_value=session):
                         with patch(
                             "pipeline.tender_data_pipeline.count_table_rows",
-                            return_value={
-                                "tenders": 5,
-                                "commercial_tenders": 2,
-                                "arch_tenders": 1,
-                            },
+                            return_value={"tenders": 5, "commercial_tenders": 2, "arch_tenders": 1},
                         ):
                             with patch(
                                 "pipeline.tender_data_pipeline.import_all_csvs",
-                                return_value={
-                                    "tenders": 10,
-                                    "commercial_tenders": 2,
-                                    "arch_tenders": 1,
-                                },
+                                return_value={"tenders": 10, "commercial_tenders": 2, "arch_tenders": 1},
                             ) as import_all:
                                 with patch(
                                     "pipeline.tender_data_pipeline.import_contract_awards",
                                     return_value=0,
                                 ):
-                                    with patch(
-                                        "pipeline.tender_data_pipeline.refresh_company_award_stats"
-                                    ):
+                                    with patch("pipeline.tender_data_pipeline.refresh_company_award_stats"):
                                         with patch(
                                             "pipeline.tender_data_pipeline.verify_database_counts",
                                             return_value={"tenders": 10},
                                         ):
-                                            summary = run_tender_data_pipeline(
-                                                run_id="audit-run"
-                                            )
+                                            summary = run_tender_data_pipeline(run_id="audit-run")
 
     assert phase_log == [
         "tender_scrape",
@@ -158,10 +134,7 @@ def test_internal_import_rejected_before_scrape() -> None:
 
     background_tasks = MagicMock()
     with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
-        with patch(
-            "api.internal.assert_import_allowed",
-            side_effect=PipelineOrderError("blocked"),
-        ):
+        with patch("api.internal.assert_import_allowed", side_effect=PipelineOrderError("blocked")):
             with pytest.raises(HTTPException) as exc:
                 internal_api.import_csvs(background_tasks, None)
     assert exc.value.status_code == 409
