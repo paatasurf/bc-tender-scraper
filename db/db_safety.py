@@ -245,7 +245,9 @@ def _require_interactive_production_confirmation() -> bool:
     except EOFError:
         return False
     if typed.strip() != PRODUCTION_CONFIRMATION:
-        print("[db_safety] Confirmation phrase did not match. Aborting.", file=sys.stderr)
+        print(
+            "[db_safety] Confirmation phrase did not match. Aborting.", file=sys.stderr
+        )
         return False
     return True
 

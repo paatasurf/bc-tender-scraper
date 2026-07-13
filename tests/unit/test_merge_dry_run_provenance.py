@@ -7,7 +7,9 @@ import subprocess
 from db import merge_dry_run_provenance as provenance
 
 
-def test_get_git_commit_sha_warns_and_returns_unknown_on_failure(monkeypatch, capsys) -> None:
+def test_get_git_commit_sha_warns_and_returns_unknown_on_failure(
+    monkeypatch, capsys
+) -> None:
     def _boom(*args, **kwargs):
         raise subprocess.SubprocessError("git missing")
 

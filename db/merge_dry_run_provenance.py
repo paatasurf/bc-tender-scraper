@@ -58,13 +58,21 @@ def _iso(value: datetime | None) -> str | None:
 
 def _build_fingerprint_payload(session: Session) -> dict[str, Any]:
     counts = {
-        "companies": int(session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()),
-        "permits": int(session.execute(text("SELECT COUNT(*) FROM permits")).scalar_one()),
+        "companies": int(
+            session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()
+        ),
+        "permits": int(
+            session.execute(text("SELECT COUNT(*) FROM permits")).scalar_one()
+        ),
         "company_applicant_aliases": int(
-            session.execute(text("SELECT COUNT(*) FROM company_applicant_aliases")).scalar_one()
+            session.execute(
+                text("SELECT COUNT(*) FROM company_applicant_aliases")
+            ).scalar_one()
         ),
         "company_canonical_merge_runs": int(
-            session.execute(text("SELECT COUNT(*) FROM company_canonical_merge_runs")).scalar_one()
+            session.execute(
+                text("SELECT COUNT(*) FROM company_canonical_merge_runs")
+            ).scalar_one()
         ),
     }
 
@@ -76,25 +84,27 @@ def _build_fingerprint_payload(session: Session) -> dict[str, Any]:
             session.execute(text("SELECT MAX(scraped_at) FROM permits")).scalar_one()
         ),
         "permits_status_changed_at": _iso(
-            session.execute(text("SELECT MAX(status_changed_at) FROM permits")).scalar_one()
+            session.execute(
+                text("SELECT MAX(status_changed_at) FROM permits")
+            ).scalar_one()
         ),
         "company_applicant_aliases_created_at": _iso(
-            session.execute(text("SELECT MAX(created_at) FROM company_applicant_aliases")).scalar_one()
+            session.execute(
+                text("SELECT MAX(created_at) FROM company_applicant_aliases")
+            ).scalar_one()
         ),
         "company_canonical_merge_runs_started_at": _iso(
-            session.execute(text("SELECT MAX(started_at) FROM company_canonical_merge_runs")).scalar_one()
+            session.execute(
+                text("SELECT MAX(started_at) FROM company_canonical_merge_runs")
+            ).scalar_one()
         ),
     }
 
-    identity_rows = session.execute(
-        text(
-            """
+    identity_rows = session.execute(text("""
             SELECT id, COALESCE(canonical_merge_method, '') AS canonical_merge_method
             FROM companies
             ORDER BY id
-            """
-        )
-    ).all()
+            """)).all()
     parts: list[str] = []
     for row in identity_rows:
         if hasattr(row, "_mapping"):
@@ -130,7 +140,9 @@ def build_dry_run_provenance(session: Session) -> dict[str, Any]:
     }
 
 
-def attach_dry_run_provenance(report: dict[str, Any], session: Session) -> dict[str, Any]:
+def attach_dry_run_provenance(
+    report: dict[str, Any], session: Session
+) -> dict[str, Any]:
     enriched = dict(report)
     enriched["dry_run_provenance"] = build_dry_run_provenance(session)
     return enriched
