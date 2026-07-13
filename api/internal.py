@@ -62,7 +62,9 @@ class InternalRunRequest(BaseModel):
 
 class OdbusImportRequest(BaseModel):
     run_id: str | None = Field(default=None, max_length=36)
-    csv_path: str = Field(..., min_length=1, max_length=1000, description="Path to ODBus_v1.csv")
+    csv_path: str = Field(
+        ..., min_length=1, max_length=1000, description="Path to ODBus_v1.csv"
+    )
 
 
 class OrgbookImportRequest(BaseModel):
@@ -77,8 +79,18 @@ class OrgbookImportRequest(BaseModel):
 
 class VerificationHubImportRequest(BaseModel):
     run_id: str | None = Field(default=None, max_length=36)
-    source: str = Field(..., min_length=1, max_length=30, description="Provider source key (odbus, orgbook).")
-    path: str = Field(..., min_length=1, max_length=1000, description="Path to provider reference export.")
+    source: str = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        description="Provider source key (odbus, orgbook).",
+    )
+    path: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Path to provider reference export.",
+    )
 
 
 class RegistryVerificationMatchRequest(BaseModel):
@@ -606,7 +618,9 @@ def verification_hub_import(
 
     if sync:
         return _run_step_sync("verification-hub-import", _worker, body.run_id)
-    return _enqueue_step(background_tasks, "verification-hub-import", _worker, body.run_id)
+    return _enqueue_step(
+        background_tasks, "verification-hub-import", _worker, body.run_id
+    )
 
 
 @router.post("/registry-verification/match")
@@ -655,7 +669,9 @@ def construction_tiers(
 
     if sync:
         return _run_step_sync("construction-tiers", _worker, payload.run_id)
-    return _enqueue_step(background_tasks, "construction-tiers", _worker, payload.run_id)
+    return _enqueue_step(
+        background_tasks, "construction-tiers", _worker, payload.run_id
+    )
 
 
 @router.get("/steps/{pipeline_run_id}")
@@ -700,7 +716,9 @@ def get_runs_for_id(run_id: str) -> dict[str, Any]:
     try:
         records = list_runs_for_run_id(session, run_id)
         if not records:
-            raise HTTPException(status_code=404, detail=f"No pipeline runs found for run_id '{run_id}'")
+            raise HTTPException(
+                status_code=404, detail=f"No pipeline runs found for run_id '{run_id}'"
+            )
         return {
             "run_id": run_id,
             "total": len(records),
@@ -774,14 +792,20 @@ def kg_validation_snapshot(request: Request) -> dict[str, Any]:
 @router.post("/kg/populate-award-companies")
 def kg_populate_award_companies(
     request: Request,
-    dry_run: bool = Query(True, description="When true, no company inserts (shadow-safe)."),
-    sync: bool = Query(True, description="Must be true; sync run for staging validation."),
+    dry_run: bool = Query(
+        True, description="When true, no company inserts (shadow-safe)."
+    ),
+    sync: bool = Query(
+        True, description="Must be true; sync run for staging validation."
+    ),
     run_id: str | None = Query(None, max_length=36),
 ) -> dict[str, Any]:
     """Award population cycle for P2 shadow validation (X-Internal-Key required)."""
     _require_internal_key(request)
     if not sync:
-        raise HTTPException(status_code=400, detail="Only sync=true is supported for this endpoint")
+        raise HTTPException(
+            status_code=400, detail="Only sync=true is supported for this endpoint"
+        )
 
     def _worker() -> dict[str, Any]:
         return run_populate_award_companies_step(dry_run=dry_run)
@@ -799,4 +823,3 @@ def send_alerts() -> dict[str, Any]:
     from intelligence.email_alerts import send_all_alert_digests
 
     return send_all_alert_digests()
-
