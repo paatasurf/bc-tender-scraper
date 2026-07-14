@@ -88,7 +88,9 @@ def _resolver(companies: list[SimpleNamespace]) -> tuple[CompanyResolver, _Sessi
 
 def test_decide_match_returns_existing_company():
     resolver, session = _resolver([_company_row(1, "Acme Construction Ltd.")])
-    decision = decide("Acme Construction Ltd.", resolver=resolver, source="test", city="Vancouver")
+    decision = decide(
+        "Acme Construction Ltd.", resolver=resolver, source="test", city="Vancouver"
+    )
 
     assert decision.decision == DECISION_MATCH
     assert decision.company_id == 1
@@ -97,7 +99,9 @@ def test_decide_match_returns_existing_company():
 
 def test_decide_create_shadow_when_no_existing_company():
     resolver, session = _resolver([])
-    decision = decide("Brand New Contractor Ltd.", resolver=resolver, source="test", city="Vancouver")
+    decision = decide(
+        "Brand New Contractor Ltd.", resolver=resolver, source="test", city="Vancouver"
+    )
 
     assert decision.decision == DECISION_CREATE
     assert decision.company_id is None
@@ -131,16 +135,27 @@ def test_decide_reject_empty_identity():
 def test_decide_registry_confidence_never_exceeds_medium():
     """Stage 1 has not cross-checked OrgBook/ODB, so it may not claim high/verified."""
     resolver, _session = _resolver([])
-    decision = decide("Acme Construction Ltd.", resolver=resolver, source="test", city="Vancouver", province="BC")
+    decision = decide(
+        "Acme Construction Ltd.",
+        resolver=resolver,
+        source="test",
+        city="Vancouver",
+        province="BC",
+    )
 
-    assert decision.registry_confidence in {REGISTRY_CONFIDENCE_MEDIUM, REGISTRY_CONFIDENCE_LOW}
+    assert decision.registry_confidence in {
+        REGISTRY_CONFIDENCE_MEDIUM,
+        REGISTRY_CONFIDENCE_LOW,
+    }
     assert decision.registry_confidence not in {"verified", "high"}
 
 
 def test_decide_uses_canonical_parser_not_legacy():
     """ADR-8: decide() parses via identity_parser, not resolve_company_name/parse_name."""
     resolver, _session = _resolver([])
-    decision = decide("Smith Roofing DBA Smith & Sons", resolver=resolver, source="test")
+    decision = decide(
+        "Smith Roofing DBA Smith & Sons", resolver=resolver, source="test"
+    )
     assert decision.parsed_identity.parser_version
     assert decision.parsed_identity.relationship_type in RelationshipType
 
@@ -190,7 +205,9 @@ def test_record_shadow_decision_noop_when_flag_disabled():
 def test_record_shadow_decision_writes_when_flag_enabled(monkeypatch):
     monkeypatch.setenv(ENV_REGISTRY_ENGINE_SHADOW, "1")
     resolver, _session = _resolver([_company_row(7, "Acme Construction Ltd.")])
-    decision = decide("Acme Construction Ltd.", resolver=resolver, source="test", city="Vancouver")
+    decision = decide(
+        "Acme Construction Ltd.", resolver=resolver, source="test", city="Vancouver"
+    )
 
     session = _mock_session()
     result = record_shadow_decision(session, decision, trigger_source="permits:test")
@@ -218,7 +235,14 @@ def test_company_and_registry_pin_models_expose_stage1_columns():
         assert expected in company_columns
 
     pin_columns = {c.name for c in RegistryPin.__table__.columns}
-    assert {"id", "company_id", "pin_key", "reason", "created_by", "created_at"} <= pin_columns
+    assert {
+        "id",
+        "company_id",
+        "pin_key",
+        "reason",
+        "created_by",
+        "created_at",
+    } <= pin_columns
 
 
 def test_record_shadow_decision_swallows_persist_errors(monkeypatch):

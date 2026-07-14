@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -32,10 +45,18 @@ class Tender(TenderLifecycleColumnsMixin, Base):
     ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(Text, default="")
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Permit(Base):
@@ -55,14 +76,28 @@ class Permit(Base):
     source: Mapped[str] = mapped_column(String(50), default="vancouver", index=True)
     city: Mapped[str] = mapped_column(String(100), default="Vancouver", index=True)
     external_id: Mapped[str] = mapped_column(String(100), default="", index=True)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    lifecycle_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
-    lifecycle_status_override: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'active'")
+    )
+    lifecycle_status_override: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    status_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     source_status_raw: Mapped[str] = mapped_column(String(100), default="")
-    company_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
-    canonical_merge_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True, index=True
+    )
+    canonical_merge_confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     canonical_merge_method: Mapped[str] = mapped_column(String(50), default="")
 
 
@@ -83,7 +118,9 @@ class EarlySignalEvent(Base):
     address: Mapped[str] = mapped_column(String(300), default="")
     applicant: Mapped[str] = mapped_column(String(300), default="")
     project_value: Mapped[str] = mapped_column(String(50), default="")
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class ProjectContact(Base):
@@ -112,7 +149,9 @@ class RedditSignal(Base):
     date: Mapped[str] = mapped_column(String(20), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
     subreddit: Mapped[str] = mapped_column(String(100), default="")
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class NewsSignal(Base):
@@ -124,7 +163,9 @@ class NewsSignal(Base):
     publisher: Mapped[str] = mapped_column(String(200), default="")
     date: Mapped[str] = mapped_column(String(20), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class LinkedInSignal(Base):
@@ -137,7 +178,9 @@ class LinkedInSignal(Base):
     date: Mapped[str] = mapped_column(String(20), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
     likes_count: Mapped[int] = mapped_column(Integer, default=0)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class Job(Base):
@@ -150,7 +193,9 @@ class Job(Base):
     salary: Mapped[str] = mapped_column(String(100), default="")
     date: Mapped[str] = mapped_column(String(50), default="")
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class CommercialTender(TenderLifecycleColumnsMixin, Base):
@@ -171,10 +216,18 @@ class CommercialTender(TenderLifecycleColumnsMixin, Base):
     ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(Text, default="")
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Company(Base):
@@ -199,11 +252,19 @@ class Company(Base):
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     company_lifecycle: Mapped[str] = mapped_column(String(20), default="", index=True)
     company_tier: Mapped[str] = mapped_column(String(20), default="", index=True)
-    construction_score: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), index=True)
+    construction_score: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), index=True
+    )
     construction_tier_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    construction_tier_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    enrichment_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
-    last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    construction_tier_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    enrichment_status: Mapped[str] = mapped_column(
+        String(20), default="pending", index=True
+    )
+    last_enriched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     award_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
     total_award_value: Mapped[float] = mapped_column(Float, default=0.0, index=True)
     avg_award_value: Mapped[float] = mapped_column(Float, default=0.0)
@@ -221,53 +282,89 @@ class Company(Base):
     primary_trade: Mapped[str] = mapped_column(String(50), default="", index=True)
     trade_tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     capability_profile_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    capability_profile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    capability_profile_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cip_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    cip_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cip_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cip_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dominant_sector: Mapped[str] = mapped_column(String(30), default="", index=True)
     work_orientation: Mapped[str] = mapped_column(String(20), default="")
-    specialization_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    specialization_confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     geographic_reach: Mapped[str] = mapped_column(String(20), default="")
     value_p25: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_p75: Mapped[float | None] = mapped_column(Float, nullable=True)
-    lifecycle_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'active'"))
-    lifecycle_status_override: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_operating: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default=text("'active'")
+    )
+    lifecycle_status_override: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    last_activity_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_operating: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     google_place_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     google_business_category: Mapped[str] = mapped_column(String(200), default="")
     google_maps_url: Mapped[str] = mapped_column(String(500), default="")
     google_business_status: Mapped[str] = mapped_column(String(50), default="")
     google_website: Mapped[str] = mapped_column(String(500), default="")
-    google_last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    google_last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    google_last_updated: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    google_last_seen: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     google_match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    google_enrichment_status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    google_enrichment_status: Mapped[str] = mapped_column(
+        String(30), default="pending", index=True
+    )
     google_query_used: Mapped[str] = mapped_column(String(500), default="")
     website: Mapped[str] = mapped_column(String(500), default="")
     google_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     google_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     display_name: Mapped[str] = mapped_column(String(300), default="")
-    entity_role: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'standalone'"))
+    entity_role: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default=text("'standalone'")
+    )
     canonical_company_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("companies.id"), nullable=True, index=True
     )
     applicant_signatory: Mapped[str] = mapped_column(String(300), default="")
-    canonical_merge_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    canonical_merge_confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     canonical_merge_method: Mapped[str] = mapped_column(String(50), default="")
     # --- Registry Engine Stage 1 (RE1) — Passport identity + Registry Confidence ---
     # Additive only (migration 028). Not yet mutated by any live create/merge path;
     # populated by backfill (public_id) or left at column defaults until a later stage.
-    public_id: Mapped[str | None] = mapped_column(String(20), nullable=True, unique=True)
+    public_id: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, unique=True
+    )
     legal_name: Mapped[str] = mapped_column(String(300), default="")
     operating_name: Mapped[str] = mapped_column(String(300), default="")
     business_number: Mapped[str] = mapped_column(String(30), default="")
-    registry_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
-    verification_level: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'pending'"))
-    registry_confidence: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'unverified'"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    registry_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'active'")
+    )
+    verification_level: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default=text("'pending'")
+    )
+    registry_confidence: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'unverified'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -277,8 +374,12 @@ class CompanyApplicantAlias(Base):
     __tablename__ = "company_applicant_aliases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    canonical_company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
-    alias_company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id"), nullable=False, unique=True)
+    canonical_company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=False, index=True
+    )
+    alias_company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=False, unique=True
+    )
     applicant_name_raw: Mapped[str] = mapped_column(String(300), nullable=False)
     signatory_name: Mapped[str] = mapped_column(String(300), default="")
     merge_run_id: Mapped[int | None] = mapped_column(
@@ -286,20 +387,33 @@ class CompanyApplicantAlias(Base):
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     merge_method: Mapped[str] = mapped_column(String(50), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class CompanyCanonicalMergeRun(Base):
     __tablename__ = "company_canonical_merge_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'planned'"))
-    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    report_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'planned'")
+    )
+    dry_run: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    report_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    summary_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
 
 class CompanyCanonicalMergeRollback(Base):
@@ -307,12 +421,17 @@ class CompanyCanonicalMergeRollback(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("company_canonical_merge_runs.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer,
+        ForeignKey("company_canonical_merge_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
     before_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class OdbusReference(Base):
@@ -336,8 +455,12 @@ class OdbusReference(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_observed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
-    observation_status: Mapped[str] = mapped_column(String(20), default="active", index=True)
-    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    observation_status: Mapped[str] = mapped_column(
+        String(20), default="active", index=True
+    )
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     ingest_batch_id: Mapped[str] = mapped_column(String(36), default="legacy")
 
 
@@ -360,16 +483,26 @@ class MarketRegistry(Base):
     province: Mapped[str] = mapped_column(String(10), default="BC")
     business_number: Mapped[str] = mapped_column(String(30), default="")
     website: Mapped[str] = mapped_column(String(500), default="")
-    registry_identifiers: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    source_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    tenderscope_company_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("companies.id"), nullable=True)
+    registry_identifiers: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    source_metadata: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    tenderscope_company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True
+    )
     odbus_idx: Mapped[str | None] = mapped_column(Text, nullable=True)
     seed_id: Mapped[str] = mapped_column(String(20), default="")
     ingest_batch_id: Mapped[str] = mapped_column(String(36), nullable=False)
     source_observed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     observation_status: Mapped[str] = mapped_column(String(20), default="active")
-    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class OrgbookReference(Base):
@@ -379,7 +512,9 @@ class OrgbookReference(Base):
 
     orgbook_id: Mapped[str] = mapped_column(Text, primary_key=True)
     legal_name: Mapped[str] = mapped_column(String(500), default="")
-    dba_names: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    dba_names: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     normalized_name: Mapped[str] = mapped_column(String(300), default="", index=True)
     business_number: Mapped[str] = mapped_column(String(20), default="")
     registry_id: Mapped[str] = mapped_column(String(30), default="")
@@ -388,8 +523,12 @@ class OrgbookReference(Base):
     city: Mapped[str] = mapped_column(String(100), default="")
     normalized_city: Mapped[str] = mapped_column(String(100), default="")
     province: Mapped[str] = mapped_column(String(10), default="BC")
-    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    metadata_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class CompanyRegistryLink(Base):
@@ -397,7 +536,9 @@ class CompanyRegistryLink(Base):
 
     __tablename__ = "company_registry_links"
     __table_args__ = (
-        UniqueConstraint("source", "external_id", name="uq_company_registry_links_source_external"),
+        UniqueConstraint(
+            "source", "external_id", name="uq_company_registry_links_source_external"
+        ),
         UniqueConstraint(
             "company_id",
             "source",
@@ -407,15 +548,25 @@ class CompanyRegistryLink(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id", ondelete="CASCADE"), index=True
+    )
     source: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     external_id: Mapped[str] = mapped_column(Text, nullable=False)
     match_tier: Mapped[str] = mapped_column(String(5), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    verification_status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
-    multi_location: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    verification_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, index=True
+    )
+    multi_location: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class CompanyScoreHistory(Base):
@@ -424,11 +575,17 @@ class CompanyScoreHistory(Base):
     __tablename__ = "company_score_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id", ondelete="CASCADE"), index=True
+    )
     construction_score: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     company_tier: Mapped[str] = mapped_column(String(20), nullable=False, default="")
-    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-    algorithm_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    calculated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    algorithm_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
 
 
 class ArchCompany(Base):
@@ -447,7 +604,9 @@ class ArchCompany(Base):
     google_reviews_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     google_address: Mapped[str] = mapped_column(String(500), default="")
     google_phone: Mapped[str] = mapped_column(String(50), default="")
-    google_place_id: Mapped[str | None] = mapped_column(String(200), unique=True, nullable=True)
+    google_place_id: Mapped[str | None] = mapped_column(
+        String(200), unique=True, nullable=True
+    )
     website: Mapped[str] = mapped_column(String(500), default="")
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -459,25 +618,39 @@ class ArchCompany(Base):
     houzz_profile_url: Mapped[str] = mapped_column(String(500), default="")
     aibc_status: Mapped[str] = mapped_column(String(50), default="")
     website_projects_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    website_specializations: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    website_service_areas: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    website_notable_projects: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    website_specializations: Mapped[list[str]] = mapped_column(
+        ARRAY(String), default=list
+    )
+    website_service_areas: Mapped[list[str]] = mapped_column(
+        ARRAY(String), default=list
+    )
+    website_notable_projects: Mapped[list[str]] = mapped_column(
+        ARRAY(String), default=list
+    )
     ai_reliability_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     primary_trade: Mapped[str] = mapped_column(String(50), default="", index=True)
     trade_tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     capability_profile_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    capability_profile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    capability_profile_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cip_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    cip_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cip_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cip_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dominant_sector: Mapped[str] = mapped_column(String(30), default="", index=True)
     work_orientation: Mapped[str] = mapped_column(String(20), default="")
-    specialization_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    specialization_confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     geographic_reach: Mapped[str] = mapped_column(String(20), default="")
     value_p25: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_p75: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -487,14 +660,20 @@ class TenderMatch(Base):
     __tablename__ = "tender_matches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="architecture", index=True)
+    company_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="architecture", index=True
+    )
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    tender_source: Mapped[str] = mapped_column(String(20), nullable=False, default="arch", index=True)
+    tender_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="arch", index=True
+    )
     tender_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reasoning: Mapped[str] = mapped_column(Text, default="")
     breakdown_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class PipelineRun(Base):
@@ -504,15 +683,23 @@ class PipelineRun(Base):
     run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     step: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     error: Mapped[str] = mapped_column(Text, default="")
     counts_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class ContractAward(Base):
     __tablename__ = "contract_awards"
-    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_contract_awards_source_external_id"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "source", "external_id", name="uq_contract_awards_source_external_id"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
@@ -520,13 +707,17 @@ class ContractAward(Base):
     url: Mapped[str] = mapped_column(String(500), default="")
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    procurement_category: Mapped[str] = mapped_column(String(40), default="", index=True)
+    procurement_category: Mapped[str] = mapped_column(
+        String(40), default="", index=True
+    )
     procurement_method: Mapped[str] = mapped_column(String(80), default="")
     winner_company: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
     winner_address: Mapped[str] = mapped_column(String(500), default="")
     winner_city: Mapped[str] = mapped_column(String(100), default="")
     winner_province: Mapped[str] = mapped_column(String(50), default="")
-    company_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True, index=True
+    )
     match_method: Mapped[str] = mapped_column(String(30), default="")
     match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     buyer_organization: Mapped[str] = mapped_column(String(300), default="", index=True)
@@ -537,7 +728,9 @@ class ContractAward(Base):
     contract_start_date: Mapped[str] = mapped_column(String(20), default="")
     contract_end_date: Mapped[str] = mapped_column(String(20), default="")
     delivery_region: Mapped[str] = mapped_column(String(200), default="")
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -548,7 +741,9 @@ class CompanyWiki(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    company_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="construction", index=True)
+    company_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="construction", index=True
+    )
     company_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     wiki_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -558,12 +753,15 @@ class CompanyWiki(Base):
     competitive_profile: Mapped[str] = mapped_column(Text, nullable=False, default="")
     data_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     model_used: Mapped[str] = mapped_column(String(80), nullable=False, default="")
-    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
-
 
 
 class ClientProfile(Base):
@@ -572,7 +770,9 @@ class ClientProfile(Base):
     __tablename__ = "client_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    clerk_user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", index=True)
+    clerk_user_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", index=True
+    )
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     company_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
@@ -581,7 +781,9 @@ class ClientProfile(Base):
     min_project_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_project_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class TenderOutcome(Base):
@@ -589,7 +791,9 @@ class TenderOutcome(Base):
 
     __tablename__ = "tender_outcomes"
     __table_args__ = (
-        UniqueConstraint("company_id", "tender_id", name="uq_tender_outcomes_company_tender"),
+        UniqueConstraint(
+            "company_id", "tender_id", name="uq_tender_outcomes_company_tender"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -609,7 +813,9 @@ class GoogleEnrichmentLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     query_used: Mapped[str] = mapped_column(String(500), default="")
     provider: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -628,12 +834,16 @@ class GoogleEnrichmentReview(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     run_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     query_used: Mapped[str] = mapped_column(String(500), default="")
     match_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     candidate_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     reviewed_by: Mapped[str] = mapped_column(String(100), default="")
     review_notes: Mapped[str] = mapped_column(Text, default="")
     chosen_place_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -651,13 +861,25 @@ class KgObservation(Base):
     source: Mapped[str] = mapped_column(String(80), nullable=False)
     external_id: Mapped[str] = mapped_column(String(200), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'active'")
+    )
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    schema_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'1'"))
-    adapter_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'1'"))
-    entity_type: Mapped[str] = mapped_column(String(40), nullable=False, server_default=text("''"))
+    schema_version: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'1'")
+    )
+    adapter_version: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'1'")
+    )
+    entity_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, server_default=text("''")
+    )
     superseded_by_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("kg_observations.id"), nullable=True
     )
@@ -670,12 +892,22 @@ class KgOutboxEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
-    aggregate_type: Mapped[str] = mapped_column(String(40), nullable=False, server_default=text("'observation'"))
+    aggregate_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, server_default=text("'observation'")
+    )
     aggregate_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'pending'"))
+    payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'pending'")
+    )
 
 
 class KgEngineDecisionRecord(Base):
@@ -686,16 +918,34 @@ class KgEngineDecisionRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     decision: Mapped[str] = mapped_column(String(20), nullable=False)
     source_path: Mapped[str] = mapped_column(String(120), nullable=False)
-    trigger_source: Mapped[str] = mapped_column(String(80), nullable=False, server_default=text("''"))
-    raw_identity: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
-    canonical_key: Mapped[str] = mapped_column(String(300), nullable=False, server_default=text("''"))
+    trigger_source: Mapped[str] = mapped_column(
+        String(80), nullable=False, server_default=text("''")
+    )
+    raw_identity: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    canonical_key: Mapped[str] = mapped_column(
+        String(300), nullable=False, server_default=text("''")
+    )
     company_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    policy_version: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'1'"))
-    gateway_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'legacy'"))
-    legacy_proceeded: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    reject_reason: Mapped[str] = mapped_column(String(80), nullable=False, server_default=text("''"))
-    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    policy_version: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'1'")
+    )
+    gateway_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'legacy'")
+    )
+    legacy_proceeded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    reject_reason: Mapped[str] = mapped_column(
+        String(80), nullable=False, server_default=text("''")
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class RegistryPin(Base):
@@ -708,11 +958,15 @@ class RegistryPin(Base):
     __tablename__ = "registry_pin"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=False, index=True
+    )
     pin_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
     reason: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(100), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class ArchTender(TenderLifecycleColumnsMixin, Base):
@@ -730,7 +984,15 @@ class ArchTender(TenderLifecycleColumnsMixin, Base):
     ai_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     ai_budget_estimate: Mapped[str] = mapped_column(String(100), default="")
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

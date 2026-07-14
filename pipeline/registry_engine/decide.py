@@ -57,9 +57,16 @@ def decide(
     parsed = parse_identity(raw_identity)
 
     if not parsed.raw_identity:
-        return EngineDecision(decision=DECISION_REJECT, parsed_identity=parsed, reject_reason=REJECT_REASON_EMPTY)
+        return EngineDecision(
+            decision=DECISION_REJECT,
+            parsed_identity=parsed,
+            reject_reason=REJECT_REASON_EMPTY,
+        )
 
-    if parsed.relationship_type == RelationshipType.PLAIN_PERSON or parsed.business_name is None:
+    if (
+        parsed.relationship_type == RelationshipType.PLAIN_PERSON
+        or parsed.business_name is None
+    ):
         return EngineDecision(
             decision=DECISION_REJECT,
             parsed_identity=parsed,
@@ -105,5 +112,8 @@ def decide(
         company_id=None,
         registry_confidence=registry_confidence,
         method=resolution.method,
-        metadata={"canonical_key": resolution.canonical_key, "display_name": resolution.display_name},
+        metadata={
+            "canonical_key": resolution.canonical_key,
+            "display_name": resolution.display_name,
+        },
     )
