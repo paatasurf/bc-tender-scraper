@@ -257,6 +257,16 @@ class Company(Base):
     applicant_signatory: Mapped[str] = mapped_column(String(300), default="")
     canonical_merge_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     canonical_merge_method: Mapped[str] = mapped_column(String(50), default="")
+    # --- Registry Engine Stage 1 (RE1) — Passport identity + Registry Confidence ---
+    # Additive only (migration 028). Not yet mutated by any live create/merge path;
+    # populated by backfill (public_id) or left at column defaults until a later stage.
+    public_id: Mapped[str | None] = mapped_column(String(20), nullable=True, unique=True)
+    legal_name: Mapped[str] = mapped_column(String(300), default="")
+    operating_name: Mapped[str] = mapped_column(String(300), default="")
+    business_number: Mapped[str] = mapped_column(String(30), default="")
+    registry_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
+    verification_level: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'pending'"))
+    registry_confidence: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'unverified'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -685,6 +695,23 @@ class KgEngineDecisionRecord(Base):
     legacy_proceeded: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     reject_reason: Mapped[str] = mapped_column(String(80), nullable=False, server_default=text("''"))
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegistryPin(Base):
+    """Manual override pin for future Registry Layer / anchor candidacy (Stage 1: schema only).
+
+    Named to avoid colliding with the Registry Constitution's own "anchor"
+    classification concept. Not read or written by any live code path yet.
+    """
+
+    __tablename__ = "registry_pin"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    pin_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
