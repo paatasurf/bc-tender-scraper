@@ -66,18 +66,48 @@ BEGIN
     END IF;
 END $$;
 
--- Backfill: assign a permanent public_id to every existing canonical/standalone
--- company that doesn't already have one. Deterministic, id-ordered (gaps in
+-- Backfill: assign a permanent public_id to every ELIGIBLE existing company
+-- that doesn't already have one. Deterministic, id-ordered (gaps in
 -- companies.id are irrelevant to ROW_NUMBER's dense ranking). Pure data
 -- population — no behavior change; nothing reads this column yet.
 --
+-- Eligibility (must match db/company_canonical_constants.py's entity_role
+-- vocabulary exactly):
+--   entity_role IN ('canonical', 'standalone')  -- see legacy policy note below
+--   AND registry_status = 'active'
+--
+-- 'canonical' is the obvious eligible case — it holds the Passport.
+--
+-- LEGACY POLICY FOR 'standalone': under the pre-Stage-3 architecture,
+-- 'standalone' is the default entity_role for a company that has not yet
+-- been run through explicit canonical-merge promotion (company_canonical_
+-- merge.py) — it is not an alias of anything and today functions as its
+-- own distinct identity in practice, even though it hasn't been formally
+-- promoted to 'canonical'. Most existing companies are 'standalone', not
+-- 'canonical', so treating only 'canonical' as eligible would backfill
+-- almost nothing. This is a deliberate, temporary compatibility decision,
+-- not a permanent architectural stance: once Stage 3 (registry-first
+-- CREATE, ADR-10) and Stage 4 (Enforce Merge, ADR-11) are live, 'standalone'
+-- may cease to be a legitimate terminal state, and this eligibility policy
+-- will need to be revisited then.
+--
+-- Explicitly INELIGIBLE (must remain public_id IS NULL):
+--   'applicant_alias' (ENTITY_ROLE_APPLICANT_ALIAS) — an alias, not a
+--     distinct identity; resolves via canonical_company_id, never gets its
+--     own permanent id.
+--   'probable_person' (ENTITY_ROLE_PROBABLE_PERSON) — not a company at all
+--     (WP3 skip case).
+--   Any registry_status other than 'active' (merged/excluded/retired) — a
+--     lifecycle-terminal row is not eligible for fresh identity assignment
+--     at backfill time, even if its entity_role would otherwise qualify.
+--
 -- Safe to re-run under any of: a clean first run, a full re-run after
--- everything is already assigned (no-op, since WHERE public_id IS NULL
--- matches nothing), or a partial/mixed state (some companies already
--- carry a public_id — from a prior partial run or from organic company
--- growth between runs — some still NULL). New sequence numbers always
--- continue from the current max already-assigned suffix rather than
--- restarting at 1, so they can never collide with an already-issued
+-- everything eligible is already assigned (no-op, since the WHERE clause
+-- matches nothing further), or a partial/mixed state (some companies
+-- already carry a public_id — from a prior partial run or from organic
+-- company growth between runs — some still NULL). New sequence numbers
+-- always continue from the current max already-assigned suffix rather
+-- than restarting at 1, so they can never collide with an already-issued
 -- value; existing public_id values are never read into the UPDATE's
 -- target set, so they are never touched. A transaction-scoped advisory
 -- lock serializes concurrent executions so two simultaneous runs cannot
@@ -98,6 +128,8 @@ BEGIN
         SELECT id, max_existing_seq + ROW_NUMBER() OVER (ORDER BY id) AS seq
         FROM companies
         WHERE public_id IS NULL
+          AND entity_role IN ('canonical', 'standalone')
+          AND registry_status = 'active'
     )
     UPDATE companies
     SET public_id = 'TS-' || LPAD(numbered.seq::text, 8, '0')

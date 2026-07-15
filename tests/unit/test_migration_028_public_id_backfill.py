@@ -78,20 +78,42 @@ def local_db_session():
         session.close()
 
 
-def _make_company(session, *, name, public_id=None):
+def _make_company(
+    session,
+    *,
+    name,
+    public_id=None,
+    entity_role=None,
+    registry_status=None,
+):
     from db.models import Company
 
-    company = Company(name=name, display_name=name, public_id=public_id)
+    kwargs = {"name": name, "display_name": name, "public_id": public_id}
+    if entity_role is not None:
+        kwargs["entity_role"] = entity_role
+    if registry_status is not None:
+        kwargs["registry_status"] = registry_status
+    company = Company(**kwargs)
     session.add(company)
     session.flush()
     return company
 
 
 def _run_backfill(session):
+    """Execute the backfill within the caller's own transaction — never
+    commits. Per-test isolation relies on the local_db_session fixture's
+    rollback-on-teardown; committing here would leak hardcoded literal
+    public_id test fixtures across tests sharing the same disposable
+    database within a single pytest run.
+    """
     from sqlalchemy import text
 
     session.execute(text(BACKFILL_SQL))
-    session.commit()
+    session.flush()
+    # The backfill is raw SQL — already-loaded ORM objects in this session's
+    # identity map won't pick up the UPDATE's new values on their own
+    # without an explicit expire (no commit happens here; see docstring).
+    session.expire_all()
 
 
 def _public_ids(session, company_ids):
@@ -246,3 +268,98 @@ def test_no_duplicate_public_ids_after_backfill(local_db_session):
     ]
     all_ids.append("TS-00000010")
     assert len(all_ids) == len(set(all_ids))
+
+
+# --- 8. non-eligible entity_role / registry_status rows stay NULL -------------
+
+
+def test_ineligible_rows_remain_public_id_null(local_db_session):
+    """Requirement 2: applicant_alias, probable_person, and non-active
+    registry_status rows must never receive a public_id, even though the
+    prior (buggy) backfill's bare WHERE public_id IS NULL would have
+    covered them.
+    """
+    canonical_target = _make_company(
+        local_db_session, name="Alias Target Canonical", entity_role="canonical"
+    )
+    alias = _make_company(
+        local_db_session,
+        name="Ineligible Alias",
+        entity_role="applicant_alias",
+        registry_status="active",
+    )
+    probable_person = _make_company(
+        local_db_session,
+        name="Ineligible Probable Person",
+        entity_role="probable_person",
+    )
+    merged_standalone = _make_company(
+        local_db_session,
+        name="Ineligible Merged Standalone",
+        entity_role="standalone",
+        registry_status="merged",
+    )
+    excluded_canonical = _make_company(
+        local_db_session,
+        name="Ineligible Excluded Canonical",
+        entity_role="canonical",
+        registry_status="excluded",
+    )
+    retired_standalone = _make_company(
+        local_db_session,
+        name="Ineligible Retired Standalone",
+        entity_role="standalone",
+        registry_status="retired",
+    )
+
+    _run_backfill(local_db_session)
+
+    result = _public_ids(
+        local_db_session,
+        [
+            alias.id,
+            probable_person.id,
+            merged_standalone.id,
+            excluded_canonical.id,
+            retired_standalone.id,
+        ],
+    )
+    assert result[alias.id] is None
+    assert result[probable_person.id] is None
+    assert result[merged_standalone.id] is None
+    assert result[excluded_canonical.id] is None
+    assert result[retired_standalone.id] is None
+    # The canonical target itself is eligible and unaffected by its alias existing.
+    assert (
+        _public_ids(local_db_session, [canonical_target.id])[canonical_target.id]
+        is not None
+    )
+
+
+# --- 9. canonical and standalone eligible rows both get backfilled ------------
+
+
+def test_canonical_and_standalone_eligible_rows_get_backfilled(local_db_session):
+    """Requirement 3: both eligible entity_role values must actually receive
+    a public_id — canonical (the obvious case) and standalone (the
+    documented legacy-policy case).
+    """
+    canonical = _make_company(
+        local_db_session,
+        name="Eligible Canonical Co",
+        entity_role="canonical",
+        registry_status="active",
+    )
+    standalone = _make_company(
+        local_db_session,
+        name="Eligible Standalone Co",
+        entity_role="standalone",
+        registry_status="active",
+    )
+
+    _run_backfill(local_db_session)
+
+    result = _public_ids(local_db_session, [canonical.id, standalone.id])
+    assert TS_ID_RE.match(result[canonical.id])
+    assert TS_ID_RE.match(result[standalone.id])
+    assert result[canonical.id] != result[standalone.id]
