@@ -67,17 +67,44 @@ BEGIN
 END $$;
 
 -- Backfill: assign a permanent public_id to every existing canonical/standalone
--- company that doesn't already have one. Deterministic, id-ordered. Pure data
+-- company that doesn't already have one. Deterministic, id-ordered (gaps in
+-- companies.id are irrelevant to ROW_NUMBER's dense ranking). Pure data
 -- population — no behavior change; nothing reads this column yet.
-WITH numbered AS (
-    SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+--
+-- Safe to re-run under any of: a clean first run, a full re-run after
+-- everything is already assigned (no-op, since WHERE public_id IS NULL
+-- matches nothing), or a partial/mixed state (some companies already
+-- carry a public_id — from a prior partial run or from organic company
+-- growth between runs — some still NULL). New sequence numbers always
+-- continue from the current max already-assigned suffix rather than
+-- restarting at 1, so they can never collide with an already-issued
+-- value; existing public_id values are never read into the UPDATE's
+-- target set, so they are never touched. A transaction-scoped advisory
+-- lock serializes concurrent executions so two simultaneous runs cannot
+-- race on computing overlapping sequence ranges.
+-- BEGIN BACKFILL
+DO $$
+DECLARE
+    max_existing_seq BIGINT;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('registry_engine_public_id_backfill')::bigint);
+
+    SELECT COALESCE(MAX(substring(public_id FROM 4)::bigint), 0)
+    INTO max_existing_seq
     FROM companies
-    WHERE public_id IS NULL
-)
-UPDATE companies
-SET public_id = 'TS-' || LPAD(numbered.rn::text, 8, '0')
-FROM numbered
-WHERE companies.id = numbered.id;
+    WHERE public_id ~ '^TS-[0-9]{8,}$';
+
+    WITH numbered AS (
+        SELECT id, max_existing_seq + ROW_NUMBER() OVER (ORDER BY id) AS seq
+        FROM companies
+        WHERE public_id IS NULL
+    )
+    UPDATE companies
+    SET public_id = 'TS-' || LPAD(numbered.seq::text, 8, '0')
+    FROM numbered
+    WHERE companies.id = numbered.id;
+END $$;
+-- END BACKFILL
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_public_id
     ON companies (public_id)
