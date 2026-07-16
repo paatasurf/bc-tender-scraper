@@ -11,8 +11,10 @@ two are evaluated separately, with separate failure/warning vocabularies.
 Severity rule, as specified for this audit:
 
 - dangling IDs or invalid internal invariants -> FAIL
-- ambiguous external tender IDs or cross-path contradictions -> BLOCKED
-- missing coverage, shared awards, or non-awarded award links -> WARN
+- ambiguous external tender IDs that already have tender_outcomes evidence
+  attached, or cross-path contradictions -> BLOCKED
+- ambiguous external tender IDs with no evidence attached, missing
+  coverage, shared awards, or non-awarded award links -> WARN
 - otherwise -> PASS
 """
 
@@ -228,6 +230,12 @@ def evaluate_path_b(path_b: dict[str, Any]) -> dict[str, Any]:
     ambiguous_external_id_distinct_count = _required_non_negative_int(
         path_b, "ambiguous_external_id_distinct_count", source
     )
+    ambiguous_external_id_with_outcomes_distinct_count = _required_non_negative_int(
+        path_b, "ambiguous_external_id_with_outcomes_distinct_count", source
+    )
+    ambiguous_outcome_row_count = _required_non_negative_int(
+        path_b, "ambiguous_outcome_row_count", source
+    )
     safely_attributable_tenders = _required_non_negative_int(
         path_b, "safely_attributable_tenders", source
     )
@@ -286,11 +294,35 @@ def evaluate_path_b(path_b: dict[str, Any]) -> dict[str, Any]:
     ):
         failures.append("PATH_B_AMBIGUOUS_EXTERNAL_ID_COUNT_INCONSISTENT")
 
+    # The with-outcomes subset must be internally consistent too: zero
+    # distinct with-outcomes IDs iff zero outcome rows, at least one row
+    # per with-outcomes ID, and never more with-outcomes IDs than
+    # ambiguous IDs in total (it is a subset of them).
+    if (
+        (ambiguous_external_id_with_outcomes_distinct_count == 0)
+        != (ambiguous_outcome_row_count == 0)
+        or (
+            ambiguous_outcome_row_count
+            < ambiguous_external_id_with_outcomes_distinct_count
+        )
+        or (
+            ambiguous_external_id_with_outcomes_distinct_count
+            > ambiguous_external_id_distinct_count
+        )
+    ):
+        failures.append("PATH_B_AMBIGUOUS_WITH_OUTCOMES_COUNT_INCONSISTENT")
+
     if dangling_company_id_count:
         failures.append("DANGLING_COMPANY_ID_PATH_B")
 
-    if ambiguous_external_id_tender_count:
-        blocked.append("AMBIGUOUS_EXTERNAL_TENDER_ID")
+    # A duplicate tender_id that already has tender_outcomes evidence
+    # attached actively blocks safe attribution of that evidence; a
+    # duplicate with no evidence yet is a data-quality nuisance, not a
+    # blocker.
+    if ambiguous_external_id_with_outcomes_distinct_count:
+        blocked.append("AMBIGUOUS_EXTERNAL_TENDER_ID_WITH_EVIDENCE")
+    elif ambiguous_external_id_distinct_count:
+        warnings.append("AMBIGUOUS_EXTERNAL_TENDER_IDS_PRESENT")
 
     if tenders_missing_external_id:
         warnings.append("MISSING_EXTERNAL_TENDER_ID")
@@ -304,6 +336,11 @@ def evaluate_path_b(path_b: dict[str, Any]) -> dict[str, Any]:
         "inventory_total": inventory_total,
         "safely_attributable_tenders": safely_attributable_tenders,
         "tenders_with_reported_bidders": tenders_with_reported_bidders,
+        "ambiguous_external_id_distinct_count": ambiguous_external_id_distinct_count,
+        "ambiguous_external_id_with_outcomes_distinct_count": (
+            ambiguous_external_id_with_outcomes_distinct_count
+        ),
+        "ambiguous_outcome_row_count": ambiguous_outcome_row_count,
         "entity_role_counts": entity_role_counts,
         "outcomes_breakdown": outcomes_breakdown,
         "dataset_hash": dataset_hash,

@@ -112,7 +112,26 @@ class PathAAuditReport:
 
 @dataclass(frozen=True)
 class PathBAuditReport:
-    """Path B: self-reported bidder outcome."""
+    """Path B: self-reported bidder outcome.
+
+    Ambiguous ``tenders.tender_id`` values (shared by more than one tender
+    row) are tracked at two distinct severities, because a duplicate ID
+    with no evidence attached is a data-quality nuisance, while a
+    duplicate ID that already has ``tender_outcomes`` rows referencing it
+    means real evidence cannot currently be safely attributed to a single
+    tender:
+
+    - ``ambiguous_external_id_distinct_count`` / ``_tender_count`` — every
+      duplicate ``tender_id`` value and every tender row participating in
+      one, regardless of whether any outcome evidence exists for it.
+    - ``ambiguous_external_id_with_outcomes_distinct_count`` — the subset
+      of those duplicate IDs for which at least one ``tender_outcomes``
+      row exists (always <= ``ambiguous_external_id_distinct_count``).
+    - ``ambiguous_outcome_row_count`` — the total ``tender_outcomes`` rows
+      attached to any of those with-outcomes duplicate IDs; these rows
+      cannot be safely counted into ``outcomes_breakdown`` /
+      ``entity_role_counts`` (which are scoped to non-ambiguous IDs only).
+    """
 
     generated_at: str
     inventory_total: int
@@ -121,6 +140,8 @@ class PathBAuditReport:
     ambiguous_external_id_tender_count: int
     ambiguous_external_id_distinct_count: int
     ambiguous_external_id_samples: list[dict[str, Any]]
+    ambiguous_external_id_with_outcomes_distinct_count: int
+    ambiguous_outcome_row_count: int
     safely_attributable_tenders: int
     tenders_with_reported_bidders: int
     bidder_count_distribution: dict[str, int]
@@ -140,6 +161,8 @@ class PathBAuditReport:
                 str(self.tenders_missing_external_id),
                 str(self.ambiguous_external_id_tender_count),
                 str(self.ambiguous_external_id_distinct_count),
+                str(self.ambiguous_external_id_with_outcomes_distinct_count),
+                str(self.ambiguous_outcome_row_count),
                 str(self.safely_attributable_tenders),
                 str(self.tenders_with_reported_bidders),
                 str(self.dangling_company_id_count),
