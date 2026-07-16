@@ -14,6 +14,9 @@ from pipeline.registry_engine.evidence.audit import (
     audit_tender_evidence_linkage,
 )
 from pipeline.registry_engine.evidence.domain import (
+    CURRENT_SCHEMA_VERSION,
+    SCHEMA_VERSION_V1,
+    SCHEMA_VERSION_V2,
     CanonicalTargetResult,
     EvidenceLinkAuditReport,
     EvidenceReference,
@@ -26,4 +29,7 @@ __all__ = [
     "EvidenceReference",
     "CanonicalTargetResult",
     "EvidenceLinkAuditReport",
+    "SCHEMA_VERSION_V1",
+    "SCHEMA_VERSION_V2",
+    "CURRENT_SCHEMA_VERSION",
 ]

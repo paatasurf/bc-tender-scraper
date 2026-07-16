@@ -99,6 +99,11 @@ class CanonicalTargetResult:
     excluded: bool
 
 
+SCHEMA_VERSION_V1 = 1
+SCHEMA_VERSION_V2 = 2
+CURRENT_SCHEMA_VERSION = SCHEMA_VERSION_V2
+
+
 @dataclass(frozen=True)
 class EvidenceLinkAuditReport:
     """Read-only audit output for one evidence source (permit or contract_award).
@@ -114,6 +119,13 @@ class EvidenceLinkAuditReport:
     since it does not cover the full dataset. ``dataset_hash`` is the
     authoritative fingerprint: a streamed, batched hash over every matching
     row in canonical order, with no sample bound.
+
+    ``schema_version`` distinguishes v1 reports (no ``linked_entity_role_counts``)
+    from v2 reports (this revision). Every report produced by this module is
+    v2; v1 is only ever seen when a consumer loads an older saved JSON
+    artifact — v2 code must keep such artifacts readable, not reject them.
+    It is included in ``report_hash`` at a fixed position so two reports
+    that differ only by declared version never collide.
     """
 
     source: str
@@ -131,6 +143,8 @@ class EvidenceLinkAuditReport:
     excluded_target_count: int
     reference_sample: list[EvidenceReference]
     dataset_hash: str
+    linked_entity_role_counts: dict[str, int] = field(default_factory=dict)
+    schema_version: int = CURRENT_SCHEMA_VERSION
     report_hash: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
@@ -147,6 +161,11 @@ class EvidenceLinkAuditReport:
                 str(self.cycle_count),
                 str(self.depth_exhausted_count),
                 str(self.excluded_target_count),
+                f"schema_version:{self.schema_version}",
+                *[
+                    f"role:{role}:{count}"
+                    for role, count in sorted(self.linked_entity_role_counts.items())
+                ],
                 *[ref.reference_hash for ref in ordered],
             )
             object.__setattr__(self, "report_hash", computed)
