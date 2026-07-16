@@ -18,7 +18,9 @@ import pytest
 from sqlalchemy.sql.dml import Delete, Insert, Update
 
 from pipeline.registry_engine.evidence.domain import (
+    CURRENT_SCHEMA_VERSION,
     EVIDENCE_TYPE_PERMIT,
+    SCHEMA_VERSION_V1,
     SOURCE_TABLE_PERMITS,
     EvidenceLinkAuditReport,
     EvidenceReference,
@@ -157,6 +159,116 @@ def test_dataset_hash_is_a_separate_field_from_report_hash():
     )
     assert report.dataset_hash == "full-dataset-fingerprint"
     assert report.dataset_hash != report.report_hash
+
+
+def _report_with_role_counts(linked_entity_role_counts):
+    return EvidenceLinkAuditReport(
+        source=EVIDENCE_TYPE_PERMIT,
+        generated_at="2026-01-01T00:00:00+00:00",
+        total_rows=1,
+        rows_with_company_id=1,
+        rows_without_company_id=0,
+        orphan_count=0,
+        orphan_samples=[],
+        non_canonical_count=0,
+        non_canonical_samples=[],
+        broken_redirect_count=0,
+        cycle_count=0,
+        depth_exhausted_count=0,
+        excluded_target_count=0,
+        reference_sample=[],
+        dataset_hash="irrelevant-for-this-test",
+        linked_entity_role_counts=linked_entity_role_counts,
+    )
+
+
+def test_report_hash_changes_with_linked_entity_role_counts():
+    """report_hash must account for the entity-role breakdown, not just the
+    scalar summary counts — two reports with identical scalars but different
+    role composition must not collide."""
+    a = _report_with_role_counts({"canonical": 1})
+    b = _report_with_role_counts({"standalone": 1})
+    assert a.report_hash != b.report_hash
+
+
+def test_report_hash_independent_of_role_count_dict_insertion_order():
+    """The hash sorts role_counts.items() before hashing, so insertion order
+    must not matter — only the (role, count) pairs themselves."""
+    ordered_ab = {"applicant_alias": 1, "canonical": 2}
+    ordered_ba = {"canonical": 2, "applicant_alias": 1}
+    assert (
+        _report_with_role_counts(ordered_ab).report_hash
+        == _report_with_role_counts(ordered_ba).report_hash
+    )
+
+
+def test_schema_version_defaults_to_current_on_fresh_construction():
+    report = _report_with_role_counts({})
+    assert report.schema_version == CURRENT_SCHEMA_VERSION
+
+
+def test_v1_style_construction_without_role_counts_or_version_still_works():
+    """Backward compatibility at the dataclass level: code built against the
+    v1 shape (no linked_entity_role_counts, no schema_version kwarg) must
+    still construct a valid report, defaulting both new fields sanely."""
+    report = EvidenceLinkAuditReport(
+        source=EVIDENCE_TYPE_PERMIT,
+        generated_at="2026-01-01T00:00:00+00:00",
+        total_rows=1,
+        rows_with_company_id=1,
+        rows_without_company_id=0,
+        orphan_count=0,
+        orphan_samples=[],
+        non_canonical_count=0,
+        non_canonical_samples=[],
+        broken_redirect_count=0,
+        cycle_count=0,
+        depth_exhausted_count=0,
+        excluded_target_count=0,
+        reference_sample=[],
+        dataset_hash="irrelevant-for-this-test",
+    )
+    assert report.linked_entity_role_counts == {}
+    assert report.schema_version == CURRENT_SCHEMA_VERSION
+    assert report.schema_version != SCHEMA_VERSION_V1
+
+
+def _report_with_version(schema_version, linked_entity_role_counts=None):
+    return EvidenceLinkAuditReport(
+        source=EVIDENCE_TYPE_PERMIT,
+        generated_at="2026-01-01T00:00:00+00:00",
+        total_rows=1,
+        rows_with_company_id=1,
+        rows_without_company_id=0,
+        orphan_count=0,
+        orphan_samples=[],
+        non_canonical_count=0,
+        non_canonical_samples=[],
+        broken_redirect_count=0,
+        cycle_count=0,
+        depth_exhausted_count=0,
+        excluded_target_count=0,
+        reference_sample=[],
+        dataset_hash="irrelevant-for-this-test",
+        linked_entity_role_counts=linked_entity_role_counts or {},
+        schema_version=schema_version,
+    )
+
+
+def test_report_hash_changes_with_schema_version_alone():
+    """Two reports identical in every field except schema_version must not
+    collide — a declared-version change is a real content change."""
+    v1 = _report_with_version(SCHEMA_VERSION_V1)
+    v2 = _report_with_version(CURRENT_SCHEMA_VERSION)
+    assert v1.report_hash != v2.report_hash
+
+
+def test_report_hash_identical_for_identical_reports_same_version():
+    """Determinism: two independently-constructed reports with identical
+    fields (including schema_version) must produce the identical hash."""
+    a = _report_with_version(CURRENT_SCHEMA_VERSION, {"canonical": 3, "standalone": 1})
+    b = _report_with_version(CURRENT_SCHEMA_VERSION, {"standalone": 1, "canonical": 3})
+    assert a.report_hash == b.report_hash
 
 
 # --- write-guard: no mutation, no DML, ever -----------------------------------
@@ -666,3 +778,256 @@ def test_permit_audit_produces_no_orphans_under_fk_enforcement(local_db_session)
     with pytest.raises(IntegrityError):
         local_db_session.flush()
     local_db_session.rollback()
+
+
+# --- linked_entity_role_counts: full entity-role breakdown ---------------------
+
+
+def test_linked_entity_role_counts_breaks_down_by_role(local_db_session):
+    """canonical, standalone, applicant_alias, and probable_person must each
+    appear under their own key with the correct count."""
+    from db.models import Permit
+
+    canonical = _make_company(
+        local_db_session, name="Breakdown Canonical", entity_role="canonical"
+    )
+    standalone = _make_company(
+        local_db_session, name="Breakdown Standalone", entity_role="standalone"
+    )
+    alias = _make_company(
+        local_db_session,
+        name="Breakdown Alias",
+        entity_role="applicant_alias",
+        canonical_company_id=canonical.id,
+    )
+    person = _make_company(
+        local_db_session, name="Breakdown Person", entity_role="probable_person"
+    )
+    for i, company in enumerate((canonical, standalone, alias, person)):
+        local_db_session.add(
+            Permit(
+                address=f"{i} Breakdown Rd",
+                external_id=f"BP-BRK-{i}",
+                company_id=company.id,
+            )
+        )
+    local_db_session.flush()
+
+    from pipeline.registry_engine.evidence.audit import audit_permit_evidence_links
+
+    report = audit_permit_evidence_links(local_db_session)
+
+    assert report.linked_entity_role_counts["canonical"] >= 1
+    assert report.linked_entity_role_counts["standalone"] >= 1
+    assert report.linked_entity_role_counts["applicant_alias"] >= 1
+    assert report.linked_entity_role_counts["probable_person"] >= 1
+
+
+def test_compute_linked_entity_role_counts_handles_unknown_role_and_missing_company():
+    """A role string outside the known ENTITY_ROLES vocabulary must still get
+    its own bucket, and a NULL (orphan) role must map to MISSING_COMPANY_ROLE.
+
+    companies.ck_companies_entity_role currently makes an actual unrecognized
+    role row impossible to construct via a real insert (verified: attempting
+    it raises psycopg2.errors.CheckViolation) — the same structural
+    impossibility as the FK-enforced orphan case elsewhere in this file. So
+    this tests the aggregation function directly against a stub session that
+    returns exactly the (role, count) pairs Postgres's GROUP BY would produce,
+    the same approach test_resolve_canonical_targets_detects_broken_redirect_
+    directly uses for the equally-unconstructable broken-redirect case.
+    """
+    from db.models import Permit
+    from pipeline.registry_engine.evidence.audit import (
+        MISSING_COMPANY_ROLE,
+        _compute_linked_entity_role_counts,
+    )
+
+    class _StubRoleCountResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _StubSession:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def execute(self, _stmt):
+            return _StubRoleCountResult(self._rows)
+
+    session = _StubSession(
+        [
+            ("canonical", 3),
+            ("standalone", 2),
+            ("duplicate_shell_candidate", 1),
+            (None, 1),
+        ]
+    )
+
+    counts = _compute_linked_entity_role_counts(session, model=Permit)
+
+    assert counts == {
+        "canonical": 3,
+        "duplicate_shell_candidate": 1,
+        MISSING_COMPANY_ROLE: 1,
+        "standalone": 2,
+    }
+    assert list(counts.keys()) == sorted(counts.keys())
+
+
+def test_linked_entity_role_counts_sum_equals_rows_with_company_id(local_db_session):
+    """Invariant: sum(breakdown.values()) == rows_with_company_id."""
+    from db.models import Permit
+
+    canonical = _make_company(local_db_session, name="Sum Invariant Canonical")
+    standalone = _make_company(
+        local_db_session, name="Sum Invariant Standalone", entity_role="standalone"
+    )
+    local_db_session.add(
+        Permit(address="1 Sum Rd", external_id="BP-SUM-1", company_id=canonical.id)
+    )
+    local_db_session.add(
+        Permit(address="2 Sum Rd", external_id="BP-SUM-2", company_id=standalone.id)
+    )
+    local_db_session.add(
+        Permit(address="3 Sum Rd", external_id="BP-SUM-3")
+    )  # no company_id
+    local_db_session.flush()
+
+    from pipeline.registry_engine.evidence.audit import audit_permit_evidence_links
+
+    report = audit_permit_evidence_links(local_db_session)
+
+    assert sum(report.linked_entity_role_counts.values()) == report.rows_with_company_id
+
+
+def test_linked_entity_role_counts_missing_company_matches_orphan_count(
+    local_db_session,
+):
+    """Invariant: missing_company == orphan_count. Both are provably 0 under
+    real FK enforcement (see test_permit_audit_produces_no_orphans_under_fk_
+    enforcement) — this asserts the equality actually holds for real data,
+    not just that both happen to default to the same literal."""
+    from db.models import Permit
+    from pipeline.registry_engine.evidence.audit import MISSING_COMPANY_ROLE
+
+    company = _make_company(local_db_session, name="Missing Company Invariant Co")
+    local_db_session.add(
+        Permit(
+            address="1 Missing Rd", external_id="BP-MISSING-1", company_id=company.id
+        )
+    )
+    local_db_session.flush()
+
+    from pipeline.registry_engine.evidence.audit import audit_permit_evidence_links
+
+    report = audit_permit_evidence_links(local_db_session)
+
+    assert report.orphan_count == 0
+    assert report.linked_entity_role_counts.get(MISSING_COMPANY_ROLE, 0) == 0
+    assert (
+        report.linked_entity_role_counts.get(MISSING_COMPANY_ROLE, 0)
+        == report.orphan_count
+    )
+
+
+def test_non_canonical_count_equals_sum_of_non_canonical_non_missing_roles(
+    local_db_session,
+):
+    """Invariant: non_canonical_count == sum of every role bucket except
+    canonical and missing_company."""
+    from db.company_canonical_constants import ENTITY_ROLE_CANONICAL
+    from db.models import Permit
+    from pipeline.registry_engine.evidence.audit import MISSING_COMPANY_ROLE
+
+    canonical = _make_company(local_db_session, name="NC Invariant Canonical")
+    standalone = _make_company(
+        local_db_session, name="NC Invariant Standalone", entity_role="standalone"
+    )
+    alias = _make_company(
+        local_db_session,
+        name="NC Invariant Alias",
+        entity_role="applicant_alias",
+        canonical_company_id=canonical.id,
+    )
+    person = _make_company(
+        local_db_session, name="NC Invariant Person", entity_role="probable_person"
+    )
+    for i, company in enumerate((canonical, standalone, alias, person)):
+        local_db_session.add(
+            Permit(
+                address=f"{i} NC Invariant Rd",
+                external_id=f"BP-NC-{i}",
+                company_id=company.id,
+            )
+        )
+    local_db_session.flush()
+
+    from pipeline.registry_engine.evidence.audit import audit_permit_evidence_links
+
+    report = audit_permit_evidence_links(local_db_session)
+
+    expected = sum(
+        count
+        for role, count in report.linked_entity_role_counts.items()
+        if role not in (ENTITY_ROLE_CANONICAL, MISSING_COMPANY_ROLE)
+    )
+    assert report.non_canonical_count == expected
+
+
+def test_linked_entity_role_counts_reflects_full_dataset_not_sample_limit(
+    local_db_session, monkeypatch
+):
+    """Requirement: the breakdown is a full-dataset aggregate, not derived
+    from (or capped by) the bounded illustrative samples."""
+    import pipeline.registry_engine.evidence.audit as audit_module
+    from db.models import Permit
+
+    monkeypatch.setattr(audit_module, "SAMPLE_LIMIT", 1)
+
+    standalone = _make_company(
+        local_db_session, name="Full Dataset Standalone", entity_role="standalone"
+    )
+    for i in range(5):
+        local_db_session.add(
+            Permit(
+                address=f"{i} Full Dataset Rd",
+                external_id=f"BP-FULL-{i}",
+                company_id=standalone.id,
+            )
+        )
+    local_db_session.flush()
+
+    from pipeline.registry_engine.evidence.audit import audit_permit_evidence_links
+
+    report = audit_permit_evidence_links(local_db_session)
+
+    assert len(report.non_canonical_samples) <= 1  # sample bound respected
+    assert report.linked_entity_role_counts["standalone"] >= 5  # full dataset
+
+
+def test_linked_entity_role_counts_key_order_is_deterministic(local_db_session):
+    """The breakdown dict must serialize in a stable (sorted) key order so
+    the resulting JSON is byte-for-byte reproducible across runs."""
+    from db.models import Permit
+
+    for i, role in enumerate(("standalone", "canonical", "applicant_alias")):
+        company = _make_company(
+            local_db_session, name=f"Order Co {i}", entity_role=role
+        )
+        local_db_session.add(
+            Permit(
+                address=f"{i} Order Rd",
+                external_id=f"BP-ORDER-{i}",
+                company_id=company.id,
+            )
+        )
+    local_db_session.flush()
+
+    from pipeline.registry_engine.evidence.audit import audit_permit_evidence_links
+
+    report = audit_permit_evidence_links(local_db_session)
+    keys = list(report.linked_entity_role_counts.keys())
+
+    assert keys == sorted(keys)

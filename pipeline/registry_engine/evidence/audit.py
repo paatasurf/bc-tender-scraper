@@ -42,6 +42,7 @@ REFERENCE_SAMPLE_LIMIT = 200
 MAX_REDIRECT_DEPTH = 10
 DATASET_HASH_BATCH_SIZE = 1000
 REGISTRY_STATUS_EXCLUDED = "excluded"
+MISSING_COMPANY_ROLE = "missing_company"
 
 
 def _now_iso() -> str:
@@ -145,6 +146,38 @@ def _resolve_canonical_targets(
     return results
 
 
+def _compute_linked_entity_role_counts(
+    session: Session, *, model: type[Any]
+) -> dict[str, int]:
+    """Full-dataset breakdown of every linked row by the target company's
+    entity_role. Read-only, single aggregate query, never derived from or
+    bounded by a sample.
+
+    A row whose company_id has no matching Company row (a structural
+    orphan) surfaces as a NULL entity_role from the outer join and is
+    bucketed under MISSING_COMPANY_ROLE. An entity_role value outside the
+    known vocabulary — currently blocked by companies.ck_companies_entity_role,
+    but not a guarantee this function should assume — gets its own literal
+    key rather than being dropped or merged into another bucket.
+    """
+    role_rows = session.execute(
+        select(Company.entity_role, func.count())
+        .select_from(model)
+        .outerjoin(Company, Company.id == model.company_id)
+        .where(model.company_id.isnot(None))
+        .group_by(Company.entity_role)
+    ).all()
+    return dict(
+        sorted(
+            (
+                str(role) if role is not None else MISSING_COMPANY_ROLE,
+                int(count),
+            )
+            for role, count in role_rows
+        )
+    )
+
+
 def _compute_dataset_hash(
     session: Session,
     *,
@@ -206,6 +239,8 @@ def _audit_evidence_source(
         or 0
     )
     rows_without_company_id = total_rows - rows_with_company_id
+
+    linked_entity_role_counts = _compute_linked_entity_role_counts(session, model=model)
 
     orphan_count = (
         session.scalar(
@@ -351,6 +386,7 @@ def _audit_evidence_source(
         excluded_target_count=excluded_target_count,
         reference_sample=reference_sample,
         dataset_hash=dataset_hash,
+        linked_entity_role_counts=linked_entity_role_counts,
     )
 
 
