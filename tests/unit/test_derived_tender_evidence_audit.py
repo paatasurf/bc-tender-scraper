@@ -95,6 +95,8 @@ def _path_b_report(**overrides) -> PathBAuditReport:
         ambiguous_external_id_tender_count=0,
         ambiguous_external_id_distinct_count=0,
         ambiguous_external_id_samples=[],
+        ambiguous_external_id_with_outcomes_distinct_count=0,
+        ambiguous_outcome_row_count=0,
         safely_attributable_tenders=1,
         tenders_with_reported_bidders=1,
         bidder_count_distribution={"1": 1, "2": 0, "3_plus": 0},
@@ -115,6 +117,18 @@ def test_path_b_report_hash_deterministic_for_identical_input():
 def test_path_b_report_hash_changes_with_outcomes_breakdown():
     a = _path_b_report(outcomes_breakdown={"won": 1})
     b = _path_b_report(outcomes_breakdown={"lost": 1})
+    assert a.report_hash != b.report_hash
+
+
+def test_path_b_report_hash_changes_with_ambiguous_with_outcomes_counts():
+    a = _path_b_report(
+        ambiguous_external_id_with_outcomes_distinct_count=0,
+        ambiguous_outcome_row_count=0,
+    )
+    b = _path_b_report(
+        ambiguous_external_id_with_outcomes_distinct_count=1,
+        ambiguous_outcome_row_count=1,
+    )
     assert a.report_hash != b.report_hash
 
 
@@ -568,6 +582,86 @@ def test_path_b_detects_duplicate_external_id(local_db_session):
 
     assert report.ambiguous_external_id_tender_count >= 2
     assert report.ambiguous_external_id_distinct_count >= 1
+
+
+def test_path_b_ambiguous_duplicate_without_outcomes_does_not_count_as_with_outcomes(
+    local_db_session,
+):
+    """A duplicate tender_id with no tender_outcomes rows referencing it
+    must not be counted as a with-outcomes ambiguous ID — this is the
+    production-observed shape (5 duplicate IDs, 10 rows, 0 outcomes) that
+    must warn, not block."""
+    from pipeline.registry_engine.derived_tender_evidence.audit import (
+        audit_path_b_reported_bidder,
+    )
+
+    before = audit_path_b_reported_bidder(local_db_session)
+
+    shared_id = f"EXT-{_uid()}"
+    _make_tender(local_db_session, tender_id=shared_id)
+    _make_tender(local_db_session, tender_id=shared_id)
+
+    after = audit_path_b_reported_bidder(local_db_session)
+
+    assert (
+        after.ambiguous_external_id_distinct_count
+        > before.ambiguous_external_id_distinct_count
+    )
+    assert (
+        after.ambiguous_external_id_with_outcomes_distinct_count
+        == before.ambiguous_external_id_with_outcomes_distinct_count
+    )
+    assert after.ambiguous_outcome_row_count == before.ambiguous_outcome_row_count
+
+
+def test_path_b_ambiguous_duplicate_with_outcomes_is_detected(local_db_session):
+    """A duplicate tender_id that already has tender_outcomes evidence
+    attached must be counted in both new with-outcomes counters."""
+    shared_id = f"EXT-{_uid()}"
+    _make_tender(local_db_session, tender_id=shared_id)
+    _make_tender(local_db_session, tender_id=shared_id)
+    company = _make_company(local_db_session)
+    _make_outcome(
+        local_db_session, company_id=company.id, tender_id=shared_id, outcome="won"
+    )
+
+    from pipeline.registry_engine.derived_tender_evidence.audit import (
+        audit_path_b_reported_bidder,
+    )
+
+    report = audit_path_b_reported_bidder(local_db_session)
+
+    assert report.ambiguous_external_id_with_outcomes_distinct_count >= 1
+    assert report.ambiguous_outcome_row_count >= 1
+
+
+def test_path_b_dataset_hash_changes_when_outcome_added_to_ambiguous_tender_id(
+    local_db_session,
+):
+    """Adding a tender_outcomes row against an already-ambiguous tender_id
+    must change the Path B dataset hash — the hash streams every raw
+    outcome row unconditionally, so this must hold even for ambiguous
+    ids whose outcomes are excluded from outcomes_breakdown."""
+    from pipeline.registry_engine.derived_tender_evidence.audit import (
+        audit_path_b_reported_bidder,
+    )
+
+    shared_id = f"EXT-{_uid()}"
+    _make_tender(local_db_session, tender_id=shared_id)
+    _make_tender(local_db_session, tender_id=shared_id)
+    report_before = audit_path_b_reported_bidder(local_db_session)
+
+    company = _make_company(local_db_session)
+    _make_outcome(
+        local_db_session, company_id=company.id, tender_id=shared_id, outcome="won"
+    )
+    report_after = audit_path_b_reported_bidder(local_db_session)
+
+    assert report_after.dataset_hash != report_before.dataset_hash
+    assert (
+        report_after.ambiguous_outcome_row_count
+        > report_before.ambiguous_outcome_row_count
+    )
 
 
 def test_path_b_treats_empty_tender_id_as_missing(local_db_session):
@@ -1058,5 +1152,9 @@ def test_real_audit_output_passes_the_real_evaluator_end_to_end(local_db_session
     assert "PATH_B_INVALID_DATASET_HASH" not in scorecard["path_b"]["failures"]
     assert (
         "PATH_B_AMBIGUOUS_EXTERNAL_ID_COUNT_INCONSISTENT"
+        not in scorecard["path_b"]["failures"]
+    )
+    assert (
+        "PATH_B_AMBIGUOUS_WITH_OUTCOMES_COUNT_INCONSISTENT"
         not in scorecard["path_b"]["failures"]
     )

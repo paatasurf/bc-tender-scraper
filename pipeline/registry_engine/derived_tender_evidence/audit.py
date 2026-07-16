@@ -17,6 +17,11 @@ two paths that already exist in the schema, unenforced:
 
 All full-dataset counts are computed from unbounded aggregate queries —
 never derived from the bounded illustrative samples.
+
+Ambiguous ``tenders.tender_id`` values (shared by more than one tender row)
+are further split into "no evidence attached" vs. "evidence attached" — see
+``PathBAuditReport`` in ``domain.py`` for the exact field semantics and
+``evaluate.py`` for the resulting WARN/BLOCKED severity split.
 """
 
 from __future__ import annotations
@@ -348,6 +353,18 @@ def audit_path_b_reported_bidder(session: Session) -> PathBAuditReport:
         for tid, cnt in ambiguous_rows_with_counts[:SAMPLE_LIMIT]
     ]
 
+    # Of the ambiguous tender_id values, how many already have
+    # tender_outcomes evidence attached — those are the ones where the
+    # ambiguity is not just a data-quality nuisance but actively blocks
+    # attributing real self-reported evidence to a single tender.
+    ambiguous_outcome_rows = session.execute(
+        select(TenderOutcome.tender_id, func.count())
+        .where(TenderOutcome.tender_id.in_(ambiguous_subq))
+        .group_by(TenderOutcome.tender_id)
+    ).all()
+    ambiguous_external_id_with_outcomes_distinct_count = len(ambiguous_outcome_rows)
+    ambiguous_outcome_row_count = sum(int(cnt) for _tid, cnt in ambiguous_outcome_rows)
+
     safely_attributable_tenders = (
         tenders_with_valid_external_id - ambiguous_external_id_tender_count
     )
@@ -433,6 +450,10 @@ def audit_path_b_reported_bidder(session: Session) -> PathBAuditReport:
         ambiguous_external_id_tender_count=ambiguous_external_id_tender_count,
         ambiguous_external_id_distinct_count=ambiguous_external_id_distinct_count,
         ambiguous_external_id_samples=ambiguous_external_id_samples,
+        ambiguous_external_id_with_outcomes_distinct_count=(
+            ambiguous_external_id_with_outcomes_distinct_count
+        ),
+        ambiguous_outcome_row_count=ambiguous_outcome_row_count,
         safely_attributable_tenders=safely_attributable_tenders,
         tenders_with_reported_bidders=tenders_with_reported_bidders,
         bidder_count_distribution=bidder_count_distribution,

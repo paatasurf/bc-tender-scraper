@@ -40,6 +40,8 @@ def _path_b(**overrides):
         "tenders_missing_external_id": 0,
         "ambiguous_external_id_tender_count": 0,
         "ambiguous_external_id_distinct_count": 0,
+        "ambiguous_external_id_with_outcomes_distinct_count": 0,
+        "ambiguous_outcome_row_count": 0,
         "safely_attributable_tenders": 10,
         "tenders_with_reported_bidders": 1,
         "bidder_count_distribution": {"1": 1, "2": 0, "3_plus": 0},
@@ -194,20 +196,63 @@ def test_path_b_bidder_distribution_invariant_violation_fails():
     assert "PATH_B_BIDDER_DISTRIBUTION_INCONSISTENT" in scorecard["path_b"]["failures"]
 
 
-def test_ambiguous_external_tender_id_blocks():
+def test_ambiguous_external_tender_id_without_outcomes_warns():
+    """Duplicate tender_id values with no tender_outcomes evidence attached
+    are a data-quality nuisance, not a blocker — this is the
+    production-observed shape (5 duplicate IDs, 10 rows, 0 outcomes)."""
     scorecard = evaluate_derived_tender_evidence_payload(
         _payload(
             path_b=_path_b(
                 tenders_with_valid_external_id=10,
                 ambiguous_external_id_tender_count=2,
                 ambiguous_external_id_distinct_count=1,
+                ambiguous_external_id_with_outcomes_distinct_count=0,
+                ambiguous_outcome_row_count=0,
+                safely_attributable_tenders=8,
+            )
+        )
+    )
+
+    assert scorecard["overall_status"] == "WARN"
+    assert "AMBIGUOUS_EXTERNAL_TENDER_IDS_PRESENT" in scorecard["path_b"]["warnings"]
+    assert (
+        "AMBIGUOUS_EXTERNAL_TENDER_ID_WITH_EVIDENCE"
+        not in scorecard["path_b"]["blocked"]
+    )
+    assert scorecard["path_b"]["ambiguous_external_id_distinct_count"] == 1
+    assert (
+        scorecard["path_b"]["ambiguous_external_id_with_outcomes_distinct_count"] == 0
+    )
+    assert scorecard["path_b"]["ambiguous_outcome_row_count"] == 0
+
+
+def test_ambiguous_external_tender_id_with_outcomes_blocks():
+    """Duplicate tender_id values that already have tender_outcomes
+    evidence attached actively block safe attribution of that evidence."""
+    scorecard = evaluate_derived_tender_evidence_payload(
+        _payload(
+            path_b=_path_b(
+                tenders_with_valid_external_id=10,
+                ambiguous_external_id_tender_count=2,
+                ambiguous_external_id_distinct_count=1,
+                ambiguous_external_id_with_outcomes_distinct_count=1,
+                ambiguous_outcome_row_count=2,
                 safely_attributable_tenders=8,
             )
         )
     )
 
     assert scorecard["overall_status"] == "BLOCKED"
-    assert "AMBIGUOUS_EXTERNAL_TENDER_ID" in scorecard["path_b"]["blocked"]
+    assert (
+        "AMBIGUOUS_EXTERNAL_TENDER_ID_WITH_EVIDENCE" in scorecard["path_b"]["blocked"]
+    )
+    assert (
+        "AMBIGUOUS_EXTERNAL_TENDER_IDS_PRESENT" not in scorecard["path_b"]["warnings"]
+    )
+    assert (
+        scorecard["path_b"]["ambiguous_external_id_with_outcomes_distinct_count"] == 1
+    )
+    assert scorecard["path_b"]["ambiguous_outcome_row_count"] == 2
 
 
 @pytest.mark.parametrize(
@@ -618,6 +663,127 @@ def test_ambiguous_external_id_consistent_values_pass():
         "PATH_B_AMBIGUOUS_EXTERNAL_ID_COUNT_INCONSISTENT"
         not in scorecard["path_b"]["failures"]
     )
+
+
+# --- ambiguous-with-outcomes invariants -----------------------------------
+
+
+def test_ambiguous_with_outcomes_nonzero_distinct_but_zero_row_count_fails():
+    scorecard = evaluate_derived_tender_evidence_payload(
+        _payload(
+            path_b=_path_b(
+                ambiguous_external_id_distinct_count=1,
+                ambiguous_external_id_tender_count=2,
+                ambiguous_external_id_with_outcomes_distinct_count=1,
+                ambiguous_outcome_row_count=0,
+            )
+        )
+    )
+    assert scorecard["overall_status"] == "FAIL"
+    assert (
+        "PATH_B_AMBIGUOUS_WITH_OUTCOMES_COUNT_INCONSISTENT"
+        in scorecard["path_b"]["failures"]
+    )
+
+
+def test_ambiguous_with_outcomes_row_count_below_distinct_count_fails():
+    scorecard = evaluate_derived_tender_evidence_payload(
+        _payload(
+            path_b=_path_b(
+                ambiguous_external_id_distinct_count=2,
+                ambiguous_external_id_tender_count=4,
+                ambiguous_external_id_with_outcomes_distinct_count=2,
+                ambiguous_outcome_row_count=1,
+            )
+        )
+    )
+    assert scorecard["overall_status"] == "FAIL"
+    assert (
+        "PATH_B_AMBIGUOUS_WITH_OUTCOMES_COUNT_INCONSISTENT"
+        in scorecard["path_b"]["failures"]
+    )
+
+
+def test_ambiguous_with_outcomes_distinct_exceeds_total_ambiguous_distinct_fails():
+    scorecard = evaluate_derived_tender_evidence_payload(
+        _payload(
+            path_b=_path_b(
+                ambiguous_external_id_distinct_count=1,
+                ambiguous_external_id_tender_count=2,
+                ambiguous_external_id_with_outcomes_distinct_count=2,
+                ambiguous_outcome_row_count=2,
+            )
+        )
+    )
+    assert scorecard["overall_status"] == "FAIL"
+    assert (
+        "PATH_B_AMBIGUOUS_WITH_OUTCOMES_COUNT_INCONSISTENT"
+        in scorecard["path_b"]["failures"]
+    )
+
+
+def test_ambiguous_with_outcomes_consistent_values_pass():
+    scorecard = evaluate_derived_tender_evidence_payload(
+        _payload(
+            path_b=_path_b(
+                ambiguous_external_id_distinct_count=1,
+                ambiguous_external_id_tender_count=2,
+                ambiguous_external_id_with_outcomes_distinct_count=1,
+                ambiguous_outcome_row_count=2,
+            )
+        )
+    )
+    assert (
+        "PATH_B_AMBIGUOUS_WITH_OUTCOMES_COUNT_INCONSISTENT"
+        not in scorecard["path_b"]["failures"]
+    )
+
+
+def test_production_shaped_ambiguous_ids_without_outcomes_warns_not_blocked():
+    """Regression for the actual production artifact shape observed on
+    2026-07-16: 5 duplicate external tender IDs across 10 tender rows, 0
+    tender_outcomes rows anywhere in Path B. Must resolve to WARN, never
+    BLOCKED."""
+    scorecard = evaluate_derived_tender_evidence_payload(
+        _payload(
+            path_a=_path_a(
+                inventory_total=1306,
+                eligible_awarded_total=6,
+                awarded_with_award_id=6,
+                resolved_award_company_count=6,
+                resolved_awarded_winner_count=6,
+                match_confidence_distribution={"missing": 0, "partial": 0, "high": 6},
+                entity_role_counts={"standalone": 6},
+            ),
+            path_b=_path_b(
+                inventory_total=1306,
+                tenders_with_valid_external_id=1306,
+                tenders_missing_external_id=0,
+                ambiguous_external_id_distinct_count=5,
+                ambiguous_external_id_tender_count=10,
+                ambiguous_external_id_with_outcomes_distinct_count=0,
+                ambiguous_outcome_row_count=0,
+                safely_attributable_tenders=1296,
+                tenders_with_reported_bidders=0,
+                bidder_count_distribution={"1": 0, "2": 0, "3_plus": 0},
+                outcomes_breakdown={},
+                entity_role_counts={},
+            ),
+            cross_path=_cross_path(
+                comparable_tender_count=6,
+                same_winner_confirmed_won=0,
+            ),
+        )
+    )
+
+    assert scorecard["overall_status"] == "WARN"
+    assert scorecard["path_b"]["status"] == "WARN"
+    assert "AMBIGUOUS_EXTERNAL_TENDER_IDS_PRESENT" in scorecard["path_b"]["warnings"]
+    assert (
+        "AMBIGUOUS_EXTERNAL_TENDER_ID_WITH_EVIDENCE"
+        not in scorecard["path_b"]["blocked"]
+    )
+    assert scorecard["path_b"]["failures"] == []
 
 
 # --- valid artifact regression --------------------------------------------
