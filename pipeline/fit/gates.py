@@ -15,7 +15,10 @@ from pipeline.fit.geo_policy import (
     is_weak_consultant_federal,
     strong_trade_match,
 )
-from pipeline.fit.profile_confidence import effective_profile_confidence, meets_active_profile_threshold
+from pipeline.fit.profile_confidence import (
+    effective_profile_confidence,
+    meets_active_profile_threshold,
+)
 from pipeline.fit.scope_policy import (
     has_electrical_specialization,
     is_architecture_design_path,
@@ -26,6 +29,11 @@ from pipeline.fit.scope_policy import (
 from pipeline.market_normalizer import NormalizedOpportunity
 
 Section = Literal["active", "pipeline", "intelligence", "growth"]
+
+# Stable semantic identifier for this gate-evaluation contract (thresholds,
+# hard-reject rules, minimum-passed-dimensions logic). Bump only when one of
+# those actually changes -- see PR-E1.
+GATES_ALGORITHM_VERSION = "fit_gates_v1"
 
 ACTIVE_BPS_THRESHOLD = 65
 PIPELINE_BPS_THRESHOLD = 65
@@ -86,7 +94,9 @@ def _effective_thresholds(
     elif section == "active" and is_trade_specialist(cip):
         is_strong, _ = strong_trade_match(cip, opp)
         if is_strong:
-            thresholds.update({"geography_fit": 45, "sector_fit": 45, "project_type_fit": 35})
+            thresholds.update(
+                {"geography_fit": 45, "sector_fit": 45, "project_type_fit": 35}
+            )
     return thresholds
 
 
@@ -98,6 +108,10 @@ class GateResult:
     rejection_detail: str = ""
     failed_dimensions: list[str] | None = None
 
+    @property
+    def algorithm_version(self) -> str:
+        return GATES_ALGORITHM_VERSION
+
     def to_dict(self) -> dict:
         return {
             "passed": self.passed,
@@ -105,32 +119,51 @@ class GateResult:
             "rejection_code": self.rejection_code,
             "rejection_detail": self.rejection_detail,
             "failed_dimensions": self.failed_dimensions or [],
+            "algorithm_version": self.algorithm_version,
         }
 
 
-def _hard_reject(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity, section: Section) -> tuple[bool, str, str]:
+def _hard_reject(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity, section: Section
+) -> tuple[bool, str, str]:
     title_blob = f"{opp.title} {opp.text_blob}"
 
     if cip.work_orientation not in {"maintenance", "mixed"} and (
         opp.orientation == "maintenance" or MAINTENANCE_RE.search(title_blob or "")
     ):
-        return True, "ORIENTATION_MISMATCH", "Maintenance/SOA procurement vs construction-oriented company"
+        return (
+            True,
+            "ORIENTATION_MISMATCH",
+            "Maintenance/SOA procurement vs construction-oriented company",
+        )
 
-    if section == "active" and requires_electrical_specialist(opp) and not has_electrical_specialization(cip):
+    if (
+        section == "active"
+        and requires_electrical_specialist(opp)
+        and not has_electrical_specialization(cip)
+    ):
         return (
             True,
             "SPECIALIST_SCOPE_MISMATCH",
             "Lighting/airport scope requires electrical trade specialization",
         )
 
-    if section == "active" and cip.entity_class == "designer" and is_pure_engineering_rfp(opp):
+    if (
+        section == "active"
+        and cip.entity_class == "designer"
+        and is_pure_engineering_rfp(opp)
+    ):
         return (
             True,
             "ENGINEERING_SCOPE_MISMATCH",
             "Pure engineering RFQ — not an architectural design opportunity",
         )
 
-    if section == "active" and cip.entity_class == "consultant" and is_field_construction_for_consultant(opp):
+    if (
+        section == "active"
+        and cip.entity_class == "consultant"
+        and is_field_construction_for_consultant(opp)
+    ):
         return (
             True,
             "CONSTRUCTION_SCOPE_MISMATCH",
@@ -140,7 +173,11 @@ def _hard_reject(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity, se
     if section == "active" and is_remote_federal_for_local_company(cip, opp):
         is_strong, _ = strong_trade_match(cip, opp)
         if not (is_trade_specialist(cip) and is_strong):
-            return True, "FEDERAL_GEO_MISMATCH", "Federal opportunity outside company service geography"
+            return (
+                True,
+                "FEDERAL_GEO_MISMATCH",
+                "Federal opportunity outside company service geography",
+            )
 
     if section == "active" and is_weak_consultant_federal(cip, opp):
         return (
@@ -155,15 +192,25 @@ def _hard_reject(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity, se
         if section == "active" and cip.entity_class in {"contractor", "consultant"}:
             is_strong, _ = strong_trade_match(cip, opp)
             if not is_strong and not is_architecture_design_path(cip, opp):
-                return True, "UNCLASSIFIED_SCOPE", "Opportunity scope too generic to assess business fit"
+                return (
+                    True,
+                    "UNCLASSIFIED_SCOPE",
+                    "Opportunity scope too generic to assess business fit",
+                )
 
     if section == "growth":
         growth_ok = any(
-            g in opp.sector or g in opp.delivery_type or g.replace("_expansion", "") in opp.sector
+            g in opp.sector
+            or g in opp.delivery_type
+            or g.replace("_expansion", "") in opp.sector
             for g in cip.growth_direction
         )
         if not growth_ok and cip.expansion_confidence < 0.3:
-            return True, "NO_GROWTH_BASIS", "No observed history supporting this expansion direction"
+            return (
+                True,
+                "NO_GROWTH_BASIS",
+                "No observed history supporting this expansion direction",
+            )
 
     if section == "active" and not meets_active_profile_threshold(cip):
         if not is_architecture_design_path(cip, opp):
@@ -200,7 +247,9 @@ def evaluate_gates(
             failed_set.add("business_fit")
         if fits["sector_fit"].score < thresholds["sector_fit"]:
             failed_set.add("sector_fit")
-        passed_count = sum(1 for k, d in fits.items() if d.score >= thresholds.get(k, 100))
+        passed_count = sum(
+            1 for k, d in fits.items() if d.score >= thresholds.get(k, 100)
+        )
         min_dims = 4 if is_architecture_design_path(cip, opp) else 4
         if passed_count < min_dims:
             failed_set.add("insufficient_dimensions")
@@ -211,9 +260,14 @@ def evaluate_gates(
     rejection_detail = ""
     if not passed:
         rejection_code = failed[0].upper() if failed else "GATE_FAILED"
-        rejection_detail = "; ".join(
-            f"{fits[f].name}: {fits[f].score} — {fits[f].reason}" for f in failed if f in fits
-        ) or "Failed business fit gates"
+        rejection_detail = (
+            "; ".join(
+                f"{fits[f].name}: {fits[f].score} — {fits[f].reason}"
+                for f in failed
+                if f in fits
+            )
+            or "Failed business fit gates"
+        )
 
     return GateResult(passed, fits, rejection_code, rejection_detail, failed)
 

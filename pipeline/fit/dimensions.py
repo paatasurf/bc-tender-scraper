@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pipeline.business_attributes import infer_delivery, infer_sector, parse_city_from_address
+from pipeline.business_attributes import (
+    infer_delivery,
+    infer_sector,
+    parse_city_from_address,
+)
 from pipeline.cip_schema import CompanyIntelligenceProfile
 from pipeline.fit.scope_policy import is_architecture_design_path
 from pipeline.fit.geo_policy import (
@@ -16,6 +20,11 @@ from pipeline.fit.geo_policy import (
 from pipeline.market_normalizer import NormalizedOpportunity
 from pipeline.taxonomy import capability_match_score
 
+# Stable semantic identifier for this six-dimension fit-scoring contract.
+# Bump only when a scoring formula/threshold in this module actually
+# changes -- see PR-E1.
+FIT_DIMENSIONS_ALGORITHM_VERSION = "fit_dimensions_v1"
+
 
 @dataclass
 class FitDimension:
@@ -24,12 +33,17 @@ class FitDimension:
     passed: bool
     reason: str
 
+    @property
+    def algorithm_version(self) -> str:
+        return FIT_DIMENSIONS_ALGORITHM_VERSION
+
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "score": self.score,
             "passed": self.passed,
             "reason": self.reason,
+            "algorithm_version": self.algorithm_version,
         }
 
 
@@ -37,7 +51,9 @@ def _company_trades(cip: CompanyIntelligenceProfile) -> list[str]:
     return [cip.primary_trade, *cip.secondary_trades]
 
 
-def score_business_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> FitDimension:
+def score_business_fit(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> FitDimension:
     trades = _company_trades(cip)
     opp_trades = infer_opportunity_trades(opp)
     if "unclassified" in opp_trades and len(opp_trades) == 1:
@@ -52,7 +68,12 @@ def score_business_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportuni
     elif is_architecture_design_path(cip, opp):
         raw = max(raw, 82)
         reason = "Genuine design RFP matches architecture firm profile"
-    elif cip.entity_class == "designer" and opp.delivery_type not in ("design", "renovation", "new_build", ""):
+    elif cip.entity_class == "designer" and opp.delivery_type not in (
+        "design",
+        "renovation",
+        "new_build",
+        "",
+    ):
         raw = min(raw, 35)
         reason = "Design firm — limited fit for non-design scope"
     elif cip.entity_class == "designer" and opp.delivery_type == "design":
@@ -70,13 +91,17 @@ def score_business_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportuni
     return FitDimension("business_fit", raw, raw >= threshold, reason)
 
 
-def score_project_type_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> FitDimension:
+def score_project_type_fit(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> FitDimension:
     delivery = opp.delivery_type or infer_delivery(opp.text_blob)
     company_deliveries = set(cip.delivery_types)
     cluster_deliveries = {cl.delivery for cl in cip.project_clusters}
 
     if is_architecture_design_path(cip, opp):
-        spec_hit = any(s.lower() in opp.text_blob.lower() for s in cip.specializations if s)
+        spec_hit = any(
+            s.lower() in opp.text_blob.lower() for s in cip.specializations if s
+        )
         raw = 90 if spec_hit else 80
         reason = "Design delivery matches architecture practice"
     elif delivery in company_deliveries or delivery in cluster_deliveries:
@@ -87,7 +112,9 @@ def score_project_type_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOppor
         reason = "Normalized project type overlap"
     else:
         overlap = sum(
-            1 for pt in cip.normalized_project_types if pt and pt.lower() in opp.text_blob.lower()
+            1
+            for pt in cip.normalized_project_types
+            if pt and pt.lower() in opp.text_blob.lower()
         )
         raw = min(70, 25 + overlap * 20) if overlap else 15
         reason = "No delivery type overlap with company project history"
@@ -95,7 +122,9 @@ def score_project_type_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOppor
     is_strong, trade_score = strong_trade_match(cip, opp)
     if is_trade_specialist(cip) and is_strong:
         raw = max(raw, 55)
-        reason = f"Strong trade match ({trade_score}) — scope aligns with specialist profile"
+        reason = (
+            f"Strong trade match ({trade_score}) — scope aligns with specialist profile"
+        )
 
     threshold = 40 if opp.category == "active" else 35
     if is_architecture_design_path(cip, opp):
@@ -105,7 +134,9 @@ def score_project_type_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOppor
     return FitDimension("project_type_fit", raw, raw >= threshold, reason)
 
 
-def score_sector_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> FitDimension:
+def score_sector_fit(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> FitDimension:
     sector = opp.sector or infer_sector(opp.text_blob)
     share = cip.sector_focus.get(sector, 0.0)
 
@@ -120,7 +151,9 @@ def score_sector_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
     elif sector == cip.dominant_sector:
         raw = 70
         reason = f"Dominant sector match: {sector}"
-    elif sector in cip.growth_direction or any(sector in g for g in cip.growth_direction):
+    elif sector in cip.growth_direction or any(
+        sector in g for g in cip.growth_direction
+    ):
         raw = 55
         reason = f"Adjacent sector: {sector}"
     else:
@@ -141,7 +174,9 @@ def score_sector_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
     return FitDimension("sector_fit", raw, raw >= threshold, reason)
 
 
-def score_geography_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> FitDimension:
+def score_geography_fit(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> FitDimension:
     hay = f"{opp.title} {opp.geography_text} {opp.organization}".lower()
     best = 0
     best_reason = "Outside core service geography"
@@ -171,11 +206,15 @@ def score_geography_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportun
     elif is_trade_specialist(cip) and is_strong_trade and opp.buyer_type == "federal":
         if "british columbia" in hay or " bc" in hay:
             best = max(best, 62)
-            best_reason = f"Trade match ({trade_score}) — BC federal work in specialist scope"
+            best_reason = (
+                f"Trade match ({trade_score}) — BC federal work in specialist scope"
+            )
     elif is_trade_specialist(cip) and is_strong_trade and best == 0:
         if "british columbia" in hay or " bc" in hay or "vancouver" in hay:
             best = 58
-            best_reason = f"Strong trade match ({trade_score}) — regional BC opportunity"
+            best_reason = (
+                f"Strong trade match ({trade_score}) — regional BC opportunity"
+            )
     elif best == 0 and cip.geographic_reach in {"provincial", "national"}:
         if "british columbia" in hay or " bc" in hay:
             best = 55
@@ -187,7 +226,9 @@ def score_geography_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportun
 
     if best == 0:
         parsed = parse_city_from_address(opp.geography_text)
-        if parsed and any(parsed.lower() == g.geo.lower() for g in cip.concentration_map):
+        if parsed and any(
+            parsed.lower() == g.geo.lower() for g in cip.concentration_map
+        ):
             best = 70
             best_reason = f"Parsed location {parsed} in concentration map"
 
@@ -196,17 +237,25 @@ def score_geography_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportun
         threshold = 45
     elif is_trade_specialist(cip) and is_strong_trade:
         threshold = 45
-    elif cip.entity_class == "consultant" and opp.buyer_type == "federal" and cip.public_private_ratio >= 0.3:
+    elif (
+        cip.entity_class == "consultant"
+        and opp.buyer_type == "federal"
+        and cip.public_private_ratio >= 0.3
+    ):
         if not is_remote_federal_for_local_company(cip, opp):
             threshold = 45
             if best < 45 and ("bc" in hay or "british columbia" in hay):
                 best = max(best, 50)
-                best_reason = "Consulting firm with public-sector history — BC federal/provincial"
+                best_reason = (
+                    "Consulting firm with public-sector history — BC federal/provincial"
+                )
 
     return FitDimension("geography_fit", best, best >= threshold, best_reason)
 
 
-def score_value_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> FitDimension:
+def score_value_fit(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> FitDimension:
     value = opp.estimated_value
     vr = cip.value_range
     if value <= 0 or vr.median <= 0:
@@ -230,10 +279,14 @@ def score_value_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity)
             passed = cip.deal_size_band in {"large", "mega"} and value <= vr.max * 5
 
     threshold = 45
-    return FitDimension("value_fit", raw, passed and raw >= threshold if value > 0 else passed, reason)
+    return FitDimension(
+        "value_fit", raw, passed and raw >= threshold if value > 0 else passed, reason
+    )
 
 
-def score_client_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> FitDimension:
+def score_client_fit(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> FitDimension:
     org = (opp.organization or "").lower()
     buyer = opp.buyer_type or ""
 
@@ -250,13 +303,22 @@ def score_client_fit(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
 
     if opp.category == "intelligence":
         raw = 40 if opp.context == "own_history" else 25
-        return FitDimension("client_fit", raw, raw >= 40, "Award intelligence — limited client linkage")
+        return FitDimension(
+            "client_fit", raw, raw >= 40, "Award intelligence — limited client linkage"
+        )
 
     raw = 35 if buyer else 30
-    return FitDimension("client_fit", raw, raw >= 35 or opp.category == "pipeline", "No direct client history")
+    return FitDimension(
+        "client_fit",
+        raw,
+        raw >= 35 or opp.category == "pipeline",
+        "No direct client history",
+    )
 
 
-def compute_all_fits(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> dict[str, FitDimension]:
+def compute_all_fits(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> dict[str, FitDimension]:
     return {
         "business_fit": score_business_fit(cip, opp),
         "project_type_fit": score_project_type_fit(cip, opp),
