@@ -117,9 +117,20 @@ def test_licence_precedence_restricted_to_two_tied_sources():
     assert SourceType.ASSOCIATION_DIRECTORY not in LICENCE_REGISTRATION_PRECEDENCE_V1
 
 
+_GATEWAY_EXCEPTION_FILES = frozenset({"gateway.py", "gateway_capability.py"})
+
+
 def test_claims_package_has_no_sqlalchemy_or_db_imports():
+    """domain.py / canonical.py / resolver.py / consistency.py must stay
+    pure. gateway.py and gateway_capability.py (PR-B2) are a documented,
+    deliberate exception -- the only sanctioned write path into the
+    migration-029 schema and its guard-touching capability factory; both
+    necessarily import SQLAlchemy (and, for gateway_capability.py,
+    db.db_safety) -- see their module docstrings."""
     package_dir = pathlib.Path(claims_package.__file__).parent
     for path in package_dir.glob("*.py"):
+        if path.name in _GATEWAY_EXCEPTION_FILES:
+            continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         imported_names: set[str] = set()
@@ -138,8 +149,14 @@ def test_claims_package_has_no_sqlalchemy_or_db_imports():
 
 
 def test_claims_package_never_opens_a_session_or_writes():
+    """Same gateway.py/gateway_capability.py exception as above -- gateway.py
+    is a raw-Connection writer by design (not the ORM Session API this check
+    looks for), but it does genuinely write; see test_claims_gateway.py for
+    its own write-guard proof (only SELECT/INSERT, no UPDATE/DELETE)."""
     package_dir = pathlib.Path(claims_package.__file__).parent
     for path in package_dir.glob("*.py"):
+        if path.name in _GATEWAY_EXCEPTION_FILES:
+            continue
         source = path.read_text(encoding="utf-8")
         assert "session.add(" not in source
         assert "session.commit(" not in source
