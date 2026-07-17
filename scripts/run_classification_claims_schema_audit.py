@@ -16,10 +16,16 @@ own "already applied" gate via db.classification_claims_schema_contract, so
 the two can never silently drift apart.
 
 Prints JSON to stdout. Guard banner goes to stderr only.
+
+Target database: DATABASE_URL (local) by default; pass --use-production to
+read DATABASE_URL_PRODUCTION instead. This remains Class A read-only in
+either case — there is no --allow-production here, no interactive
+destructive confirmation, and no DDL/DML path, against local or production.
 """
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 import sys
@@ -31,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 import config.env  # noqa: F401  (loads .env before importing db.connection)
 from db.classification_claims_schema_contract import verify_schema_contract
 from db.connection import get_session_factory
-from db.db_safety import guard_readonly_db
+from db.db_safety import guard_readonly_db_from_args
 from sqlalchemy import text
 
 _SCRIPT = Path(__file__).name
@@ -51,8 +57,16 @@ def _migration_sql_touches_only_new_tables() -> tuple[bool, list[str]]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--use-production",
+        action="store_true",
+        help="Read DATABASE_URL_PRODUCTION instead of local DATABASE_URL (Class A read-only; banner only).",
+    )
+    args = parser.parse_args()
+
     with contextlib.redirect_stdout(sys.stderr):
-        guard_readonly_db(_SCRIPT)
+        guard_readonly_db_from_args(args, script_name=_SCRIPT)
 
     factory = get_session_factory()
     session = factory()
