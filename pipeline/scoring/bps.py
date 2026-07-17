@@ -8,8 +8,18 @@ from pipeline.cip_schema import CompanyIntelligenceProfile
 from pipeline.fit.dimensions import FitDimension
 from pipeline.fit.geo_policy import is_trade_specialist, strong_trade_match
 from pipeline.market_normalizer import NormalizedOpportunity
-from pipeline.scoring.explain import BreakdownFactor, ScoredRecommendation, build_reasons
+from pipeline.scoring.explain import (
+    BreakdownFactor,
+    ScoredRecommendation,
+    build_reasons,
+)
 from pipeline.scoring.revenue_rank import rank_key
+
+# Stable semantic identifier for this Business Pursuit Score contract
+# (section weight tables, pattern-match/trade-specialist bonuses, zero-factor
+# penalty, verdict thresholds). Bump only when one of those actually
+# changes -- see PR-E1.
+BPS_ALGORITHM_VERSION = "bps_v1"
 
 
 @dataclass
@@ -21,6 +31,10 @@ class BPSResult:
     pursuit_verdict: str
     fits: dict[str, FitDimension] = field(default_factory=dict)
 
+    @property
+    def algorithm_version(self) -> str:
+        return BPS_ALGORITHM_VERSION
+
     def to_explanation_dict(self) -> dict:
         return {
             "score": self.score,
@@ -30,10 +44,13 @@ class BPSResult:
             "reasons": self.reasons,
             "fit_assessment": {k: v.to_dict() for k, v in self.fits.items()},
             "pursuit_verdict": self.pursuit_verdict,
+            "algorithm_version": self.algorithm_version,
         }
 
 
-def _pattern_match_bonus(cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity) -> int:
+def _pattern_match_bonus(
+    cip: CompanyIntelligenceProfile, opp: NormalizedOpportunity
+) -> int:
     sector = opp.sector
     delivery = opp.delivery_type
     for cl in cip.project_clusters[:3]:

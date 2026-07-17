@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from db.company_canonical_constants import company_canonical_name as company_display_name
+from db.company_canonical_constants import (
+    company_canonical_name as company_display_name,
+)
 from db.models import ArchCompany, Company
 from pipeline.cip_schema import CompanyIntelligenceProfile
 from pipeline.scoring.explain import BreakdownFactor
@@ -29,6 +31,13 @@ class ThreatScoreResult:
     breakdown: list[BreakdownFactor]
     reasons: list[str]
     confidence: str
+    # Required (no default) -- set by
+    # pipeline.competitive_intel.threat_score.compute_threat_score() to its
+    # THREAT_SCORE_ALGORITHM_VERSION. Kept as a plain field (not an import
+    # from threat_score.py) to avoid a circular import, since threat_score.py
+    # itself imports ThreatScoreResult from this module. Placed before the
+    # default-valued raw_components field, as dataclasses require.
+    algorithm_version: str
     raw_components: dict[str, float] = field(default_factory=dict)
 
     def to_explanation_dict(self) -> dict[str, Any]:
@@ -39,6 +48,7 @@ class ThreatScoreResult:
             "breakdown": [b.to_dict() for b in self.breakdown],
             "reasons": self.reasons,
             "confidence": self.confidence,
+            "algorithm_version": self.algorithm_version,
         }
 
 

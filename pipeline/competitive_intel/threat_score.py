@@ -9,15 +9,33 @@ from pipeline.competitive_intel.overlap import (
     geographic_overlap_raw,
     value_overlap_raw,
 )
-from pipeline.competitive_intel.types import ActivityStats, CompanyRow, Kind, ThreatScoreResult
+from pipeline.competitive_intel.types import (
+    ActivityStats,
+    CompanyRow,
+    Kind,
+    ThreatScoreResult,
+)
 from pipeline.scoring.explain import build_reasons, weighted_fit
 from pipeline.scoring.match_scoring_common import assert_score_equals_breakdown
 
+# Stable semantic identifier for this weighted-sum threat-scoring contract
+# (geo/category/value/award/permit factor weights and confidence-label
+# thresholds). Bump only when one of those actually changes -- see PR-E1.
+# Consumed by ThreatScoreResult.to_explanation_dict() in
+# pipeline/competitive_intel/types.py -- that dataclass has no scoring logic
+# of its own, so this constant lives with the function that actually
+# computes the score it versions.
+THREAT_SCORE_ALGORITHM_VERSION = "threat_score_v1"
+
 
 def confidence_label(raw_components: dict[str, float], *, kind: Kind) -> str:
-    active = sum(1 for k, v in raw_components.items() if v > 0 and k != "award_activity")
+    active = sum(
+        1 for k, v in raw_components.items() if v > 0 and k != "award_activity"
+    )
     if kind == "architecture":
-        active = sum(1 for k, v in raw_components.items() if v > 0 and k != "award_activity")
+        active = sum(
+            1 for k, v in raw_components.items() if v > 0 and k != "award_activity"
+        )
     else:
         active = sum(1 for v in raw_components.values() if v > 0)
     if active >= 4:
@@ -41,8 +59,12 @@ def compute_threat_score(
     cat_raw, cat_detail = category_overlap_raw(subject_cip, peer_cip, subject, peer)
     val_raw, val_detail = value_overlap_raw(subject_cip, peer_cip, subject, peer)
 
-    subject_clients = list(getattr(subject, "award_clients", None) or []) or subject_cip.award_clients
-    peer_clients = list(getattr(peer, "award_clients", None) or []) or peer_cip.award_clients
+    subject_clients = (
+        list(getattr(subject, "award_clients", None) or []) or subject_cip.award_clients
+    )
+    peer_clients = (
+        list(getattr(peer, "award_clients", None) or []) or peer_cip.award_clients
+    )
     awd_raw, awd_detail = award_activity_raw(
         peer_id=peer.id,
         subject_clients=subject_clients,
@@ -66,7 +88,13 @@ def compute_threat_score(
     }
 
     factors = [
-        ("geographic_overlap", "Geographic overlap", int(round(geo_raw)), 25, geo_detail),
+        (
+            "geographic_overlap",
+            "Geographic overlap",
+            int(round(geo_raw)),
+            25,
+            geo_detail,
+        ),
         ("category_overlap", "Category overlap", int(round(cat_raw)), 25, cat_detail),
         ("value_overlap", "Value overlap", int(round(val_raw)), 20, val_detail),
         ("award_activity", "Award activity", int(round(awd_raw)), 15, awd_detail),
@@ -76,13 +104,16 @@ def compute_threat_score(
     reasons = build_reasons(breakdown, limit=3)
     confidence = confidence_label(raw_components, kind=kind)
 
-    api_breakdown = {b.factor: {"points": b.points, "detail": b.detail} for b in breakdown}
+    api_breakdown = {
+        b.factor: {"points": b.points, "detail": b.detail} for b in breakdown
+    }
     assert_score_equals_breakdown(score, api_breakdown)
 
     return ThreatScoreResult(
         score=score,
         breakdown=breakdown,
         reasons=reasons,
+        algorithm_version=THREAT_SCORE_ALGORITHM_VERSION,
         confidence=confidence,
         raw_components=raw_components,
     )
