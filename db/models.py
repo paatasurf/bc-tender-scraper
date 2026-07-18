@@ -291,6 +291,15 @@ class Company(Base):
     )
     cip_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dominant_sector: Mapped[str] = mapped_column(String(30), default="", index=True)
+    # Matches migration 024 (db/migrations/024_sector_confidence.sql) exactly:
+    # VARCHAR(10), no NOT NULL constraint, server-side DEFAULT ''. Migration
+    # 024 defines the physical column; this change aligns the ORM mapping
+    # with that migration contract so writes (e.g.
+    # pipeline/cip_builder.py::persist_cip) are actually persisted instead
+    # of silently discarded.
+    sector_confidence: Mapped[str | None] = mapped_column(
+        String(10), nullable=True, server_default=text("''")
+    )
     work_orientation: Mapped[str] = mapped_column(String(20), default="")
     specialization_confidence: Mapped[float | None] = mapped_column(
         Float, nullable=True
