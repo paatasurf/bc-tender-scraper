@@ -10,4 +10,5 @@ __all__ = [
     "score_contract_award",
     "score_relationship",
     "score_growth_tender",
+    "score_company_track_record",
 ]
