@@ -16,7 +16,10 @@ from sqlalchemy.orm import Session
 
 from config.env import get_anthropic_api_key, get_env
 from db.models import ArchTender, CommercialTender, Company, Permit, Tender
-from pipeline.company_classification import classify_companies
+from pipeline.company_classification import (
+    classify_companies,
+    compute_enrichment_status,
+)
 from pipeline.construction_tier import compute_construction_tiers
 from pipeline.company_resolution import CompanyResolver, RESOLUTION_STATUS_REVIEW
 
@@ -28,9 +31,7 @@ UPSERT_BATCH_SIZE = 500
 MAX_LIST_ITEMS = 15
 
 GOOGLE_PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
-GOOGLE_FIELD_MASK = (
-    "places.rating,places.userRatingCount,places.formattedAddress,places.nationalPhoneNumber"
-)
+GOOGLE_FIELD_MASK = "places.rating,places.userRatingCount,places.formattedAddress,places.nationalPhoneNumber"
 
 # Permit aggregation columns that populate_companies_from_permits owns. Google
 # and AI enrichment columns are preserved across re-runs.
@@ -126,7 +127,16 @@ def populate_companies_from_permits(session: Session) -> int:
         )
     ).yield_per(1000)
 
-    for permit_id, applicant, permit_type, project_value, issue_date, address, city, source in rows:
+    for (
+        permit_id,
+        applicant,
+        permit_type,
+        project_value,
+        issue_date,
+        address,
+        city,
+        source,
+    ) in rows:
         raw = (applicant or "").strip()
         if not raw:
             continue
@@ -188,11 +198,17 @@ def populate_companies_from_permits(session: Session) -> int:
             .values(
                 total_projects=entry.total_projects,
                 total_value=round(entry.total_value, 2),
-                avg_project_value=round(entry.total_value / entry.total_projects, 2)
-                if entry.total_projects
-                else 0.0,
-                project_types=[item for item, _ in entry.project_types.most_common(MAX_LIST_ITEMS)],
-                neighborhoods=[item for item, _ in entry.neighborhoods.most_common(MAX_LIST_ITEMS)],
+                avg_project_value=(
+                    round(entry.total_value / entry.total_projects, 2)
+                    if entry.total_projects
+                    else 0.0
+                ),
+                project_types=[
+                    item for item, _ in entry.project_types.most_common(MAX_LIST_ITEMS)
+                ],
+                neighborhoods=[
+                    item for item, _ in entry.neighborhoods.most_common(MAX_LIST_ITEMS)
+                ],
                 first_project_date=entry.first_project_date,
                 last_project_date=entry.last_project_date,
                 updated_at=func.now(),
@@ -238,7 +254,9 @@ def enrich_companies_google(session: Session) -> int:
     """Fetch rating, review count, address, and phone from Google Places."""
     api_key = _google_api_key()
     if not api_key:
-        print("[Companies] Skipping Google enrichment: GOOGLE_PLACES_API_KEY is not set.")
+        print(
+            "[Companies] Skipping Google enrichment: GOOGLE_PLACES_API_KEY is not set."
+        )
         return 0
 
     limit = _batch_limit("COMPANY_GOOGLE_MAX_PER_RUN", DEFAULT_GOOGLE_BATCH_LIMIT)
@@ -372,9 +390,15 @@ MatchableTender = ArchTender | CommercialTender | Tender
 
 
 def _tender_lines(tender: MatchableTender) -> str:
-    organization = getattr(tender, "company", None) or getattr(tender, "organization", "") or ""
-    value = getattr(tender, "value", None) or getattr(tender, "estimated_value", "") or ""
-    deadline = getattr(tender, "deadline", None) or getattr(tender, "closing_date", "") or ""
+    organization = (
+        getattr(tender, "company", None) or getattr(tender, "organization", "") or ""
+    )
+    value = (
+        getattr(tender, "value", None) or getattr(tender, "estimated_value", "") or ""
+    )
+    deadline = (
+        getattr(tender, "deadline", None) or getattr(tender, "closing_date", "") or ""
+    )
     return f"""Title: {tender.title}
 Organization: {organization}
 Category: {tender.category}
@@ -383,7 +407,9 @@ Deadline: {deadline or "Not stated"}
 Source table: {tender.__tablename__}"""
 
 
-def match_company_to_tender(company: Company, tender: MatchableTender) -> dict[str, Any]:
+def match_company_to_tender(
+    company: Company, tender: MatchableTender
+) -> dict[str, Any]:
     """Score how well a company fits a tender and suggest a win strategy."""
     api_key = get_anthropic_api_key()
     if not api_key:
@@ -429,7 +455,9 @@ Return JSON only:
         recommendations = []
     recommendations = [str(r).strip() for r in recommendations if str(r).strip()][:3]
     while len(recommendations) < 3:
-        recommendations.append("Emphasize relevant BC project experience in your bid response.")
+        recommendations.append(
+            "Emphasize relevant BC project experience in your bid response."
+        )
     analysis = str(payload.get("analysis", "")).strip()
     return {
         "match_score": match_score,
