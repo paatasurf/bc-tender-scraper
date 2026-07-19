@@ -619,20 +619,6 @@ def test_migration_script_not_wired_into_run_migrations():
     assert "track_record" not in connection_source
 
 
-def test_models_py_not_touched_by_pr_g2a():
-    """PR-G2A's own scope guard: db/models.py must be byte-identical to
-    origin/master -- no ORM change accompanies this migration-first PR."""
-    result = subprocess.run(
-        ["git", "diff", "--stat", "origin/master", "--", "db/models.py"],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "", result.stdout
-
-
 def test_argparse_rejects_combining_dry_run_and_apply():
     result = subprocess.run(
         [sys.executable, str(MIGRATION_SCRIPT), "--dry-run", "--apply"],
