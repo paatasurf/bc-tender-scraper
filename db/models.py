@@ -371,6 +371,18 @@ class Company(Base):
     registry_confidence: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'unverified'")
     )
+    # --- Deterministic company track-record scorer (PR-G2B, migration 030) ---
+    # Additive only. No defaults, no backfill -- every existing row starts
+    # fully uncomputed (all four NULL). Not yet written or read by any live
+    # path; the pure scorer lives in pipeline.scoring.company_track_record
+    # (PR-G1) and is not wired to these columns yet (a future wiring PR).
+    # Distinct from, and does not replace, ai_reliability_score/ai_summary.
+    track_record_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    track_record_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    track_record_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    track_record_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
