@@ -110,6 +110,7 @@ max timestamps, identity checksum, schema migration version).
 | `run_odbus_import.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
 | `run_orgbook_import.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
 | `run_registry_verification_match.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
+| `run_track_record_shadow_dryrun.py` | A | No | No | Read-only (`--use-production`) | 2026-07-20 | No `--apply`/`--allow-production` in this script at all -- cannot write under any flag combination. Single connection, single `REPEATABLE READ, READ ONLY` transaction, always rolled back. Writes an aggregate-only artifact (score histogram, coverage counts, error counts by stage/type, SHA-256 eligibility digest) -- never raw company ids, names, or per-company results. |
 | `run_vancouver_permit_backfill.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
 | `smoke_bd_intelligence.py` | A | No | No | Read-only (`--use-production`) | 2026-07-03 |  |
 | `smoke_discovery.py` | A | No | No | N/A | 2026-07-03 |  |
