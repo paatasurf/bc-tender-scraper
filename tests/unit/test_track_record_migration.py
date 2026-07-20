@@ -212,19 +212,79 @@ def local_conn():
         engine.dispose()
 
 
-def test_before_stats_shows_pending_before_apply(local_conn):
-    stats = company_track_record_before_stats(local_conn)
+def _drop_track_record_schema_if_exists(conn) -> None:
+    """Force a NOT_APPLIED state on ``conn`` by dropping the three CHECK
+    constraints and four columns migration 030 adds -- idempotent (IF
+    EXISTS), so it is a no-op if they were never there in the first
+    place. Callers must run this inside a SAVEPOINT (conn.begin_nested())
+    that is later rolled back (directly, or transitively via the outer
+    local_conn fixture's own rollback), so the caller's real starting
+    state -- applied or not -- is always restored, never permanently
+    altered."""
+    for name in company_track_record_check_constraint_names():
+        conn.execute(text(f"ALTER TABLE companies DROP CONSTRAINT IF EXISTS {name}"))
+    for name in company_track_record_column_names():
+        conn.execute(text(f"ALTER TABLE companies DROP COLUMN IF EXISTS {name}"))
+
+
+@pytest.fixture()
+def not_applied_conn(local_conn):
+    """``local_conn`` normalized to a NOT_APPLIED state, regardless of
+    whether migration 030 is persistently applied to this local database
+    or not. The drop happens inside a SAVEPOINT that stays open for the
+    duration of the test (released, not committed, once the test
+    returns); local_conn's own outer transaction is rolled back at
+    fixture teardown either way, so the connection's real starting state
+    -- applied or absent -- is always restored, and if it was absent to
+    begin with, it remains absent afterward."""
+    with local_conn.begin_nested():
+        _drop_track_record_schema_if_exists(local_conn)
+        yield local_conn
+
+
+def test_before_stats_shows_pending_before_apply(not_applied_conn):
+    stats = company_track_record_before_stats(not_applied_conn)
     assert stats["migration_pending"] is True
     assert set(stats["columns_missing"]) == set(company_track_record_column_names())
 
 
-def test_migration_pending_true_before_apply(local_conn):
-    assert company_track_record_migration_pending(local_conn) is True
+def test_migration_pending_true_before_apply(not_applied_conn):
+    assert company_track_record_migration_pending(not_applied_conn) is True
 
 
-def test_apply_readiness_not_applied_before_apply(local_conn):
-    readiness = company_track_record_apply_readiness(local_conn)
+def test_apply_readiness_not_applied_before_apply(not_applied_conn):
+    readiness = company_track_record_apply_readiness(not_applied_conn)
     assert readiness.status is ApplyReadinessStatus.NOT_APPLIED
+
+
+class _NormalizationProbe(Exception):
+    """Raised only to force a SAVEPOINT rollback inside a regression test
+    -- never escapes the `with pytest.raises(...)` block it is used in."""
+
+
+def test_not_applied_normalization_restores_previously_applied_schema(local_conn):
+    """Regression test for the not_applied_conn state-independence
+    pattern: establishes a fully-applied schema as the starting point
+    (idempotent -- a no-op if migration 030 is already persistently
+    applied to this local DB, a real apply-within-savepoint if not),
+    confirms the normalizing nested transaction that drops the three
+    constraints and four columns really does present NOT_APPLIED, and
+    confirms that once that nested transaction is rolled back, the
+    connection observes the fully-applied schema again."""
+    _apply_within_savepoint(local_conn)
+    applied = company_track_record_apply_readiness(local_conn)
+    assert applied.status is ApplyReadinessStatus.FULLY_APPLIED
+
+    with pytest.raises(_NormalizationProbe):
+        with local_conn.begin_nested():
+            _drop_track_record_schema_if_exists(local_conn)
+            normalized = company_track_record_apply_readiness(local_conn)
+            assert normalized.status is ApplyReadinessStatus.NOT_APPLIED
+            raise _NormalizationProbe()
+
+    restored = company_track_record_apply_readiness(local_conn)
+    assert restored.status is ApplyReadinessStatus.FULLY_APPLIED
+    assert restored.conformance.conforms is True
 
 
 def _apply_within_savepoint(conn) -> None:
@@ -401,11 +461,14 @@ def test_idempotency_guard_ignores_same_named_constraint_on_other_table(local_co
 
 
 def test_apply_and_verify_raises_postcondition_error_on_incomplete_ddl(
-    monkeypatch, local_conn
+    monkeypatch, not_applied_conn
 ):
     """Artificially incomplete DDL (only 1 of 4 columns, no constraints)
     must fail the post-apply conformance check inside the same
-    transaction -- not silently succeed."""
+    transaction -- not silently succeed. Normalized to NOT_APPLIED first
+    so the incomplete DDL is genuinely incomplete relative to the
+    resulting schema, regardless of whether this local DB started out
+    with migration 030 already applied."""
     import db.track_record_migration as mod
 
     monkeypatch.setattr(
@@ -416,8 +479,8 @@ def test_apply_and_verify_raises_postcondition_error_on_incomplete_ddl(
         ],
     )
     with pytest.raises(CompanyTrackRecordApplyPostconditionError) as excinfo:
-        with local_conn.begin_nested():
-            mod._apply_and_verify_within_transaction(local_conn)
+        with not_applied_conn.begin_nested():
+            mod._apply_and_verify_within_transaction(not_applied_conn)
     assert "does not fully conform" in str(excinfo.value)
 
 
@@ -535,8 +598,8 @@ def _write_one_nonnull_row(conn) -> None:
         )
 
 
-def test_build_audit_report_not_applied_fails_by_default(local_conn):
-    report = build_track_record_audit_report(local_conn)
+def test_build_audit_report_not_applied_fails_by_default(not_applied_conn):
+    report = build_track_record_audit_report(not_applied_conn)
     assert report["status"] == "FAIL"
     assert report["columns_exist"] is False
     assert report["require_empty"] is False
@@ -650,9 +713,25 @@ def test_artifact_path_flag_requires_apply():
     assert "--apply" in result.stderr
 
 
+def _existing_track_record_columns(engine) -> set[str]:
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name='companies' "
+                "AND column_name = ANY(:names)"
+            ),
+            {"names": company_track_record_column_names()},
+        ).all()
+    return {row[0] for row in rows}
+
+
 def test_dry_run_writes_artifact_and_never_touches_schema(tmp_path):
     """--dry-run is Class A (read-only) -- safe to exercise via subprocess
-    against local Postgres without violating the no-persistent-apply rule."""
+    against local Postgres without violating the no-persistent-apply rule.
+    Compares the actual before/after column set (whatever it is on this
+    local DB) rather than assuming the columns are absent, so this test
+    is green whether or not migration 030 is already applied locally."""
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
@@ -660,6 +739,8 @@ def test_dry_run_writes_artifact_and_never_touches_schema(tmp_path):
             conn.execute(text("SELECT 1"))
     except Exception:
         pytest.skip("Local Postgres unavailable")
+
+    before = _existing_track_record_columns(engine)
 
     artifact_path = tmp_path / "dryrun.json"
     env = dict(os.environ)
@@ -680,22 +761,17 @@ def test_dry_run_writes_artifact_and_never_touches_schema(tmp_path):
     assert payload["migration"] == "030_company_track_record"
     assert "not_wired_to" in payload
 
-    with engine.begin() as conn:
-        exists = conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name='companies' "
-                "AND column_name = 'track_record_score'"
-            )
-        ).first()
-    assert exists is None, "dry-run must never apply schema DDL"
+    after = _existing_track_record_columns(engine)
+    assert after == before, "dry-run must never change the existing schema state"
     engine.dispose()
 
 
 def test_apply_refuses_without_any_dry_run_artifact(tmp_path):
     """--apply with a missing artifact must fail fast, before touching the
     database at all -- safe to exercise via subprocess since the DDL path
-    is never reached."""
+    is never reached. Compares actual before/after column sets rather
+    than assuming absence, so this is green regardless of whether
+    migration 030 is already applied locally."""
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
@@ -703,6 +779,8 @@ def test_apply_refuses_without_any_dry_run_artifact(tmp_path):
             conn.execute(text("SELECT 1"))
     except Exception:
         pytest.skip("Local Postgres unavailable")
+
+    before = _existing_track_record_columns(engine)
 
     env = dict(os.environ)
     env["DATABASE_URL"] = database_url
@@ -725,15 +803,8 @@ def test_apply_refuses_without_any_dry_run_artifact(tmp_path):
     assert "stale" in result.stderr.lower()
     assert "missing artifact" in result.stderr.lower()
 
-    with engine.begin() as conn:
-        exists = conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name='companies' "
-                "AND column_name = 'track_record_score'"
-            )
-        ).first()
-    assert exists is None, "a refused apply must not have created any column"
+    after = _existing_track_record_columns(engine)
+    assert after == before, "a refused apply must not have changed any column"
     engine.dispose()
 
 
@@ -761,7 +832,12 @@ def test_audit_script_has_no_allow_production_flag():
     assert 'add_argument("--allow-production"' not in source
 
 
-def test_audit_runs_readonly_locally_and_reports_not_applied(tmp_path):
+def test_audit_runs_readonly_locally_and_reports_the_actual_schema_state(tmp_path):
+    """The audit script's PASS/FAIL verdict must match this local DB's
+    real, currently-committed schema state -- computed independently here
+    via the same read-only schema-contract check the audit itself uses --
+    rather than assuming migration 030 has (or has not) been applied.
+    Green either way."""
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
@@ -769,6 +845,9 @@ def test_audit_runs_readonly_locally_and_reports_not_applied(tmp_path):
             conn.execute(text("SELECT 1"))
     except Exception:
         pytest.skip("Local Postgres unavailable")
+
+    with engine.begin() as conn:
+        expected = verify_track_record_schema_contract(conn)
 
     env = dict(os.environ)
     env["DATABASE_URL"] = database_url
@@ -783,11 +862,15 @@ def test_audit_runs_readonly_locally_and_reports_not_applied(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["migration"] == "030_company_track_record"
     assert payload["migration_sql_touches_only_companies"] is True
-    # Local DB has not had migration 030 applied by anything in this run.
-    assert payload["columns_exist"] is False
-    assert payload["status"] == "FAIL"
     assert payload["require_empty"] is False
-    assert result.returncode == 1
+    assert payload["columns_exist"] == expected.columns_exist
+    assert payload["conforms"] == expected.conforms
+    if expected.conforms:
+        assert payload["status"] == "PASS"
+        assert result.returncode == 0
+    else:
+        assert payload["status"] == "FAIL"
+        assert result.returncode == 1
     engine.dispose()
 
 
