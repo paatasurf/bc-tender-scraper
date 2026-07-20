@@ -4,7 +4,7 @@ import csv
 import io
 import re
 import tempfile
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -15,22 +15,44 @@ from scraper.config import USER_AGENT
 
 HEADERS = {"User-Agent": USER_AGENT}
 
-FEDERAL_CSV_URL = "https://canadabuys.canada.ca/opendata/pub/{year}-awardNotice-avisAttribution.csv"
+FEDERAL_CSV_URL = (
+    "https://canadabuys.canada.ca/opendata/pub/{year}-awardNotice-avisAttribution.csv"
+)
 BC_CATALOGUE_API = (
     "https://catalogue.data.gov.bc.ca/api/3/action/package_show"
     "?id=ministry-contract-awards-province-of-british-columbia"
 )
-VANCOUVER_API = (
-    "https://opendata.vancouver.ca/api/explore/v2.1/catalog/datasets/awarded-contracts/records"
-)
+VANCOUVER_API = "https://opendata.vancouver.ca/api/explore/v2.1/catalog/datasets/awarded-contracts/records"
 
-DEFAULT_FEDERAL_YEARS = ("2025-2026", "2024-2025", "2023-2024", "2022-2023")
+FEDERAL_HISTORY_YEARS = 5
 
 
-def _federal_years() -> tuple[str, ...]:
-    raw = get_env("CONTRACT_AWARDS_FEDERAL_YEARS", ",".join(DEFAULT_FEDERAL_YEARS))
+def _default_federal_years(*, as_of: date | None = None) -> tuple[str, ...]:
+    """Return the current and recent CanadaBuys fiscal-year resources.
+
+    CanadaBuys publishes award CSVs by the Canadian government fiscal year
+    (April 1 through March 31). Deriving the list avoids silently dropping a
+    new fiscal year when a hard-coded tuple becomes stale.
+    """
+    resolved_as_of = as_of or datetime.now(timezone.utc).date()
+    fiscal_start = (
+        resolved_as_of.year if resolved_as_of.month >= 4 else resolved_as_of.year - 1
+    )
+    return tuple(
+        f"{start_year}-{start_year + 1}"
+        for start_year in range(
+            fiscal_start,
+            fiscal_start - FEDERAL_HISTORY_YEARS,
+            -1,
+        )
+    )
+
+
+def _federal_years(*, as_of: date | None = None) -> tuple[str, ...]:
+    defaults = _default_federal_years(as_of=as_of)
+    raw = get_env("CONTRACT_AWARDS_FEDERAL_YEARS", ",".join(defaults))
     years = tuple(part.strip() for part in raw.split(",") if part.strip())
-    return years or DEFAULT_FEDERAL_YEARS
+    return years or defaults
 
 
 def _parse_money(raw: str | None) -> float | None:
@@ -104,22 +126,39 @@ def _iter_federal_rows(year: str) -> Iterator[dict[str, Any]]:
             "external_id": contract_number,
             "url": url_hint,
             "title": title or f"Federal contract {contract_number}",
-            "description": (row.get("awardDescription-descriptionAttribution-eng") or "").strip(),
+            "description": (
+                row.get("awardDescription-descriptionAttribution-eng") or ""
+            ).strip(),
             "procurement_category": _normalize_category(
                 row.get("procurementCategory-categorieApprovisionnement", "")
             ),
             "procurement_method": (row.get("noticeType-avisType-eng") or "").strip(),
             "winner_company": winner,
-            "winner_address": (row.get("supplierAddressLine-ligneAdresseFournisseur-eng") or "").strip(),
-            "winner_city": (row.get("supplierAddressCity-fournisseurAdresseVille-eng") or "").strip(),
-            "winner_province": (row.get("supplierAddressProvince-fournisseurAdresseProvince-eng") or "").strip(),
-            "buyer_organization": (row.get("contractingEntityName-nomEntitContractante-eng") or "").strip(),
+            "winner_address": (
+                row.get("supplierAddressLine-ligneAdresseFournisseur-eng") or ""
+            ).strip(),
+            "winner_city": (
+                row.get("supplierAddressCity-fournisseurAdresseVille-eng") or ""
+            ).strip(),
+            "winner_province": (
+                row.get("supplierAddressProvince-fournisseurAdresseProvince-eng") or ""
+            ).strip(),
+            "buyer_organization": (
+                row.get("contractingEntityName-nomEntitContractante-eng") or ""
+            ).strip(),
             "buyer_level": "federal",
             "award_value": value,
-            "currency": (row.get("contractCurrency-contratMonnaie") or "CAD").strip() or "CAD",
-            "award_date": _normalize_date(row.get("contractAwardDate-dateAttributionContrat")),
-            "contract_start_date": _normalize_date(row.get("contractStartDate-contratDateDebut")),
-            "contract_end_date": _normalize_date(row.get("contractEndDate-dateFinContrat")),
+            "currency": (row.get("contractCurrency-contratMonnaie") or "CAD").strip()
+            or "CAD",
+            "award_date": _normalize_date(
+                row.get("contractAwardDate-dateAttributionContrat")
+            ),
+            "contract_start_date": _normalize_date(
+                row.get("contractStartDate-contratDateDebut")
+            ),
+            "contract_end_date": _normalize_date(
+                row.get("contractEndDate-dateFinContrat")
+            ),
             "delivery_region": region.replace("*", "").replace("\n", ", ").strip(),
         }
 
@@ -143,7 +182,9 @@ def _iter_bc_provincial_rows() -> Iterator[dict[str, Any]]:
             continue
         print(f"[ContractAwards] BC provincial file: {name}")
         text = _fetch_text(url)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".csv", delete=False, newline="") as handle:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".csv", delete=False, newline=""
+        ) as handle:
             handle.write(text)
             temp_path = Path(handle.name)
         count = 0
@@ -156,7 +197,11 @@ def _iter_bc_provincial_rows() -> Iterator[dict[str, Any]]:
                     count += 1
                     opportunity_id = (row.get("Opportunity ID") or "").strip()
                     award_date = _normalize_date(row.get("Date Awarded"))
-                    external_id = f"{opportunity_id}:{award_date}" if opportunity_id else f"{name}:{count}"
+                    external_id = (
+                        f"{opportunity_id}:{award_date}"
+                        if opportunity_id
+                        else f"{name}:{count}"
+                    )
                     address = (row.get("Successful Vendor Address") or "").strip()
                     city = ""
                     province = "BC"
@@ -171,16 +216,21 @@ def _iter_bc_provincial_rows() -> Iterator[dict[str, Any]]:
                         "source": "bc_provincial",
                         "external_id": external_id,
                         "url": "",
-                        "title": (row.get("Title") or "").strip() or f"BC opportunity {opportunity_id}",
+                        "title": (row.get("Title") or "").strip()
+                        or f"BC opportunity {opportunity_id}",
                         "description": "",
                         "procurement_category": "",
-                        "procurement_method": (row.get("Procurement Method") or "").strip(),
+                        "procurement_method": (
+                            row.get("Procurement Method") or ""
+                        ).strip(),
                         "winner_company": (row.get("Successful Vendor") or "").strip(),
                         "winner_address": address,
                         "winner_city": city,
                         "winner_province": province,
                         "buyer_organization": (
-                            row.get("Issued by Organization") or row.get("Issued for Organization") or ""
+                            row.get("Issued by Organization")
+                            or row.get("Issued for Organization")
+                            or ""
                         ).strip(),
                         "buyer_level": "provincial",
                         "award_value": _parse_money(row.get("Award Total")),
@@ -223,7 +273,8 @@ def _iter_vancouver_rows() -> Iterator[dict[str, Any]]:
                 "source": "vancouver_open_data",
                 "external_id": bid_number,
                 "url": "",
-                "title": (row.get("bid_description") or "").strip() or f"Vancouver bid {bid_number}",
+                "title": (row.get("bid_description") or "").strip()
+                or f"Vancouver bid {bid_number}",
                 "description": "",
                 "procurement_category": (row.get("bid_type") or "").strip(),
                 "procurement_method": "",
