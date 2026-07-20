@@ -31,6 +31,8 @@ def test_format_record_maps_current_arcgis_fields():
     assert row["permit_type"] == "New Single Family with Secondary Suite"
     assert row["project_value"] == "995000"
     assert row["applicant"] == "Example Builder Ltd"
+    assert row["normalized_applicant"] == ""
+    assert row["applicant_normalization_status"] == "unresolved"
     assert row["issue_date"] == "2023-01-02"
     assert row["description"] == "New Single Family with Secondary Suite / Primary"
     assert "source_status_raw" not in row
@@ -88,5 +90,6 @@ def test_should_fetch_next_page_when_full_page_without_flag():
 
 
 def test_should_stop_on_short_final_page():
-    assert _should_fetch_next_page(raw_count=330, page_size=500, exceeded=False) is False
-
+    assert (
+        _should_fetch_next_page(raw_count=330, page_size=500, exceeded=False) is False
+    )
