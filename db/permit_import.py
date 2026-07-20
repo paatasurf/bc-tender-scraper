@@ -164,6 +164,20 @@ def _promote_blank_permit_if_exists(
     return True
 
 
+def _resolution_row_for_source(row: dict[str, str], *, source: str) -> dict[str, str]:
+    """Row used only for company resolution -- never the row that gets written
+    to Permit or dual-written to KG. For Surrey, applicant is swapped to the
+    safely-normalized organization (never the raw ApplicantOrganization
+    string, which commonly has a mailing address appended) so Company
+    Discovery never sees the raw value. Vancouver/Burnaby resolve against
+    the row unchanged."""
+    if source != "surrey":
+        return row
+    resolution_row = dict(row)
+    resolution_row["applicant"] = row.get("normalized_applicant") or ""
+    return resolution_row
+
+
 def _attach_company_ids(
     session: Session,
     rows: list[dict[str, str]],
@@ -171,7 +185,12 @@ def _attach_company_ids(
     source: str,
 ) -> None:
     for row in rows:
-        result = resolve_permit_company_from_row(session, row, source=source)
+        result = resolve_permit_company_from_row(
+            session,
+            _resolution_row_for_source(row, source=source),
+            source=source,
+            create_if_missing=source != "surrey",
+        )
         if result.company_id is None:
             continue
         row["company_id"] = result.company_id

@@ -13,6 +13,7 @@ from scraper.config import (
     SURREY_PERMITS_CSV,
     SURREY_SOURCE,
 )
+from pipeline.surrey_applicant import normalize_surrey_applicant
 from scraper.utils import clean_text, create_session, polite_api_get
 
 DEFAULT_PAGE_SIZE = 500
@@ -26,6 +27,8 @@ FIELDNAMES = [
     "permit_type",
     "project_value",
     "applicant",
+    "normalized_applicant",
+    "applicant_normalization_status",
     "issue_date",
     "description",
     "source",
@@ -49,24 +52,28 @@ def _project_address(attrs: dict[str, Any]) -> str:
 
 
 def _format_record(attrs: dict[str, Any]) -> dict[str, str]:
-    work_description = clean_text(attrs.get("WorkDescription")) or clean_text(attrs.get("WorkType"))
-    sub_description = clean_text(attrs.get("SubDescription")) or clean_text(attrs.get("SubType"))
+    work_description = clean_text(attrs.get("WorkDescription")) or clean_text(
+        attrs.get("WorkType")
+    )
+    sub_description = clean_text(attrs.get("SubDescription")) or clean_text(
+        attrs.get("SubType")
+    )
     permit_type = (
-        clean_text(attrs.get("PermitType"))
-        or work_description
-        or sub_description
+        clean_text(attrs.get("PermitType")) or work_description or sub_description
     )
     description_parts = [part for part in (work_description, sub_description) if part]
     value = attrs.get("ValueOfConstruction")
     project_value = "" if value is None else str(value)
-    applicant = clean_text(attrs.get("ApplicantOrganization"))
+    applicant = normalize_surrey_applicant(attrs.get("ApplicantOrganization"))
 
     return {
         "external_id": clean_text(attrs.get("PermitNumber")),
         "address": _project_address(attrs),
         "permit_type": permit_type,
         "project_value": project_value,
-        "applicant": applicant,
+        "applicant": applicant.raw,
+        "normalized_applicant": applicant.organization,
+        "applicant_normalization_status": applicant.status,
         "issue_date": _parse_issue_date(attrs.get("IssuedDate")),
         "description": " / ".join(description_parts),
         "source": SURREY_SOURCE,
@@ -178,7 +185,9 @@ def iter_surrey_permits(*, days: int | None = None) -> Iterator[dict[str, str]]:
             f"(offset={offset}, yielded={len(page)}, exceeded={exceeded})"
         )
 
-        if not _should_fetch_next_page(raw_count=raw_count, page_size=page_size, exceeded=exceeded):
+        if not _should_fetch_next_page(
+            raw_count=raw_count, page_size=page_size, exceeded=exceeded
+        ):
             break
 
     print(f"[Surrey Permits] Completed pagination: {pages} pages, {fetched} API rows")
@@ -196,7 +205,9 @@ def _write_csv(records: list[dict[str, str]], *, append: bool) -> None:
         writer.writerows(records)
 
 
-def scrape_surrey_permits(*, days: int | None = None, persist: bool = True) -> dict[str, Any]:
+def scrape_surrey_permits(
+    *, days: int | None = None, persist: bool = True
+) -> dict[str, Any]:
     """Scrape Surrey permits. Full history when days is None; incremental when days > 0."""
     records = list(iter_surrey_permits(days=days))
     incremental = days is not None and days > 0
@@ -237,7 +248,9 @@ def scrape_surrey_permits(*, days: int | None = None, persist: bool = True) -> d
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Scrape Surrey issued building permits")
+    parser = argparse.ArgumentParser(
+        description="Scrape Surrey issued building permits"
+    )
     parser.add_argument(
         "--days",
         type=int,
