@@ -251,7 +251,12 @@ def backfill_company_track_records(
     is always just ``type(exc).__name__``; neither the exception message,
     SQL parameters, connection details, nor any Company payload is ever
     included), and ``results`` (a per-company summary list: ``company_id``,
-    ``score``, ``status``, ``diagnostics_notes``).
+    ``score``, ``status``, ``diagnostics_notes``, ``coverage`` --
+    ``TrackRecordCoverage.to_dict()``, already computed as part of scoring
+    at zero extra cost -- added so a read-only reporting layer, e.g. a
+    dry-run artifact aggregator, can summarize scorer input coverage
+    without re-deriving the score itself; purely additive, changes
+    neither selection nor persistence behavior).
     """
     company_ids = _validate_company_ids(company_ids)
     sample_size = _validate_sample_size(sample_size)
@@ -306,6 +311,7 @@ def backfill_company_track_records(
                         "score": scored.score,
                         "status": "dry_run_computed",
                         "diagnostics_notes": len(adapter_result.diagnostics.notes),
+                        "coverage": scored.coverage.to_dict(),
                     }
                 )
                 continue
@@ -322,6 +328,7 @@ def backfill_company_track_records(
                     "score": scored.score,
                     "status": "persisted",
                     "diagnostics_notes": len(adapter_result.diagnostics.notes),
+                    "coverage": scored.coverage.to_dict(),
                 }
             )
         except Exception as exc:
