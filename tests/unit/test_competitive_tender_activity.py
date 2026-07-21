@@ -811,6 +811,41 @@ def test_competitor_activity_sorted_by_match_count():
     assert competitors[1]["match_count"] == 1
 
 
+def test_competitor_activity_breaks_equal_totals_by_company_id():
+    session = MagicMock()
+    peers = [_peer(3, "Higher ID"), _peer(2, "Lower ID")]
+    first_match = [_match(company_id=3, tender_id=3)]
+    second_match = [_match(company_id=2, tender_id=2)]
+    first_tender = MagicMock(
+        id=3,
+        title="T3",
+        estimated_value_numeric=100_000,
+        ai_budget_estimate="",
+        estimated_value="",
+    )
+    second_tender = MagicMock(
+        id=2,
+        title="T2",
+        estimated_value_numeric=100_000,
+        ai_budget_estimate="",
+        estimated_value="",
+    )
+    session.scalars.return_value.all.side_effect = [
+        first_match,
+        [first_tender],
+        second_match,
+        [second_tender],
+    ]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    assert [row["company_id"] for row in result["competitors"]] == [2, 3]
+
+
 def test_competitor_activity_excludes_profile_company():
     session = MagicMock()
     peers = [_peer(1, "Self Co", 80), _peer(2, "Rival", 70)]

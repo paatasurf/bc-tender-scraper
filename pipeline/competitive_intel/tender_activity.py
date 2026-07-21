@@ -300,7 +300,11 @@ def get_missed_opportunities(
             TenderMatch.created_at >= cutoff,
             TenderMatch.score >= STRONG_FIT_MIN_SCORE,
         )
-        .order_by(TenderMatch.score.desc(), TenderMatch.created_at.desc())
+        .order_by(
+            TenderMatch.score.desc(),
+            TenderMatch.created_at.desc(),
+            TenderMatch.id.asc(),
+        )
     ).all()
 
     # Raw strong-fit peer-match row count -- measured here, before subject
@@ -445,7 +449,11 @@ def get_competitor_tender_activity(
                 TenderMatch.created_at >= cutoff,
                 TenderMatch.tender_source.in_(("federal", "commercial")),
             )
-            .order_by(TenderMatch.score.desc(), TenderMatch.created_at.desc())
+            .order_by(
+                TenderMatch.score.desc(),
+                TenderMatch.created_at.desc(),
+                TenderMatch.id.asc(),
+            )
         ).all()
 
         total_value = 0.0
@@ -474,7 +482,11 @@ def get_competitor_tender_activity(
         )
 
     competitors_out.sort(
-        key=lambda row: (row["match_count"], row["total_tender_value"]), reverse=True
+        key=lambda row: (
+            -row["match_count"],
+            -row["total_tender_value"],
+            row["company_id"],
+        )
     )
 
     return {

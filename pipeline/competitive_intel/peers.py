@@ -50,7 +50,9 @@ def rank_by_similarity(
                 value_overlap_raw=val_raw,
             )
         )
-    scored.sort(key=lambda p: p.similarity, reverse=True)
+    # Company id is the final tie-break so equal similarity scores do not
+    # depend on database/input iteration order.
+    scored.sort(key=lambda p: (-p.similarity, p.company_id))
     return scored[:limit]
 
 
@@ -96,7 +98,13 @@ def select_top_competitors(
         )
         ranked.append((peer, threat.score, threat.to_explanation_dict()))
 
-    ranked.sort(key=lambda item: (item[1], item[0].row.total_value or 0), reverse=True)
+    ranked.sort(
+        key=lambda item: (
+            -item[1],
+            -(item[0].row.total_value or 0),
+            item[0].company_id,
+        )
+    )
     preliminary = ranked[:peer_limit]
 
     final_ids = {item[0].company_id for item in preliminary[:5]}
@@ -136,5 +144,5 @@ def select_top_competitors(
             )
         )
 
-    results.sort(key=lambda c: (c.threat_score, c.total_value), reverse=True)
+    results.sort(key=lambda c: (-c.threat_score, -c.total_value, c.company_id))
     return results
