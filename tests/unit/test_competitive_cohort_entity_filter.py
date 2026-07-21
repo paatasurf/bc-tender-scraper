@@ -20,7 +20,9 @@ from pipeline.competitive_intel.types import TopCompetitor
 
 
 def test_filter_construction_peer_pool_drops_person_standalone_names():
-    real_gc = make_company(id=10, name="Pacific Build Co Ltd", entity_role=ENTITY_ROLE_STANDALONE)
+    real_gc = make_company(
+        id=10, name="Pacific Build Co Ltd", entity_role=ENTITY_ROLE_STANDALONE
+    )
     tijana = make_company(
         id=10928,
         name="Tijana Sljivic",
@@ -45,7 +47,9 @@ def test_filter_construction_peer_pool_drops_person_standalone_names():
         entity_role=ENTITY_ROLE_STANDALONE,
     )
 
-    filtered = filter_construction_peer_pool([real_gc, tijana, shalindro, nickname_person, dba_gc])
+    filtered = filter_construction_peer_pool(
+        [real_gc, tijana, shalindro, nickname_person, dba_gc]
+    )
     names = {row.name for row in filtered}
     assert "Pacific Build Co Ltd" in names
     assert "Jack Hui DBA: Pontem Group" in names
@@ -55,7 +59,9 @@ def test_filter_construction_peer_pool_drops_person_standalone_names():
 
 
 def test_fetch_cohort_rows_applies_analytics_entity_filter_for_construction():
-    subject = make_company(id=8638, dominant_sector="residential", primary_trade="general_building")
+    subject = make_company(
+        id=8638, dominant_sector="residential", primary_trade="general_building"
+    )
     session = MagicMock()
     captured: dict[str, object] = {}
 
@@ -67,16 +73,23 @@ def test_fetch_cohort_rows_applies_analytics_entity_filter_for_construction():
 
     session.scalars.side_effect = scalars_side_effect
 
-    _fetch_cohort_rows(session, subject=subject, kind="construction", use_city=False, city="")
+    _fetch_cohort_rows(
+        session, subject=subject, kind="construction", use_city=False, city=""
+    )
 
     compiled = str(captured["query"].compile(compile_kwargs={"literal_binds": True}))
     assert ENTITY_ROLE_APPLICANT_ALIAS in compiled
     assert ENTITY_ROLE_PROBABLE_PERSON in compiled
+    assert "ORDER BY companies.id ASC" in compiled
 
 
 def test_fetch_cohort_rows_post_filters_person_standalone():
-    subject = make_company(id=8638, dominant_sector="residential", primary_trade="general_building")
-    peer = make_company(id=10, name="Real Builder Inc", entity_role=ENTITY_ROLE_STANDALONE)
+    subject = make_company(
+        id=8638, dominant_sector="residential", primary_trade="general_building"
+    )
+    peer = make_company(
+        id=10, name="Real Builder Inc", entity_role=ENTITY_ROLE_STANDALONE
+    )
     person = make_company(
         id=10928,
         name="Tijana Sljivic",
@@ -86,7 +99,9 @@ def test_fetch_cohort_rows_post_filters_person_standalone():
     session = MagicMock()
     session.scalars.return_value.all.return_value = [peer, person]
 
-    rows = _fetch_cohort_rows(session, subject=subject, kind="construction", use_city=False, city="")
+    rows = _fetch_cohort_rows(
+        session, subject=subject, kind="construction", use_city=False, city=""
+    )
     assert [row.id for row in rows] == [10]
 
 

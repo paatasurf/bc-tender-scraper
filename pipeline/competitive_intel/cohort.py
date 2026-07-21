@@ -19,7 +19,9 @@ def _model_for_kind(kind: Kind):
     return ArchCompany if kind == "architecture" else Company
 
 
-def subject_city(subject: CompanyRow, cip: CompanyIntelligenceProfile, kind: Kind) -> str:
+def subject_city(
+    subject: CompanyRow, cip: CompanyIntelligenceProfile, kind: Kind
+) -> str:
     if kind == "construction":
         return (getattr(subject, "primary_city", "") or "").strip()
     if cip.service_cities:
@@ -47,8 +49,16 @@ def _peer_matches_sector_or_trade(subject: CompanyRow, member: CompanyRow) -> bo
 
 
 def _award_category_overlap_ratio(subject: CompanyRow, member: CompanyRow) -> float:
-    subject_types = {_normalize_token(t) for t in (getattr(subject, "project_types", None) or []) if t}
-    peer_categories = {_normalize_token(t) for t in (getattr(member, "award_categories", None) or []) if t}
+    subject_types = {
+        _normalize_token(t)
+        for t in (getattr(subject, "project_types", None) or [])
+        if t
+    }
+    peer_categories = {
+        _normalize_token(t)
+        for t in (getattr(member, "award_categories", None) or [])
+        if t
+    }
     if not subject_types or not peer_categories:
         return 0.0
     union = subject_types | peer_categories
@@ -57,7 +67,9 @@ def _award_category_overlap_ratio(subject: CompanyRow, member: CompanyRow) -> fl
     return len(subject_types & peer_categories) / len(union)
 
 
-def _passes_cohort_quality_gate(subject: CompanyRow, member: CompanyRow, *, kind: Kind) -> bool:
+def _passes_cohort_quality_gate(
+    subject: CompanyRow, member: CompanyRow, *, kind: Kind
+) -> bool:
     if kind != "construction":
         return True
     if not _peer_matches_sector_or_trade(subject, member):
@@ -94,7 +106,9 @@ def filter_construction_peer_pool(members: list[CompanyRow]) -> list[CompanyRow]
     return _exclude_misclassified_person_standalone(members, kind="construction")
 
 
-def _exclude_misclassified_person_standalone(members: list[CompanyRow], *, kind: Kind) -> list[CompanyRow]:
+def _exclude_misclassified_person_standalone(
+    members: list[CompanyRow], *, kind: Kind
+) -> list[CompanyRow]:
     """Drop standalone rows that look like individuals (same signal as mark_legacy_person_companies).
 
     company_analytics_entity_filter() excludes applicant_alias and probable_person at SQL
@@ -153,7 +167,7 @@ def _fetch_cohort_rows(
     if use_city and city and kind == "construction":
         query = query.where(model.primary_city.ilike(city))
 
-    rows = list(session.scalars(query.limit(limit)).all())
+    rows = list(session.scalars(query.order_by(model.id.asc()).limit(limit)).all())
     return filter_construction_peer_pool(rows) if kind == "construction" else rows
 
 
@@ -168,7 +182,11 @@ def _filter_arch_city(
     city_l = city.strip().lower()
     filtered: list[CompanyRow] = []
     for member in members:
-        areas = [a.lower() for a in (getattr(member, "website_service_areas", None) or []) if a]
+        areas = [
+            a.lower()
+            for a in (getattr(member, "website_service_areas", None) or [])
+            if a
+        ]
         if any(city_l in a or a in city_l for a in areas):
             filtered.append(member)
             continue
@@ -188,7 +206,9 @@ def build_market_cohort(
     city = subject_city(subject, subject_cip, kind)
     sector = (subject.dominant_sector or subject.primary_trade or "general").strip()
 
-    members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=True, city=city)
+    members = _fetch_cohort_rows(
+        session, subject=subject, kind=kind, use_city=True, city=city
+    )
     if kind == "architecture" and city:
         members = _filter_arch_city(members, subject, subject_cip, city)
     members = apply_cohort_type_isolation(
@@ -203,7 +223,9 @@ def build_market_cohort(
         definition = f"dominant_sector={sector}"
 
     if len(members) < 8:
-        members = _fetch_cohort_rows(session, subject=subject, kind=kind, use_city=False, city=city)
+        members = _fetch_cohort_rows(
+            session, subject=subject, kind=kind, use_city=False, city=city
+        )
         members = apply_cohort_type_isolation(
             members, subject, kind=kind, subject_cip=subject_cip, session=session
         )
