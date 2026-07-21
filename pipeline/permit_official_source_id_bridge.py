@@ -7,10 +7,13 @@ module builds an aggregate-only plan to populate the still-blank
 exact 16-character legacy prefix of the official ``PermitNumber`` to the
 existing ``Permit.external_id`` -- exact match only, never fuzzy.
 
-This module is planning-only: nothing here ever writes to the database.
-A future, separately-reviewed identity-bridge writer (Class-C, digest-
-pinned, mirroring ``pipeline.surrey_applicant_recovery``) is what would
-actually apply a reviewed plan -- not shipped in this PR.
+The planning function (``plan_permit_official_source_id_bridge``) is
+read-only and never returns identifiers. The apply function
+(``apply_permit_official_source_id_bridge``) is the separate,
+digest-pinned writer core, mirroring
+``pipeline.surrey_applicant_recovery.apply_surrey_applicant_recovery``: it
+can update only a still-blank ``Permit.official_source_id`` for a bounded
+deterministic candidate set, and deliberately never owns the transaction.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from db.models import Permit
@@ -43,6 +46,7 @@ __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
     "LEGACY_EXTERNAL_ID_LENGTH",
     "PermitOfficialSourceIdBridgeError",
+    "apply_permit_official_source_id_bridge",
     "compute_bridge_digest",
     "plan_permit_official_source_id_bridge",
 ]
@@ -196,6 +200,7 @@ def _build_bridge_plan(
             "duplicate_production_legacy_ids": duplicate_production_legacy_ids,
             "overlapping_rows": overlapping,
             "existing_nonempty_official_source_id": already_bridged,
+            "recoverable_official_source_id": len(candidates),
             "source_only_keys": source_only,
             "production_only_keys": production_only,
         },
@@ -214,3 +219,70 @@ def plan_permit_official_source_id_bridge(
     raw permit ids, PermitNumbers, or any other row-level data."""
     report, _candidates = _build_bridge_plan(session, source_rows=source_rows)
     return report
+
+
+def apply_permit_official_source_id_bridge(
+    session: Session,
+    *,
+    source_rows: Iterable[Mapping[str, Any]],
+    candidate_limit: int,
+    expected_candidate_set_digest: str,
+) -> dict[str, Any]:
+    """Apply one bounded, digest-pinned official_source_id bridge batch.
+
+    This function deliberately does not commit, flush, or roll back. The
+    Class-C runner owns the transaction and must roll it back on any
+    exception. Every update is constrained by id, source, legacy
+    external_id, and an official_source_id that is still NULL/blank; a
+    concurrent change therefore fails closed via the exact row-count
+    check. Never touches applicant, company_id, address, external_id,
+    project_value, or any lifecycle/scoring field, and never creates a
+    Company.
+    """
+    if type(candidate_limit) is not int or candidate_limit <= 0:
+        raise PermitOfficialSourceIdBridgeError(
+            "candidate_limit must be a positive int"
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_candidate_set_digest):
+        raise PermitOfficialSourceIdBridgeError(
+            "expected_candidate_set_digest must be lowercase SHA-256 hex"
+        )
+
+    report, candidates = _build_bridge_plan(session, source_rows=source_rows)
+    selected = candidates[:candidate_limit]
+    selected_entries = [
+        (candidate.permit_id, candidate.source_permit_number) for candidate in selected
+    ]
+    actual_digest = compute_bridge_digest(selected_entries)
+    if actual_digest != expected_candidate_set_digest:
+        raise PermitOfficialSourceIdBridgeError(
+            "candidate set changed since the reviewed dry-run artifact"
+        )
+
+    for candidate in selected:
+        result = session.execute(
+            update(Permit)
+            .where(
+                Permit.id == candidate.permit_id,
+                Permit.source == "surrey",
+                Permit.external_id == candidate.legacy_external_id,
+                or_(
+                    Permit.official_source_id.is_(None),
+                    Permit.official_source_id == "",
+                ),
+            )
+            .values(official_source_id=candidate.source_permit_number)
+            .execution_options(synchronize_session=False)
+        )
+        if int(result.rowcount or 0) != 1:
+            raise PermitOfficialSourceIdBridgeError(
+                "blank-only official_source_id update did not affect exactly one row"
+            )
+
+    return {
+        "eligible_count": report["candidate_count"],
+        "selected_count": len(selected),
+        "updated_count": len(selected),
+        "candidate_limit": candidate_limit,
+        "candidate_set_digest": actual_digest,
+    }

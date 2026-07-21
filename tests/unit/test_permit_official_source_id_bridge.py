@@ -10,6 +10,7 @@ import pytest
 
 from pipeline.permit_official_source_id_bridge import (
     PermitOfficialSourceIdBridgeError,
+    apply_permit_official_source_id_bridge,
     compute_bridge_digest,
     plan_permit_official_source_id_bridge,
 )
@@ -178,3 +179,130 @@ def test_plan_uses_one_read_only_select_and_never_mutates_session():
     assert session.execute_calls == 1
     assert not hasattr(session, "add")
     assert not hasattr(session, "commit")
+
+
+class _WriterSession:
+    def __init__(self, rows, *, update_rowcount=1):
+        self.rows = rows
+        self.update_rowcount = update_rowcount
+        self.update_statements = []
+        self.select_calls = 0
+
+    def execute(self, statement):
+        if getattr(statement, "is_select", False):
+            self.select_calls += 1
+            return _Result(self.rows)
+        self.update_statements.append(statement)
+        return SimpleNamespace(rowcount=self.update_rowcount)
+
+
+def _digest_for(permit_id: int, source_permit_number: str) -> str:
+    return compute_bridge_digest([(permit_id, source_permit_number)])
+
+
+@pytest.mark.parametrize(
+    ("candidate_limit", "digest"),
+    [
+        (0, "0" * 64),
+        (-1, "0" * 64),
+        (True, "0" * 64),
+        ("1", "0" * 64),
+        (1, ""),
+        (1, "A" * 64),
+        (1, "not-a-digest"),
+    ],
+)
+def test_writer_rejects_invalid_contract_before_session_access(candidate_limit, digest):
+    class _SessionSpy:
+        def __getattr__(self, name):
+            raise AssertionError(f"session touched through {name}")
+
+    with pytest.raises(PermitOfficialSourceIdBridgeError):
+        apply_permit_official_source_id_bridge(
+            _SessionSpy(),
+            source_rows=[],
+            candidate_limit=candidate_limit,
+            expected_candidate_set_digest=digest,
+        )
+
+
+def test_writer_refuses_changed_candidate_set_before_any_update():
+    session = _WriterSession([_permit(10, "26-123456-001-00")])
+    with pytest.raises(
+        PermitOfficialSourceIdBridgeError, match="candidate set changed"
+    ):
+        apply_permit_official_source_id_bridge(
+            session,
+            source_rows=[_source("26-123456-001-00/AB")],
+            candidate_limit=1,
+            expected_candidate_set_digest="0" * 64,
+        )
+    assert session.select_calls == 1
+    assert session.update_statements == []
+
+
+def test_writer_updates_only_official_source_id_for_digest_pinned_bounded_candidate():
+    source_id = "26-123456-001-00/AB"
+    session = _WriterSession(
+        [
+            _permit(10, "26-123456-001-00"),
+            _permit(20, "26-222222-001-00"),
+        ]
+    )
+
+    result = apply_permit_official_source_id_bridge(
+        session,
+        source_rows=[
+            _source(source_id),
+            _source("26-222222-001-00/A1"),
+        ],
+        candidate_limit=1,
+        expected_candidate_set_digest=_digest_for(10, source_id),
+    )
+
+    assert result["eligible_count"] == 2
+    assert result["selected_count"] == 1
+    assert result["updated_count"] == 1
+    assert len(session.update_statements) == 1
+    statement = session.update_statements[0]
+    sql = str(statement)
+    set_clause = sql.split(" SET ", 1)[1].split(" WHERE ", 1)[0]
+    assert set_clause == "official_source_id=:official_source_id"
+    assert "permits.id =" in sql
+    assert "permits.source =" in sql
+    assert "permits.external_id =" in sql
+    assert "permits.official_source_id IS NULL OR permits.official_source_id =" in sql
+    assert "applicant" not in sql
+    assert "company_id" not in sql
+    assert not hasattr(session, "commit")
+    assert not hasattr(session, "flush")
+
+
+def test_writer_fails_closed_when_blank_only_update_loses_race():
+    source_id = "26-123456-001-00/AB"
+    session = _WriterSession(
+        [_permit(10, "26-123456-001-00")],
+        update_rowcount=0,
+    )
+    with pytest.raises(PermitOfficialSourceIdBridgeError, match="exactly one row"):
+        apply_permit_official_source_id_bridge(
+            session,
+            source_rows=[_source(source_id)],
+            candidate_limit=1,
+            expected_candidate_set_digest=_digest_for(10, source_id),
+        )
+
+
+def test_writer_never_serializes_raw_evidence_or_database_id():
+    permit_id = 987654321
+    source_id = "26-123456-001-00/AB"
+    session = _WriterSession([_permit(permit_id, "26-123456-001-00")])
+    result = apply_permit_official_source_id_bridge(
+        session,
+        source_rows=[_source(source_id)],
+        candidate_limit=1,
+        expected_candidate_set_digest=_digest_for(permit_id, source_id),
+    )
+    serialized = json.dumps(result)
+    assert source_id not in serialized
+    assert str(permit_id) not in serialized
