@@ -76,6 +76,7 @@ class Permit(Base):
     source: Mapped[str] = mapped_column(String(50), default="vancouver", index=True)
     city: Mapped[str] = mapped_column(String(100), default="Vancouver", index=True)
     external_id: Mapped[str] = mapped_column(String(100), default="", index=True)
+    official_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     scraped_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
