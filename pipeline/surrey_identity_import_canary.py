@@ -18,6 +18,11 @@ by sorting each outcome group by its own canonical key -- the full
 official PermitNumber, in lexicographic order -- not by the order the
 source rows happened to be fetched in. It deliberately never owns the
 transaction -- that belongs to a Class-C runner.
+
+``apply_surrey_identity_import_full`` (PR-EN1F-5) is the unbounded
+sibling: it re-derives the full plan, refuses on the same digest drift,
+then applies every update and insert candidate the fresh plan actually
+contains -- never a hardcoded count. It also never owns the transaction.
 """
 
 from __future__ import annotations
@@ -44,6 +49,7 @@ __all__ = [
     "FIXED_UPDATE_LIMIT",
     "SurreyIdentityImportCanaryError",
     "apply_surrey_identity_import_canary",
+    "apply_surrey_identity_import_full",
     "compute_plan_digest",
     "plan_surrey_identity_import",
 ]
@@ -298,4 +304,47 @@ def apply_surrey_identity_import_canary(
         "inserted": result["inserted"],
         "plan_digest": report["plan_digest"],
         "canary_digest": canary_digest,
+    }
+
+
+def apply_surrey_identity_import_full(
+    session: Session,
+    *,
+    rows: Iterable[Mapping[str, Any]],
+    expected_plan_digest: str,
+) -> dict[str, Any]:
+    """Apply the FULL reviewed import plan -- every update and insert
+    candidate the freshly rebuilt plan actually contains, no bounded
+    slice and no hardcoded count.
+
+    Re-derives the full plan from ``rows`` and refuses (fail closed) if
+    the full ``plan_digest`` no longer matches ``expected_plan_digest`` --
+    any drift in the full candidate universe blocks the write before it
+    starts. The entire candidate set (every update, then every insert) is
+    applied via
+    ``db.surrey_permit_import.upsert_surrey_permits_identity_aware``.
+
+    Deliberately does not commit, flush, or roll back -- the Class-C
+    runner owns the transaction and must roll it back on any exception or
+    an unexpected updated/inserted count.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected_plan_digest or "")):
+        raise SurreyIdentityImportCanaryError(
+            "expected_plan_digest must be lowercase SHA-256 hex"
+        )
+
+    report, candidates = _build_import_plan(session, rows=rows)
+    if report["plan_digest"] != expected_plan_digest:
+        raise SurreyIdentityImportCanaryError(
+            "candidate set changed since the reviewed dry-run artifact"
+        )
+
+    result = upsert_surrey_permits_identity_aware(session, [c.row for c in candidates])
+
+    return {
+        "eligible_updates": report["counts"]["planned_updates"],
+        "eligible_inserts": report["counts"]["planned_inserts"],
+        "updated": result["updated"],
+        "inserted": result["inserted"],
+        "plan_digest": report["plan_digest"],
     }
