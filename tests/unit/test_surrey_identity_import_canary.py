@@ -1,6 +1,6 @@
-"""Tests for the aggregate-only Surrey identity-aware import canary plan
-and the fixed, deterministic Class-C import canary writer core
-(PR-EN1F-3)."""
+"""Tests for the aggregate-only Surrey identity-aware import canary plan,
+the fixed, deterministic Class-C import canary writer core (PR-EN1F-3),
+and the unbounded full-batch writer core (PR-EN1F-5)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from pipeline.surrey_identity_import_canary import (
     FIXED_UPDATE_LIMIT,
     SurreyIdentityImportCanaryError,
     apply_surrey_identity_import_canary,
+    apply_surrey_identity_import_full,
     compute_plan_digest,
     plan_surrey_identity_import,
 )
@@ -604,5 +605,151 @@ def test_apply_canary_rejects_invalid_limits_and_digest(db_session):
         )
     with pytest.raises(SurreyIdentityImportCanaryError):
         apply_surrey_identity_import_canary(
+            db_session, rows=[], expected_plan_digest="not-a-digest"
+        )
+
+
+# --- apply_surrey_identity_import_full: local-Postgres tests -----------
+
+
+def test_apply_full_applies_every_update_and_insert_and_touches_only_selected(
+    db_session,
+):
+    """15 update-eligible permits + 7 insert-eligible source rows exist;
+    the full apply must update all 15 and insert all 7 -- not a bounded
+    slice -- and change only allowed fields, never Company/company_id."""
+    from sqlalchemy import text
+
+    marker = _run_marker()
+    update_permits = [_make_update_permit(db_session, marker, i) for i in range(15)]
+    insert_numbers = [_make_insert_official_number(marker, i) for i in range(7)]
+
+    rows = [
+        {"external_id": official, "applicant": "New Applicant"}
+        for _permit_id, official in update_permits
+    ] + [
+        {"external_id": official, "applicant": "Brand New"}
+        for official in insert_numbers
+    ]
+
+    report = plan_surrey_identity_import(db_session, rows=rows)
+    assert report["counts"]["planned_updates"] == 15
+    assert report["counts"]["planned_inserts"] == 7
+    assert report["counts"]["duplicate_risk"] == 0
+
+    result = apply_surrey_identity_import_full(
+        db_session,
+        rows=rows,
+        expected_plan_digest=report["plan_digest"],
+    )
+    assert result["eligible_updates"] == 15
+    assert result["eligible_inserts"] == 7
+    assert result["updated"] == 15
+    assert result["inserted"] == 7
+    assert result["plan_digest"] == report["plan_digest"]
+
+    for permit_id, _official in update_permits:
+        row = db_session.execute(
+            text(
+                "SELECT applicant, company_id, canonical_merge_confidence, "
+                "canonical_merge_method FROM permits WHERE id = :id"
+            ),
+            {"id": permit_id},
+        ).one()
+        assert row.applicant == "New Applicant"
+        assert row.company_id is None
+        assert row.canonical_merge_confidence == 0.5
+        assert row.canonical_merge_method == "existing_method"
+
+    inserted_count = db_session.execute(
+        text(
+            "SELECT COUNT(*) FROM permits WHERE source = 'surrey' "
+            "AND external_id = ANY(:numbers) AND company_id IS NULL"
+        ),
+        {"numbers": insert_numbers},
+    ).scalar()
+    assert inserted_count == 7
+
+
+def test_apply_full_fails_closed_on_full_plan_digest_drift(db_session):
+    """A digest computed before an extra ambiguity-causing row appears must
+    be refused -- and refused before any row is written."""
+    from sqlalchemy import text
+
+    marker = _run_marker()
+    update_permits = [_make_update_permit(db_session, marker, i) for i in range(1)]
+    insert_numbers = [_make_insert_official_number(marker, i) for i in range(1)]
+    rows = [{"external_id": official} for _permit_id, official in update_permits] + [
+        {"external_id": official} for official in insert_numbers
+    ]
+
+    report = plan_surrey_identity_import(db_session, rows=rows)
+    stale_digest = report["plan_digest"]
+
+    from db.models import Permit
+
+    _permit_id, official_number = update_permits[0]
+    confounder = Permit(
+        address="",
+        permit_type="",
+        project_value="",
+        applicant="",
+        source="surrey",
+        city="Surrey",
+        external_id=f"other-{uuid.uuid4().hex[:8]}",
+        official_source_id=official_number,
+    )
+    db_session.add(confounder)
+    db_session.flush()
+
+    with pytest.raises(SurreyIdentityImportCanaryError, match="candidate set changed"):
+        apply_surrey_identity_import_full(
+            db_session,
+            rows=rows,
+            expected_plan_digest=stale_digest,
+        )
+
+    count = db_session.execute(
+        text(
+            "SELECT COUNT(*) FROM permits WHERE source = 'surrey' AND external_id = :n"
+        ),
+        {"n": insert_numbers[0]},
+    ).scalar()
+    assert count == 0
+
+
+def test_apply_full_repeat_with_same_artifact_is_fail_closed(db_session):
+    """After a successful full apply, re-running against the same
+    (now-stale) rows and plan_digest must be refused -- applying the
+    batch changes production, which changes the full plan (the newly
+    inserted rows are now found via official_source_id on the next
+    plan), so the digest can never match twice in a row."""
+    marker = _run_marker()
+    update_permits = [_make_update_permit(db_session, marker, i) for i in range(2)]
+    insert_numbers = [_make_insert_official_number(marker, i) for i in range(2)]
+    rows = [{"external_id": official} for _permit_id, official in update_permits] + [
+        {"external_id": official} for official in insert_numbers
+    ]
+
+    report = plan_surrey_identity_import(db_session, rows=rows)
+    result = apply_surrey_identity_import_full(
+        db_session,
+        rows=rows,
+        expected_plan_digest=report["plan_digest"],
+    )
+    assert result["updated"] == 2
+    assert result["inserted"] == 2
+
+    with pytest.raises(SurreyIdentityImportCanaryError, match="candidate set changed"):
+        apply_surrey_identity_import_full(
+            db_session,
+            rows=rows,
+            expected_plan_digest=report["plan_digest"],
+        )
+
+
+def test_apply_full_rejects_invalid_digest(db_session):
+    with pytest.raises(SurreyIdentityImportCanaryError):
+        apply_surrey_identity_import_full(
             db_session, rows=[], expected_plan_digest="not-a-digest"
         )
