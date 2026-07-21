@@ -28,7 +28,9 @@ def _require_local_database_url() -> str:
     from tests.db_test_safety import _ci_skips_db_integration
 
     if _ci_skips_db_integration():
-        pytest.skip("DB integration tests skipped on CI (set CI_DATABASE_URL to enable)")
+        pytest.skip(
+            "DB integration tests skipped on CI (set CI_DATABASE_URL to enable)"
+        )
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url:
         pytest.skip("DATABASE_URL not configured")
@@ -205,8 +207,7 @@ def test_upsert_city_permits_promotes_blank_row_when_external_id_arrives(
     external_id = "BP-TEST-DEDUP-1"
 
     local_db_session.execute(
-        text(
-            """
+        text("""
             DELETE FROM permits
             WHERE source = 'vancouver'
               AND (
@@ -217,8 +218,7 @@ def test_upsert_city_permits_promotes_blank_row_when_external_id_arrives(
                   AND applicant = :applicant
                 )
               )
-            """
-        ),
+            """),
         {
             "external_id": external_id,
             "address": address,
@@ -242,7 +242,9 @@ def test_upsert_city_permits_promotes_blank_row_when_external_id_arrives(
         "source": "vancouver",
         "city": "Vancouver",
     }
-    upsert_city_permits(local_db_session, [base_row], source="vancouver", full_refresh=False)
+    upsert_city_permits(
+        local_db_session, [base_row], source="vancouver", full_refresh=False
+    )
 
     keyed_row = {
         **base_row,
@@ -251,7 +253,9 @@ def test_upsert_city_permits_promotes_blank_row_when_external_id_arrives(
         "contractor": "Scott Construction Ltd",
         "description": "Stage 1/2/3 full permit",
     }
-    upsert_city_permits(local_db_session, [keyed_row], source="vancouver", full_refresh=False)
+    upsert_city_permits(
+        local_db_session, [keyed_row], source="vancouver", full_refresh=False
+    )
 
     count = local_db_session.scalar(
         select(func.count())
@@ -277,7 +281,195 @@ def test_upsert_city_permits_promotes_blank_row_when_external_id_arrives(
     assert row.description == "Stage 1/2/3 full permit"
 
     local_db_session.execute(
-        text("DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"),
+        text(
+            "DELETE FROM permits WHERE source = 'vancouver' AND external_id = :external_id"
+        ),
         {"external_id": external_id},
     )
     local_db_session.commit()
+
+
+def test_permit_orm_maps_official_source_id_nullable_string():
+    column = Permit.__table__.columns["official_source_id"]
+    assert column.nullable is True
+    assert column.type.length == 100
+
+
+def test_official_source_id_is_excluded_from_generic_import_columns():
+    """official_source_id must be writable only by a dedicated, digest-pinned
+    identity-bridge writer -- never by the generic scraper upsert, on insert
+    or conflict-update."""
+    assert "official_source_id" not in _IMPORTABLE_COLUMNS
+    assert "official_source_id" in _SKIP_ON_UPDATE
+
+
+def _official_source_id_probe_row(*, external_id: str) -> dict[str, object]:
+    return {
+        "external_id": external_id,
+        "address": "1 Identity Bridge Test Lane",
+        "permit_type": "New Building",
+        "project_value": "1",
+        "applicant": "",
+        "issue_date": "2026-07-21",
+        "application_date": "",
+        "description": "",
+        "contractor": "",
+        "local_area": "",
+        "source": "surrey",
+        "city": "Surrey",
+    }
+
+
+@pytest.fixture()
+def official_source_id_probe(local_db_session: Session):
+    external_id = "26-999901-001-00"
+    local_db_session.execute(
+        text(
+            "DELETE FROM permits WHERE source = 'surrey' AND external_id = :external_id"
+        ),
+        {"external_id": external_id},
+    )
+    local_db_session.commit()
+    try:
+        yield external_id
+    finally:
+        local_db_session.execute(
+            text(
+                "DELETE FROM permits WHERE source = 'surrey' AND external_id = :external_id"
+            ),
+            {"external_id": external_id},
+        )
+        local_db_session.commit()
+
+
+def _seed_permit_with_official_source_id(
+    session: Session, *, external_id: str, official_source_id: str
+) -> None:
+    upsert_city_permits(
+        session,
+        [_official_source_id_probe_row(external_id=external_id)],
+        source="surrey",
+        full_refresh=False,
+    )
+    session.execute(
+        text(
+            "UPDATE permits SET official_source_id = :value "
+            "WHERE source = 'surrey' AND external_id = :external_id"
+        ),
+        {"value": official_source_id, "external_id": external_id},
+    )
+    session.commit()
+
+
+def test_upsert_preserves_official_source_id_when_row_omits_key(
+    local_db_session: Session, official_source_id_probe: str
+):
+    external_id = official_source_id_probe
+    seeded = f"{external_id}/AB"
+    _seed_permit_with_official_source_id(
+        local_db_session, external_id=external_id, official_source_id=seeded
+    )
+
+    incoming = _official_source_id_probe_row(external_id=external_id)
+    assert "official_source_id" not in incoming
+    upsert_city_permits(
+        local_db_session, [incoming], source="surrey", full_refresh=False
+    )
+
+    row = local_db_session.execute(
+        text(
+            "SELECT official_source_id, external_id FROM permits "
+            "WHERE source = 'surrey' AND external_id = :external_id"
+        ),
+        {"external_id": external_id},
+    ).one()
+    assert row.official_source_id == seeded
+    assert row.external_id == external_id
+
+
+def test_upsert_preserves_official_source_id_when_incoming_is_none(
+    local_db_session: Session, official_source_id_probe: str
+):
+    external_id = official_source_id_probe
+    seeded = f"{external_id}/CD"
+    _seed_permit_with_official_source_id(
+        local_db_session, external_id=external_id, official_source_id=seeded
+    )
+
+    incoming = {
+        **_official_source_id_probe_row(external_id=external_id),
+        "official_source_id": None,
+    }
+    upsert_city_permits(
+        local_db_session, [incoming], source="surrey", full_refresh=False
+    )
+
+    row = local_db_session.execute(
+        text(
+            "SELECT official_source_id FROM permits "
+            "WHERE source = 'surrey' AND external_id = :external_id"
+        ),
+        {"external_id": external_id},
+    ).one()
+    assert row.official_source_id == seeded
+
+
+def test_upsert_preserves_official_source_id_when_incoming_is_empty_string(
+    local_db_session: Session, official_source_id_probe: str
+):
+    external_id = official_source_id_probe
+    seeded = f"{external_id}/EF"
+    _seed_permit_with_official_source_id(
+        local_db_session, external_id=external_id, official_source_id=seeded
+    )
+
+    incoming = {
+        **_official_source_id_probe_row(external_id=external_id),
+        "official_source_id": "",
+    }
+    upsert_city_permits(
+        local_db_session, [incoming], source="surrey", full_refresh=False
+    )
+
+    row = local_db_session.execute(
+        text(
+            "SELECT official_source_id FROM permits "
+            "WHERE source = 'surrey' AND external_id = :external_id"
+        ),
+        {"external_id": external_id},
+    ).one()
+    assert row.official_source_id == seeded
+
+
+def test_upsert_insert_behavior_is_still_correct_after_the_skip_change(
+    local_db_session: Session, official_source_id_probe: str
+):
+    """Regression: excluding official_source_id from _IMPORTABLE_COLUMNS must
+    not disturb any other column's normal insert/update behavior."""
+    external_id = official_source_id_probe
+    upsert_city_permits(
+        local_db_session,
+        [_official_source_id_probe_row(external_id=external_id)],
+        source="surrey",
+        full_refresh=False,
+    )
+    updated = {
+        **_official_source_id_probe_row(external_id=external_id),
+        "contractor": "Bridge Foundation Contracting Ltd",
+        "application_date": "2026-07-22",
+    }
+    upsert_city_permits(
+        local_db_session, [updated], source="surrey", full_refresh=False
+    )
+
+    row = local_db_session.execute(
+        text(
+            "SELECT external_id, contractor, application_date, official_source_id "
+            "FROM permits WHERE source = 'surrey' AND external_id = :external_id"
+        ),
+        {"external_id": external_id},
+    ).one()
+    assert row.external_id == external_id
+    assert row.contractor == "Bridge Foundation Contracting Ltd"
+    assert row.application_date == "2026-07-22"
+    assert row.official_source_id is None

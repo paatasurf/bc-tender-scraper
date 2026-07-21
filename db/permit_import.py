@@ -28,7 +28,16 @@ PERMIT_VARCHAR_LIMITS: dict[str, int] = {
 }
 
 _PERMIT_TABLE = Permit.__table__
-_SKIP_ON_UPDATE = {"id", "scraped_at"} | PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
+# official_source_id is written only by a dedicated, digest-pinned
+# identity-bridge writer (pipeline.permit_official_source_id_bridge) --
+# excluding it here means the generic scraper upsert can never set, blank,
+# or overwrite it on insert or conflict-update, regardless of what (if
+# anything) a row dict contains for that key.
+_SKIP_ON_UPDATE = {
+    "id",
+    "scraped_at",
+    "official_source_id",
+} | PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
 _IMPORTABLE_COLUMNS = {col.name for col in _PERMIT_TABLE.columns} - _SKIP_ON_UPDATE
 
 
