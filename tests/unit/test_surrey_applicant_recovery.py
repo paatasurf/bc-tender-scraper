@@ -51,7 +51,7 @@ def _permit(permit_id: int, external_id: str, applicant: str = ""):
 def test_recoverable_blank_applicant_is_counted_and_hashed():
     report = plan_surrey_applicant_recovery(
         _Session([_permit(10, "26-123456-001-00")]),
-        source_rows=[_source("26-123456-001-00/ABC", "Builder Ltd.")],
+        source_rows=[_source("26-123456-001-00/AB", "Builder Ltd.")],
     )
 
     assert report["counts"]["overlapping_rows"] == 1
@@ -63,7 +63,7 @@ def test_recoverable_blank_applicant_is_counted_and_hashed():
 def test_existing_applicant_is_never_a_candidate():
     report = plan_surrey_applicant_recovery(
         _Session([_permit(10, "26-123456-001-00", "Existing Evidence")]),
-        source_rows=[_source("26-123456-001-00/ABC", "New Evidence")],
+        source_rows=[_source("26-123456-001-00/A1", "New Evidence")],
     )
 
     assert report["counts"]["already_populated_applicant"] == 1
@@ -74,7 +74,7 @@ def test_existing_applicant_is_never_a_candidate():
 def test_missing_source_applicant_never_blanks_or_becomes_candidate():
     report = plan_surrey_applicant_recovery(
         _Session([_permit(10, "26-123456-001-00")]),
-        source_rows=[_source("26-123456-001-00/ABC", None)],
+        source_rows=[_source("26-123456-001-00/A1BC", None)],
     )
 
     assert report["counts"]["source_missing_applicant"] == 1
@@ -89,7 +89,8 @@ def test_missing_source_applicant_never_blanks_or_becomes_candidate():
         "26-123456-001-00",
         "not-a-permit",
         "26-123456-001-00ABC",
-        "26-123456-001-00/ABC999",
+        "26-123456-001-00/ABC",
+        "26-123456-001-00/A123",
     ],
 )
 def test_unexpected_source_id_shapes_fail_closed_as_invalid(bad_id):
@@ -106,8 +107,8 @@ def test_duplicate_prefix_is_ambiguous_and_excluded():
     report = plan_surrey_applicant_recovery(
         _Session([_permit(10, "26-123456-001-00")]),
         source_rows=[
-            _source("26-123456-001-00/ABC", "Builder One Ltd."),
-            _source("26-123456-001-00/XYZ", "Builder Two Ltd."),
+            _source("26-123456-001-00/AB", "Builder One Ltd."),
+            _source("26-123456-001-00/X9", "Builder Two Ltd."),
         ],
     )
 
@@ -125,7 +126,7 @@ def test_duplicate_production_key_is_ambiguous_and_excluded():
                 _permit(11, "26-123456-001-00"),
             ]
         ),
-        source_rows=[_source("26-123456-001-00/ABC", "Builder Ltd.")],
+        source_rows=[_source("26-123456-001-00/A1BC", "Builder Ltd.")],
     )
 
     assert report["counts"]["ambiguous_production_external_ids"] == 1
@@ -135,7 +136,7 @@ def test_duplicate_production_key_is_ambiguous_and_excluded():
 def test_source_only_and_production_only_keys_are_reported():
     report = plan_surrey_applicant_recovery(
         _Session([_permit(10, "26-111111-001-00")]),
-        source_rows=[_source("26-222222-001-00/ABC", "Builder Ltd.")],
+        source_rows=[_source("26-222222-001-00/AB", "Builder Ltd.")],
     )
 
     assert report["counts"]["source_only_keys"] == 1
@@ -144,15 +145,15 @@ def test_source_only_and_production_only_keys_are_reported():
 
 def test_candidate_digest_is_order_independent_and_evidence_sensitive():
     first = compute_recovery_digest(
-        [(2, "26-222222-001-00/ABC", "B Ltd."), (1, "26-111111-001-00/ABC", "A Ltd.")]
+        [(2, "26-222222-001-00/A1", "B Ltd."), (1, "26-111111-001-00/AB", "A Ltd.")]
     )
     reordered = compute_recovery_digest(
-        [(1, "26-111111-001-00/ABC", "A Ltd."), (2, "26-222222-001-00/ABC", "B Ltd.")]
+        [(1, "26-111111-001-00/AB", "A Ltd."), (2, "26-222222-001-00/A1", "B Ltd.")]
     )
     changed = compute_recovery_digest(
         [
-            (1, "26-111111-001-00/ABC", "Changed Ltd."),
-            (2, "26-222222-001-00/ABC", "B Ltd."),
+            (1, "26-111111-001-00/AB", "Changed Ltd."),
+            (2, "26-222222-001-00/A1", "B Ltd."),
         ]
     )
     assert first == reordered
@@ -162,7 +163,7 @@ def test_candidate_digest_is_order_independent_and_evidence_sensitive():
 @pytest.mark.parametrize("bad_id", [True, 0, -1, "1"])
 def test_candidate_digest_rejects_invalid_database_ids(bad_id):
     with pytest.raises(SurreyApplicantRecoveryError):
-        compute_recovery_digest([(bad_id, "26-111111-001-00/ABC", "Builder Ltd.")])
+        compute_recovery_digest([(bad_id, "26-111111-001-00/AB", "Builder Ltd.")])
 
 
 def test_report_never_serializes_raw_evidence_or_ids():

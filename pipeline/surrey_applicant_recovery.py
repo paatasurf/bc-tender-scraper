@@ -24,7 +24,8 @@ ARTIFACT_SCHEMA_VERSION = 1
 LEGACY_EXTERNAL_ID_LENGTH = 16
 _LEGACY_ID_RE = re.compile(r"^\d{2}-\d{6}-\d{3}-\d{2}$")
 _CURRENT_ID_RE = re.compile(
-    r"^\d{2}-\d{6}-\d{3}-\d{2}[^A-Za-z0-9-][A-Za-z]{1,3}(?:\d{2})?$"
+    r"^\d{2}-\d{6}-\d{3}-\d{2}[^A-Za-z0-9-]"
+    r"(?:[A-Za-z]{2}|[A-Za-z]\d(?:[A-Za-z]{2})?)$"
 )
 
 __all__ = [
