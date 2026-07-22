@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import CommercialTender, Tender, TenderMatch
+from pipeline.ai_matching import HYBRID_AI_CANDIDATE_LIMIT
 from pipeline.competitive_intel.service import get_top_competitors_for_company
 from pipeline.competitive_intel.types import Kind, TopCompetitor
 from pipeline.scoring.construction_match_scoring import _tender_value
@@ -37,6 +38,18 @@ EVIDENCE_DISCLAIMER = (
     "analyzed company did not bid. This reflects fit-scoring evidence only "
     "(a strong peer-tender match), never a confirmed bid, win, or "
     "participation outcome for any company named here."
+)
+
+# PR-MARKET-1A: honest evidence contract for get_competitor_tender_activity.
+# `candidate_limit` reuses the existing hybrid-matching candidate cap
+# (pipeline.ai_matching.HYBRID_AI_CANDIDATE_LIMIT) that bounds how many
+# tender candidates get scored/cached per company by the pipeline that
+# populates TenderMatch -- never a value invented or hardcoded here.
+COMPETITOR_EVIDENCE_STATUS = "scored_fit_cache_not_participation"
+COMPETITOR_EVIDENCE_DISCLAIMER = (
+    "This reflects fit-scoring evidence from the tender-match cache only -- "
+    "a strong score means the tender was a plausible fit for this company, "
+    "never a confirmed bid, win, or participation outcome."
 )
 
 
@@ -418,6 +431,44 @@ def get_competitor_tender_activity(
     kind: Kind = "construction",
     peer_limit: int = 5,
 ) -> dict[str, Any]:
+    """Per-competitor tender-match-cache activity summary.
+
+    Every count/value here is scored fit-cache evidence, never a
+    confirmed bid/win/participation outcome -- see
+    ``COMPETITOR_EVIDENCE_DISCLAIMER`` and each item's
+    ``evidence_status``/``evidence_disclaimer`` fields.
+
+    Two counts, deliberately different, both present on every item:
+
+    - ``raw_match_count`` (alias: the deprecated ``match_count``, kept
+      unchanged for backward compatibility -- always numerically equal to
+      ``raw_match_count``): the number of raw ``TenderMatch`` cache rows
+      for this competitor within the lookback window, *before* dedup by
+      tender. If the same ``(tender_source, tender_id)`` was matched more
+      than once, every row is counted here.
+    - ``unique_tender_match_count``: the number of distinct
+      ``(tender_source, tender_id)`` pairs after dedup -- this is the
+      true count of tenders this competitor was matched to.
+
+    ``total_tender_value`` is summed over that same deduped, unique
+    tender set only -- a tender is never counted twice in the total, no
+    matter how many raw cache rows reference it. Dedup happens before
+    every one of these final metrics is computed, so they are always
+    mathematically consistent with each other.
+
+    ``candidate_limit`` is the existing hybrid-matching candidate cap
+    (``pipeline.ai_matching.HYBRID_AI_CANDIDATE_LIMIT``) that bounds how
+    many tender candidates the pipeline populating ``TenderMatch`` scores
+    per company -- never hardcoded here. ``candidate_limit_saturated`` is
+    true when ``raw_match_count`` reaches that cap, signaling the cache
+    may not hold this competitor's full match activity (there could be
+    more matches than what is visible here).
+
+    Competitors are ranked by ``unique_tender_match_count`` (not the raw
+    count) DESC, then ``total_tender_value`` DESC, then ``company_id`` ASC
+    as the final deterministic tie-break -- consistent with the
+    dedup-before-metrics rule above.
+    """
     if kind != "construction":
         return {
             "company_id": company_id,
@@ -456,6 +507,8 @@ def get_competitor_tender_activity(
             )
         ).all()
 
+        raw_match_count = len(matches)
+
         total_value = 0.0
         seen_keys: set[tuple[str, int]] = set()
         for match in matches:
@@ -471,19 +524,30 @@ def get_competitor_tender_activity(
             )
             total_value += float(tender_info.get("tender_value") or 0)
 
+        unique_tender_match_count = len(seen_keys)
+
         competitors_out.append(
             {
                 "company_id": peer.company_id,
                 "name": peer.name,
                 "threat_score": peer.threat_score,
-                "match_count": len(matches),
+                # Deprecated alias, kept for backward compatibility --
+                # always numerically identical to raw_match_count.
+                "match_count": raw_match_count,
+                "raw_match_count": raw_match_count,
+                "unique_tender_match_count": unique_tender_match_count,
                 "total_tender_value": round(total_value, 2),
+                "evidence_status": COMPETITOR_EVIDENCE_STATUS,
+                "evidence_disclaimer": COMPETITOR_EVIDENCE_DISCLAIMER,
+                "candidate_limit": HYBRID_AI_CANDIDATE_LIMIT,
+                "candidate_limit_saturated": raw_match_count
+                >= HYBRID_AI_CANDIDATE_LIMIT,
             }
         )
 
     competitors_out.sort(
         key=lambda row: (
-            -row["match_count"],
+            -row["unique_tender_match_count"],
             -row["total_tender_value"],
             row["company_id"],
         )
