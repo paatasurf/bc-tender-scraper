@@ -8,8 +8,16 @@ Sections:
      and, where noted, _subject_match_keys are mocked -- this PR does not
      touch competitor selection/scoring, only the missed-opportunities
      grouping/filtering/response contract).
-  3. get_competitor_tender_activity -- unchanged by this PR; existing
-     tests kept verbatim.
+  3. get_competitor_tender_activity -- mock-based tests, no DATABASE_URL
+     required. Pre-existing tests kept verbatim (scoring/cohort/company
+     selection untouched); PR-MARKET-1A adds further mock-based tests
+     proving the raw/unique/value/evidence/candidate-limit contract so
+     the core guarantees run as real (non-skipped) unit tests even
+     without a local Postgres instance.
+  4. get_competitor_tender_activity -- the same PR-MARKET-1A contract,
+     re-verified with local-Postgres fixtures for exact-value coverage
+     (the MagicMock multi-call sequencing in Section 3 is precise but
+     fragile -- see the note above _tender_row below).
 """
 
 from __future__ import annotations
@@ -810,6 +818,16 @@ def test_competitor_activity_sorted_by_match_count():
     assert competitors[1]["name"] == "Beta"
     assert competitors[1]["match_count"] == 1
 
+    # PR-MARKET-1A additive evidence contract: present on every item,
+    # match_count is numerically identical to its raw_match_count alias.
+    for competitor in competitors:
+        assert competitor["match_count"] == competitor["raw_match_count"]
+        assert competitor["evidence_status"] == "scored_fit_cache_not_participation"
+        assert "never" in competitor["evidence_disclaimer"].lower()
+        assert isinstance(competitor["candidate_limit"], int)
+        assert isinstance(competitor["candidate_limit_saturated"], bool)
+        assert isinstance(competitor["unique_tender_match_count"], int)
+
 
 def test_competitor_activity_breaks_equal_totals_by_company_id():
     session = MagicMock()
@@ -869,3 +887,471 @@ def test_competitor_activity_excludes_profile_company():
     assert len(competitors) == 1
     assert competitors[0]["company_id"] == 2
     assert competitors[0]["name"] == "Rival"
+
+
+# ===================================================================
+# 3b. PR-MARKET-1A: honest evidence contract for
+#     get_competitor_tender_activity -- mock-based, no DATABASE_URL
+#     required. Mirrors the local-Postgres tests in Section 4 below but
+#     runs as a real (non-skipped) unit test everywhere, by driving
+#     session.scalars(...).all() with an explicit side_effect sequence
+#     matching the exact call order in get_competitor_tender_activity:
+#     one call for the TenderMatch cache rows per peer, then one call
+#     per *unique* (tender_source, tender_id) the first time it is
+#     seen (a repeat key hits the in-memory cache and issues no call).
+# ===================================================================
+
+
+def _tender_row(*, id: int, value: float):
+    tender = MagicMock()
+    tender.id = id
+    tender.title = f"T{id}"
+    tender.estimated_value_numeric = value
+    tender.ai_budget_estimate = ""
+    tender.estimated_value = ""
+    return tender
+
+
+def test_competitor_activity_duplicate_raw_rows_dedupe_value_mock():
+    """Two raw TenderMatch rows for the SAME tender: both count toward
+    raw_match_count, but the tender's value is only loaded/added once --
+    the second row hits seen_keys and never issues a second tender
+    lookup, let alone double-counts the value."""
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60)]
+    matches = [
+        _match(company_id=2, tender_id=1, score=90),
+        _match(company_id=2, tender_id=1, score=80),
+    ]
+    tender_one = _tender_row(id=1, value=100_000.0)
+    session.scalars.return_value.all.side_effect = [matches, [tender_one]]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["raw_match_count"] == 2
+    assert competitor["unique_tender_match_count"] == 1
+    assert competitor["raw_match_count"] > competitor["unique_tender_match_count"]
+    assert competitor["total_tender_value"] == 100_000.0
+
+
+def test_competitor_activity_match_count_equals_raw_match_count_mock():
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60)]
+    matches = [
+        _match(company_id=2, tender_id=1, score=90),
+        _match(company_id=2, tender_id=2, score=85),
+        _match(company_id=2, tender_id=3, score=80),
+    ]
+    tenders = [_tender_row(id=i, value=10_000.0) for i in (1, 2, 3)]
+    session.scalars.return_value.all.side_effect = [matches, *([t] for t in tenders)]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["match_count"] == competitor["raw_match_count"] == 3
+
+
+def test_competitor_activity_candidate_limit_uses_imported_constant_mock():
+    from pipeline.ai_matching import HYBRID_AI_CANDIDATE_LIMIT
+
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60)]
+    matches = [_match(company_id=2, tender_id=1)]
+    tender = _tender_row(id=1, value=10_000.0)
+    session.scalars.return_value.all.side_effect = [matches, [tender]]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["candidate_limit"] == HYBRID_AI_CANDIDATE_LIMIT
+    assert competitor["candidate_limit_saturated"] is False
+
+
+def test_competitor_activity_saturation_flag_true_at_limit_mock(monkeypatch):
+    """Saturation is driven by the live imported constant, not a
+    hardcoded 20 -- lowering it here via monkeypatch on the module
+    attribute proves the module reads the constant, not a copy."""
+    monkeypatch.setattr(
+        "pipeline.competitive_intel.tender_activity.HYBRID_AI_CANDIDATE_LIMIT", 2
+    )
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60)]
+    matches = [
+        _match(company_id=2, tender_id=1, score=90),
+        _match(company_id=2, tender_id=2, score=85),
+    ]
+    tender_one = _tender_row(id=1, value=10_000.0)
+    tender_two = _tender_row(id=2, value=20_000.0)
+    session.scalars.return_value.all.side_effect = [
+        matches,
+        [tender_one],
+        [tender_two],
+    ]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["raw_match_count"] == 2
+    assert competitor["candidate_limit"] == 2
+    assert competitor["candidate_limit_saturated"] is True
+
+
+def test_competitor_activity_not_saturated_below_limit_mock(monkeypatch):
+    monkeypatch.setattr(
+        "pipeline.competitive_intel.tender_activity.HYBRID_AI_CANDIDATE_LIMIT", 5
+    )
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60)]
+    matches = [_match(company_id=2, tender_id=1)]
+    tender = _tender_row(id=1, value=10_000.0)
+    session.scalars.return_value.all.side_effect = [matches, [tender]]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["raw_match_count"] == 1
+    assert competitor["candidate_limit_saturated"] is False
+
+
+def test_competitor_activity_evidence_fields_present_mock():
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60)]
+    matches = [_match(company_id=2, tender_id=1)]
+    tender = _tender_row(id=1, value=50_000.0)
+    session.scalars.return_value.all.side_effect = [matches, [tender]]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["evidence_status"] == "scored_fit_cache_not_participation"
+    disclaimer = competitor["evidence_disclaimer"].lower()
+    assert "never" in disclaimer
+    assert "bid" in disclaimer
+    assert "participation" in disclaimer
+
+
+def test_competitor_activity_sorted_by_unique_not_raw_count_mock():
+    """Alpha has more raw cache rows but they're all duplicates of ONE
+    tender; Beta has fewer raw rows but on two distinct tenders. Ranking
+    must follow unique_tender_match_count, not raw_match_count."""
+    session = MagicMock()
+    peers = [_peer(2, "Alpha", 60), _peer(3, "Beta", 55)]
+    alpha_matches = [
+        _match(company_id=2, tender_id=1, score=90),
+        _match(company_id=2, tender_id=1, score=85),
+        _match(company_id=2, tender_id=1, score=80),
+    ]
+    beta_matches = [
+        _match(company_id=3, tender_id=2, score=90),
+        _match(company_id=3, tender_id=3, score=85),
+    ]
+    tender_one = _tender_row(id=1, value=1.0)
+    tender_two = _tender_row(id=2, value=1.0)
+    tender_three = _tender_row(id=3, value=1.0)
+
+    session.scalars.return_value.all.side_effect = [
+        alpha_matches,
+        [tender_one],
+        beta_matches,
+        [tender_two],
+        [tender_three],
+    ]
+
+    with patch(
+        "pipeline.competitive_intel.tender_activity.get_top_competitors_for_company",
+        return_value=peers,
+    ):
+        result = get_competitor_tender_activity(session, company_id=1)
+
+    by_name = {row["name"]: row for row in result["competitors"]}
+    assert by_name["Alpha"]["raw_match_count"] == 3
+    assert by_name["Alpha"]["unique_tender_match_count"] == 1
+    assert by_name["Beta"]["raw_match_count"] == 2
+    assert by_name["Beta"]["unique_tender_match_count"] == 2
+    # Beta ranks first: 2 unique tenders > 1 unique tender, even though
+    # Alpha has more raw cache rows. A sort keyed on raw_match_count
+    # would (wrongly) rank Alpha (3) ahead of Beta (2).
+    assert [row["name"] for row in result["competitors"]] == ["Beta", "Alpha"]
+
+
+# ===================================================================
+# 4. PR-MARKET-1A: honest evidence contract for
+#    get_competitor_tender_activity -- local Postgres, for reliable
+#    exact-count/value assertions (avoids the fragile multi-call
+#    MagicMock sequencing the tests above depend on).
+# ===================================================================
+
+
+def _recent_match(db_session, **kwargs):
+    """get_competitor_tender_activity has no as_of parameter -- it always
+    filters against real wall-clock _cutoff_utc(), unlike
+    get_missed_opportunities. _make_match's own default created_at is
+    anchored to the fixed AS_OF constant instead, which is only correct
+    for the as_of-driven Missed Opportunities tests above. Anchor to real
+    wall-clock "now" here so these tests stay correct regardless of when
+    they run."""
+    kwargs.setdefault("created_at", datetime.now(timezone.utc) - timedelta(days=10))
+    return _make_match(db_session, **kwargs)
+
+
+def test_competitor_activity_duplicate_raw_rows_count_raw_but_dedupe_value(db_session):
+    """Two raw TenderMatch rows for the SAME tender must both count
+    toward raw_match_count (and its match_count alias), but the tender's
+    value must only be added to total_tender_value once --
+    unique_tender_match_count reflects the deduped count."""
+    tender = _make_tender(db_session, is_open=False, estimated_value_numeric=100_000.0)
+    peers = [_peer(2, "Alpha", 60)]
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
+    )
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=80
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["raw_match_count"] == 2
+    assert competitor["unique_tender_match_count"] == 1
+    assert competitor["match_count"] == competitor["raw_match_count"]
+    assert competitor["total_tender_value"] == 100_000.0
+
+
+def test_competitor_activity_match_count_equals_raw_match_count(db_session):
+    tender = _make_tender(db_session, is_open=False, estimated_value_numeric=10_000.0)
+    peers = [_peer(2, "Alpha", 60)]
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
+    )
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=80
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["match_count"] == 2
+    assert competitor["match_count"] == competitor["raw_match_count"]
+
+
+def test_competitor_activity_sorted_by_unique_tender_match_count_not_raw(db_session):
+    """Alpha has many raw rows but they're all duplicates of ONE tender;
+    Beta has fewer raw rows but they're all on DISTINCT tenders. Ranking
+    must reflect genuine distinct-tender activity (unique), not raw
+    cache-row volume -- count/value must be mathematically consistent
+    with each other and dedup must happen before every final metric,
+    including the ranking itself."""
+    tender_shared = _make_tender(db_session, is_open=False, estimated_value_numeric=1.0)
+    tender_b1 = _make_tender(db_session, is_open=False, estimated_value_numeric=1.0)
+    tender_b2 = _make_tender(db_session, is_open=False, estimated_value_numeric=1.0)
+    peers = [_peer(2, "Alpha", 60), _peer(3, "Beta", 55)]
+    for score in (90, 85, 80):
+        _recent_match(
+            db_session,
+            company_id=2,
+            tender_source="federal",
+            tender_id=tender_shared.id,
+            score=score,
+        )
+    _recent_match(
+        db_session,
+        company_id=3,
+        tender_source="federal",
+        tender_id=tender_b1.id,
+        score=90,
+    )
+    _recent_match(
+        db_session,
+        company_id=3,
+        tender_source="federal",
+        tender_id=tender_b2.id,
+        score=85,
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    by_name = {row["name"]: row for row in result["competitors"]}
+    assert by_name["Alpha"]["raw_match_count"] == 3
+    assert by_name["Alpha"]["unique_tender_match_count"] == 1
+    assert by_name["Beta"]["raw_match_count"] == 2
+    assert by_name["Beta"]["unique_tender_match_count"] == 2
+    # Beta ranks first: 2 unique tenders > 1 unique tender, even though
+    # Alpha has more raw cache rows.
+    assert [row["name"] for row in result["competitors"]] == ["Beta", "Alpha"]
+
+
+def test_competitor_activity_candidate_limit_uses_imported_matching_constant(
+    db_session,
+):
+    from pipeline.ai_matching import HYBRID_AI_CANDIDATE_LIMIT
+
+    tender = _make_tender(db_session, is_open=False, estimated_value_numeric=10_000.0)
+    peers = [_peer(2, "Alpha", 60)]
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["candidate_limit"] == HYBRID_AI_CANDIDATE_LIMIT
+    assert competitor["candidate_limit_saturated"] is False
+
+
+def test_competitor_activity_saturation_flag_true_when_raw_count_reaches_limit(
+    db_session, monkeypatch
+):
+    """Saturation is driven purely by the imported existing matching
+    constant, not a hardcoded 20 -- lowering it here via monkeypatch
+    proves the module reads the constant live, not a copied value."""
+    monkeypatch.setattr(
+        "pipeline.competitive_intel.tender_activity.HYBRID_AI_CANDIDATE_LIMIT", 2
+    )
+    tender_a = _make_tender(db_session, is_open=False, estimated_value_numeric=10_000.0)
+    tender_b = _make_tender(db_session, is_open=False, estimated_value_numeric=20_000.0)
+    peers = [_peer(2, "Alpha", 60)]
+    _recent_match(
+        db_session,
+        company_id=2,
+        tender_source="federal",
+        tender_id=tender_a.id,
+        score=90,
+    )
+    _recent_match(
+        db_session,
+        company_id=2,
+        tender_source="federal",
+        tender_id=tender_b.id,
+        score=85,
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["raw_match_count"] == 2
+    assert competitor["candidate_limit"] == 2
+    assert competitor["candidate_limit_saturated"] is True
+
+
+def test_competitor_activity_not_saturated_when_below_limit(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "pipeline.competitive_intel.tender_activity.HYBRID_AI_CANDIDATE_LIMIT", 5
+    )
+    tender = _make_tender(db_session, is_open=False, estimated_value_numeric=10_000.0)
+    peers = [_peer(2, "Alpha", 60)]
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["raw_match_count"] == 1
+    assert competitor["candidate_limit_saturated"] is False
+
+
+def test_competitor_activity_evidence_fields_present_and_never_claim_participation(
+    db_session,
+):
+    tender = _make_tender(db_session, is_open=False, estimated_value_numeric=50_000.0)
+    peers = [_peer(2, "Alpha", 60)]
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    competitor = result["competitors"][0]
+    assert competitor["evidence_status"] == "scored_fit_cache_not_participation"
+    disclaimer = competitor["evidence_disclaimer"].lower()
+    assert "never" in disclaimer
+    assert "bid" in disclaimer
+    assert "participation" in disclaimer
+
+
+def test_competitor_activity_evidence_fields_present_on_every_competitor(db_session):
+    """Not just the top result -- every returned competitor must carry
+    the full evidence contract."""
+    tender_a = _make_tender(db_session, is_open=False, estimated_value_numeric=10_000.0)
+    tender_b = _make_tender(db_session, is_open=False, estimated_value_numeric=20_000.0)
+    peers = [_peer(2, "Alpha", 60), _peer(3, "Beta", 55)]
+    _recent_match(
+        db_session,
+        company_id=2,
+        tender_source="federal",
+        tender_id=tender_a.id,
+        score=90,
+    )
+    _recent_match(
+        db_session,
+        company_id=3,
+        tender_source="federal",
+        tender_id=tender_b.id,
+        score=85,
+    )
+
+    with _patched(peers):
+        result = get_competitor_tender_activity(db_session, company_id=1)
+
+    assert len(result["competitors"]) == 2
+    for competitor in result["competitors"]:
+        assert competitor["evidence_status"] == "scored_fit_cache_not_participation"
+        assert competitor["evidence_disclaimer"]
+        assert "candidate_limit" in competitor
+        assert "candidate_limit_saturated" in competitor
+        assert "raw_match_count" in competitor
+        assert "unique_tender_match_count" in competitor
+
+
+def test_missed_opportunities_evidence_contract_still_green_with_market1a_changes(
+    db_session,
+):
+    """Explicit end-to-end confirmation that PR-MARKET-1A did not touch
+    the existing potential_opportunity_gap_v1 contract at all."""
+    tender = _make_tender(db_session, is_open=False)
+    peers = [_peer(2, "Alpha", 80)]
+    _recent_match(
+        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
+    )
+
+    with _patched(peers, subject_keys=set()):
+        result = get_missed_opportunities(db_session, company_id=1, as_of=AS_OF)
+
+    assert result["semantics_version"] == "potential_opportunity_gap_v1"
+    item = result["items"][0]
+    assert item["opportunity_status"] == "potential_gap"
+    assert item["evidence_status"] == "peer_fit_only"
+    assert item["participation_status"] == "unknown"
+    assert item["subject_fit_status"] == "no_recent_match_evidence"
