@@ -14,11 +14,13 @@ against this module's copy ever drifting from the audit's own decision.
 
 Purpose: before ANY classification-data fix is ever proposed or applied,
 a human reviewer needs to see exactly which companies the audit flagged
-``confirmed_conflict`` and why -- but that raw candidate list (company id,
-current type, trade, signals, proposed category, rule provenance) must
-never end up in a JSON artifact, a file, or an application log, since
-those are commonly shared, committed, or shipped to log aggregation.
-This module therefore returns two separate things:
+``confirmed_conflict`` and why -- including the company's actual name,
+without which manual review is not practically possible. That raw
+candidate list (company id, name, current type, trade, signals, proposed
+category, rule provenance) must never end up in a JSON artifact, a file,
+or an application log, since those are commonly shared, committed, or
+shipped to log aggregation. This module therefore returns two separate
+things:
 
 - an aggregate result (the audit's own aggregate, plus
   ``review_candidate_count`` and ``review_digest`` -- both artifact-safe:
@@ -26,9 +28,10 @@ This module therefore returns two separate things:
   sensitive to each confirmed_conflict candidate's identity, current
   type, trade, and signals, but never reveals them -- see
   ``compute_review_digest``).
-- a list of ``ConflictCandidate`` records, safe ONLY for a human reviewer
-  looking at an attended terminal. This module itself never prints,
-  logs, or writes them anywhere -- it only returns them; the CLI runner
+- a list of ``ConflictCandidate`` records -- INCLUDING ``company_name`` --
+  safe ONLY for a human reviewer looking at an attended terminal. This
+  module itself never prints, logs, or writes them anywhere -- it only
+  returns them; the CLI runner
   (``scripts/run_company_classification_evidence_review.py``) is solely
   responsible for gating their display behind ``--show-candidates`` and
   an attended-TTY check, and for refusing to combine that flag with any
@@ -78,14 +81,18 @@ class EvidenceReviewError(ValueError):
 class ConflictCandidate:
     """Attended-terminal-only evidence for one confirmed_conflict company.
 
-    Never serialize this to a file, artifact, or log -- see the module
-    docstring. ``company_id`` is the only identifying field here
-    (``pipeline.company_classification_audit`` never persists or exposes
-    a company name in any of its own output, and this module follows the
-    same rule); a reviewer uses it to look the row up manually.
+    NEVER serialize this to a file, artifact, or log -- see the module
+    docstring. ``company_id`` and ``company_name`` are identifying fields
+    included specifically so a human reviewer can act on this record
+    (``pipeline.company_classification_audit``'s own aggregate output
+    never includes either, and this module's ``build_evidence_review``
+    aggregate half follows the same rule -- only this candidate list, and
+    only the CLI's ``--show-candidates`` attended-terminal path, may ever
+    display ``company_name``).
     """
 
     company_id: int
+    company_name: str
     company_type: str
     primary_trade: str
     signals: tuple[str, ...]
@@ -254,6 +261,7 @@ def build_evidence_review(
         candidates.append(
             ConflictCandidate(
                 company_id=int(company_id),
+                company_name=name or "",
                 company_type=company_type or "",
                 primary_trade=primary_trade or "",
                 signals=tuple(signals),

@@ -119,6 +119,7 @@ def test_candidates_only_contain_confirmed_conflict_rows():
 
     assert len(candidates) == 1
     assert candidates[0].company_id == 2
+    assert candidates[0].company_name == "Some Firm Ltd"
     assert candidates[0].signals == (SIGNAL_TRADE_TAG,)
     assert candidates[0].proposed_category == "Engineering"
     assert len(candidates[0].provenance) == 1
@@ -130,6 +131,7 @@ def test_name_pattern_candidate_has_correct_provenance():
     _, candidates = build_evidence_review(_session_with_rows(rows))
 
     assert len(candidates) == 1
+    assert candidates[0].company_name == "D'Arcy Jones Architects"
     assert candidates[0].signals == (SIGNAL_NAME_PATTERN,)
     assert "name_pattern_conflict" in candidates[0].provenance[0]
     assert "KNOWN_FIRMS" in candidates[0].provenance[0]
@@ -137,8 +139,10 @@ def test_name_pattern_candidate_has_correct_provenance():
 
 def test_no_raw_leakage_in_aggregate_result():
     """The aggregate half of build_evidence_review's return value must
-    never contain a company name -- only the candidate list (never
-    returned to any artifact/file/log by this module) may."""
+    never contain a company name -- even though the SAME call's candidate
+    list (never returned to any artifact/file/log by this module) does
+    carry it. Proves both halves of the split: name present where
+    expected, absent where forbidden."""
     rows = [
         _row(
             1,
@@ -148,8 +152,12 @@ def test_no_raw_leakage_in_aggregate_result():
         ),
         _row(2, "Totally Unique Identifying Name Sixty Four LLC", confidence_score=0.9),
     ]
-    aggregate, _ = build_evidence_review(_session_with_rows(rows))
+    aggregate, candidates = build_evidence_review(_session_with_rows(rows))
 
+    # Present in the attended-only candidate list.
+    assert candidates[0].company_name == "Read Jones Christoffersen Ltd"
+
+    # Absent from the artifact-safe aggregate.
     serialized = json.dumps(aggregate)
     for leaked_text in (
         "Read Jones Christoffersen",
@@ -227,6 +235,7 @@ def test_review_digest_sensitive_to_identity_type_trade_and_signals():
 def test_review_digest_is_full_length_sha256_hex():
     candidate = ConflictCandidate(
         company_id=1,
+        company_name="Some Firm Ltd",
         company_type="General Contractor",
         primary_trade="engineering",
         signals=(SIGNAL_TRADE_TAG,),
@@ -341,6 +350,108 @@ def test_is_attended_terminal_false_in_this_test_environment():
     assert cli._is_attended_terminal() is False
 
 
+def test_print_candidates_shows_company_name_alongside_other_fields(capsys):
+    """PR-MARKET-2C1: without the name, manual review is not practically
+    possible -- _print_candidates (the only code path --show-candidates
+    ever reaches) must print company_name next to company_id, current
+    type, primary_trade, signals, and provenance."""
+    cli = _load_cli_module()
+    candidate = ConflictCandidate(
+        company_id=42,
+        company_name="Read Jones Christoffersen Ltd",
+        company_type="General Contractor",
+        primary_trade="engineering",
+        signals=(SIGNAL_TRADE_TAG,),
+        proposed_category="Engineering",
+        provenance=(
+            "trade_tag_conflict: primary_trade='engineering' vs company_type='General Contractor'.",
+        ),
+    )
+    cli._print_candidates([candidate])
+    out = capsys.readouterr().out
+
+    assert "company_id=42" in out
+    assert "company_name='Read Jones Christoffersen Ltd'" in out
+    assert "company_type='General Contractor'" in out
+    assert "primary_trade='engineering'" in out
+    assert SIGNAL_TRADE_TAG in out
+    assert "proposed_category='Engineering'" in out
+    assert "trade_tag_conflict" in out
+
+
+def test_print_candidates_never_invoked_by_default_output_path(
+    monkeypatch, capsys, tmp_path
+):
+    """Without --show-candidates, main() must never call _print_candidates
+    at all -- the name-printing code path is only reachable behind the
+    flag, never by default. Wires main() end-to-end with a fake
+    run_review/engine/DB-guard so no real database is touched, and
+    confirms neither stdout nor the written artifact file ever contain
+    the candidate's name."""
+    cli = _load_cli_module()
+    called = {"count": 0}
+    monkeypatch.setattr(
+        cli,
+        "_print_candidates",
+        lambda candidates: called.__setitem__("count", called["count"] + 1),
+    )
+
+    fake_aggregate = {
+        "counts": {
+            "total_scanned": 0,
+            "confirmed_conflict": 0,
+            "needs_review": 0,
+            "not_actionable": 0,
+        },
+        "candidates_with_conflicting_signals": 0,
+        "signal_histogram": {},
+        "candidates_by_current_type": {},
+        "candidates_by_review_category": {},
+        "examined_count": 0,
+        "digest": "x",
+        "review_candidate_count": 0,
+        "review_digest": "y",
+    }
+    fake_candidate = ConflictCandidate(
+        company_id=1,
+        company_name="Should Never Print Ltd",
+        company_type="General Contractor",
+        primary_trade="engineering",
+        signals=(SIGNAL_TRADE_TAG,),
+        proposed_category="Engineering",
+        provenance=("trade_tag_conflict: ...",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_review",
+        lambda engine, *, sample_size: (fake_aggregate, [fake_candidate]),
+    )
+    monkeypatch.setattr(
+        cli, "guard_readonly_db_from_args", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(cli, "get_engine", lambda: MagicMock())
+    monkeypatch.setattr(cli, "get_git_commit_sha", lambda: "deadbeef")
+
+    artifact_path = tmp_path / "artifact.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_company_classification_evidence_review.py",
+            "--artifact-path",
+            str(artifact_path),
+        ],
+    )
+
+    exit_code = cli.main()
+
+    assert exit_code == 0
+    assert called["count"] == 0
+    out = capsys.readouterr().out
+    assert "Should Never Print Ltd" not in out
+    assert "Should Never Print Ltd" not in artifact_path.read_text(encoding="utf-8")
+
+
 # ===================================================================
 # 4. RJC (Jones Christoffersen) regression fixture -- local Postgres
 # ===================================================================
@@ -385,9 +496,11 @@ def _make_company(session: Session, **overrides) -> Company:
 
 
 def test_rjc_like_row_appears_only_in_attended_candidates_via_real_db(db_session):
-    """The regression fixture: RJC's real reported profile appears with
-    its current type/trade/conflict reason in the attended candidate
-    list, but its name/id never appear in the artifact-safe aggregate."""
+    """The regression fixture: RJC's real reported profile -- including
+    its name, required for manual review to be practically possible --
+    appears in the attended candidate list with its current type/trade/
+    conflict reason, but its name/id never appear in the artifact-safe
+    aggregate."""
     rjc = _make_company(
         db_session,
         name="Read Jones Christoffersen Ltd",
@@ -401,6 +514,7 @@ def test_rjc_like_row_appears_only_in_attended_candidates_via_real_db(db_session
     matching = [c for c in candidates if c.company_id == rjc.id]
     assert len(matching) == 1
     candidate = matching[0]
+    assert candidate.company_name == "Read Jones Christoffersen Ltd"
     assert candidate.company_type == "General Contractor"
     assert candidate.primary_trade == "engineering"
     assert SIGNAL_TRADE_TAG in candidate.signals
