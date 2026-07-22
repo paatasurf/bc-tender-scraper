@@ -26,6 +26,10 @@ from db.models import (
 )
 from db.permit_lifecycle_constants import apply_active_permit_filter
 from pipeline.company_matching import normalize_vendor_name
+from pipeline.competitive_intel.cohort import (
+    construction_company_analytics_clause,
+    filter_construction_peer_pool,
+)
 from pipeline.market_normalizer import tender_lifecycle_eligible
 from pipeline.ai_matching import (
     HYBRID_AI_CANDIDATE_LIMIT,
@@ -1660,14 +1664,24 @@ def _load_award_candidates(
 
     categories = [c for c in (company.award_categories or []) if c]
     if categories:
-        peer_ids = session.scalars(
-            select(Company.id)
+        # Market person/entity firewall (pipeline.competitive_intel.cohort),
+        # reused verbatim -- never re-implemented -- so an applicant_alias,
+        # probable_person, or standalone/canonical row whose name still
+        # reads as an individual can never contribute a peer_award context
+        # bonus here, matching the same protection already applied to the
+        # construction Market cohort.
+        peer_candidates = session.scalars(
+            select(Company)
             .where(
                 Company.id != company.id,
                 Company.award_categories.op("&&")(categories),
+                construction_company_analytics_clause(),
             )
             .limit(40)
         ).all()
+        peer_ids = [
+            row.id for row in filter_construction_peer_pool(list(peer_candidates))
+        ]
         if peer_ids:
             for award in session.scalars(
                 select(ContractAward)
