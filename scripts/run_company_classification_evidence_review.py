@@ -15,15 +15,18 @@ identical in spirit to the audit's own artifact, plus
 each confirmed_conflict candidate's identity/type/trade/signals but never
 reveals them.
 
-Raw candidate details (company id, current company_type, primary_trade,
-conflict signals, proposed category, rule provenance) are ONLY ever
-printed -- never written to the artifact, a file, or any log -- and ONLY
-when ``--show-candidates`` is passed AND this process is running in a
-real, attended terminal (both stdin and stdout must be actual, unmocked
-TTYs; piped, redirected, CI, or mocked streams are refused). For that
-reason, ``--show-candidates`` refuses to run at all when combined with
-``--artifact-path`` -- there is deliberately no way to make this script
-write raw candidate details anywhere.
+Raw candidate details (company id, company name, current company_type,
+primary_trade, conflict signals, proposed category, rule provenance) are
+ONLY ever printed -- never written to the artifact, a file, or any log --
+and ONLY when ``--show-candidates`` is passed AND this process is running
+in a real, attended terminal (both stdin and stdout must be actual,
+unmocked TTYs; piped, redirected, CI, or mocked streams are refused). The
+company name specifically is never printed, logged, or written anywhere
+else by this script -- default output (no ``--show-candidates``) and the
+JSON artifact never contain it. For that reason, ``--show-candidates``
+refuses to run at all when combined with ``--artifact-path`` -- there is
+deliberately no way to make this script write raw candidate details
+anywhere.
 
 This script has no ``--apply`` and no way to write to any database under
 any flag combination -- it never assigns or changes ``company_type``,
@@ -135,6 +138,7 @@ def _print_candidates(candidates: list[ConflictCandidate]) -> None:
     print(f"\n{len(candidates)} confirmed_conflict candidate(s):\n")
     for candidate in candidates:
         print(f"- company_id={candidate.company_id}")
+        print(f"  company_name={candidate.company_name!r}")
         print(f"  company_type={candidate.company_type!r}")
         print(f"  primary_trade={candidate.primary_trade!r}")
         print(f"  signals={list(candidate.signals)}")
@@ -179,10 +183,10 @@ def main() -> int:
         action="store_true",
         help=(
             "Print confirmed_conflict candidate evidence (company id, "
-            "company_type, primary_trade, signals, proposed category, "
-            "rule provenance) to THIS terminal only. Requires a real, "
-            "attended TTY on both stdin and stdout. Never written to the "
-            "artifact, a file, or any log. Cannot be combined with "
+            "company name, company_type, primary_trade, signals, proposed "
+            "category, rule provenance) to THIS terminal only. Requires a "
+            "real, attended TTY on both stdin and stdout. Never written to "
+            "the artifact, a file, or any log. Cannot be combined with "
             "--artifact-path."
         ),
     )
