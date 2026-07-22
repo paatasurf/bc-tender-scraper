@@ -42,6 +42,63 @@ SIGNAL_TYPE_LABELS: dict[str, str] = {
     "rezoning_application": "Rezoning application",
 }
 
+# --- PR-EARLY-3A: deterministic signal quality layer ------------------
+#
+# Additive on top of the existing relevance ``score``/``min_score``
+# contract, which is unchanged (min_score still gates on ``score``, not
+# on any of these fields). ``quality_score``/``quality_tier``/
+# ``quality_reasons`` describe how early/large a project signal is, and
+# control the default ranking order. This is never a substitute for
+# ``score``, never AI or fuzzy matching (pure deterministic keyword/token
+# overlap, reusing the same ``_overlap_points`` mechanism already used
+# for project-type gating elsewhere in this module), and never implies a
+# win probability, tender guarantee, or participation certainty.
+
+QualityTier = Literal["high_potential", "market_watch", "low_priority"]
+
+_QUALITY_TIER_HIGH_POTENTIAL_FLOOR = 70
+_QUALITY_TIER_MARKET_WATCH_FLOOR = 40
+
+_DEVELOPMENT_SIGNAL_TYPES = ("development_permit_application", "rezoning_application")
+
+# Deterministic, explainable maintenance-scale keyword set: real work that
+# is small/upkeep-scale for a *typical* general contractor (single-unit
+# interior work, accessibility lifts, routine mechanical/roof/exterior
+# maintenance). Never used to drop a signal from the results, only to
+# lower its default rank -- and never applied when the wording overlaps
+# the viewing company's own specialization (see
+# ``_classify_signal_quality``).
+_MAINTENANCE_SCALE_KEYWORDS: tuple[str, ...] = (
+    "interior alteration",
+    "single family dwelling",
+    "single-family dwelling",
+    "one family dwelling",
+    "medical lift",
+    "wheelchair lift",
+    "stair lift",
+    "platform lift",
+    "hot water tank",
+    "furnace replacement",
+    "hvac replacement",
+    "re-roof",
+    "reroof",
+    "roof repair",
+    "sign permit",
+    "fence permit",
+    "deck repair",
+    "minor alteration",
+)
+
+# Typical historical lead time from this signal type to a posted tender --
+# a machine-readable pattern, not a guarantee. "confidence" reflects how
+# reliably that pattern has held, not a probability of any specific
+# outcome.
+_LEAD_TIME_BY_TYPE: dict[str, tuple[str, str]] = {
+    "rezoning_application": ("6-18 months", "low"),
+    "development_permit_application": ("3-12 months", "medium"),
+    "permit_application": ("1-3 months", "medium"),
+}
+
 
 def _parse_iso_date(raw: str | None) -> date | None:
     if not raw:
@@ -202,6 +259,106 @@ def _event_haystack(event: EarlySignalEvent) -> str:
     )
 
 
+def _lead_time_for_signal(signal_type: str) -> tuple[str, str]:
+    """Machine-readable typical lead-time label + confidence for this
+    signal type -- describes a historical pattern, never a guarantee that
+    a tender will follow. Callers (frontend) should render this as
+    "typical lead-time", never as a promise."""
+    return _LEAD_TIME_BY_TYPE.get(signal_type, ("1-3 months", "low"))
+
+
+def _classify_signal_quality(
+    *,
+    signal_type: str,
+    haystack: str,
+    estimated_value: float | None,
+    specializations: list[str],
+) -> tuple[int, QualityTier, list[str]]:
+    """Deterministic, explainable quality ranking layer, additive to the
+    existing relevance ``score``. Pure keyword/token overlap -- never AI,
+    never fuzzy entity matching, never a win-probability or
+    tender-guarantee claim.
+
+    Policy:
+    - development_permit_application / rezoning_application always get a
+      strong base score -- they are early, large-scale pipeline signals
+      by nature, regardless of wording.
+    - permit_application defaults to a moderate base score. If its text
+      matches a maintenance-scale keyword (single-unit interior work,
+      accessibility lifts, routine mechanical/roof/exterior maintenance),
+      it is downranked for a *typical* general contractor -- UNLESS that
+      same wording also matches the viewing company's own specialization
+      (e.g. an electrical/solar company and a solar-related permit, or a
+      renovation specialist and an interior alteration permit), in which
+      case it is never unfairly downranked.
+    - A present, positive estimated project value adds a bonus at two
+      thresholds; a missing/zero value never subtracts anything.
+    - The final 0-100 score maps to exactly one of three tiers
+      (high_potential / market_watch / low_priority). low_priority
+      signals are still returned -- this only affects default rank, never
+      removes a signal from the result set.
+    """
+    reasons: list[str] = []
+    text_lower = haystack.lower()
+
+    if signal_type in _DEVELOPMENT_SIGNAL_TYPES:
+        quality = 75
+        reasons.append(
+            f"{SIGNAL_TYPE_LABELS.get(signal_type, signal_type)} -- early, "
+            "large-scale project pipeline signal"
+        )
+    else:
+        quality = 45
+        reasons.append("Building permit application")
+
+        matched_keyword = next(
+            (
+                keyword
+                for keyword in _MAINTENANCE_SCALE_KEYWORDS
+                if keyword in text_lower
+            ),
+            None,
+        )
+        if matched_keyword is not None:
+            _, specialization_matched = (
+                _overlap_points(haystack, specializations, 1)
+                if specializations
+                else (0, [])
+            )
+            if specialization_matched:
+                quality += 10
+                reasons.append(
+                    "Matches your specialization "
+                    f"({', '.join(specialization_matched[:2])}) -- not downranked "
+                    f"despite maintenance-scale wording ('{matched_keyword}')"
+                )
+            else:
+                quality -= 30
+                reasons.append(
+                    f"Maintenance-scale wording ('{matched_keyword}') -- typically "
+                    "lower priority for a general contractor"
+                )
+
+    if estimated_value is not None and estimated_value > 0:
+        if estimated_value >= 5_000_000:
+            quality += 15
+            reasons.append("Large project value ($5M+)")
+        elif estimated_value >= 1_000_000:
+            quality += 8
+            reasons.append("Substantial project value ($1M+)")
+
+    quality = max(0, min(100, quality))
+
+    if quality >= _QUALITY_TIER_HIGH_POTENTIAL_FLOOR:
+        tier: QualityTier = "high_potential"
+    elif quality >= _QUALITY_TIER_MARKET_WATCH_FLOOR:
+        tier = "market_watch"
+    else:
+        tier = "low_priority"
+
+    return quality, tier, reasons
+
+
 def _score_early_signal_event(
     signals: CompanySignals | None,
     event: EarlySignalEvent,
@@ -295,10 +452,17 @@ def _event_breakdown_from_score(score: int, reasons: list[str]) -> list[dict[str
 
 
 def _signal_payload(
-    permit: Permit, *, score: int, reasons: list[str]
+    permit: Permit,
+    *,
+    score: int,
+    reasons: list[str],
+    quality_score: int,
+    quality_tier: QualityTier,
+    quality_reasons: list[str],
 ) -> dict[str, Any]:
     lag = pipeline_lag_days(permit)
     value = _parse_value(permit.project_value)
+    lead_time_label, lead_time_confidence = _lead_time_for_signal("permit_application")
     return {
         "id": permit.id,
         "signal_type": "permit_application",
@@ -317,11 +481,22 @@ def _signal_payload(
         "score": score,
         "reasons": reasons,
         "breakdown": _breakdown_from_score(score, reasons, lag_days=lag),
+        "quality_score": quality_score,
+        "quality_tier": quality_tier,
+        "quality_reasons": quality_reasons,
+        "lead_time_label": lead_time_label,
+        "lead_time_confidence": lead_time_confidence,
     }
 
 
 def _event_payload(
-    event: EarlySignalEvent, *, score: int, reasons: list[str]
+    event: EarlySignalEvent,
+    *,
+    score: int,
+    reasons: list[str],
+    quality_score: int,
+    quality_tier: QualityTier,
+    quality_reasons: list[str],
 ) -> dict[str, Any]:
     observed = ""
     scraped_at = ""
@@ -335,6 +510,7 @@ def _event_payload(
     )
     if event.address:
         title = event.address
+    lead_time_label, lead_time_confidence = _lead_time_for_signal(event.signal_type)
     return {
         "id": event.id,
         "signal_type": event.signal_type,
@@ -355,6 +531,11 @@ def _event_payload(
         "score": score,
         "reasons": reasons,
         "breakdown": _event_breakdown_from_score(score, reasons),
+        "quality_score": quality_score,
+        "quality_tier": quality_tier,
+        "quality_reasons": quality_reasons,
+        "lead_time_label": lead_time_label,
+        "lead_time_confidence": lead_time_confidence,
     }
 
 
@@ -422,17 +603,32 @@ def _collect_permit_signals(
         ):
             continue
 
+        permit_value = _parse_value(permit.project_value)
+
         if signals_model is not None:
             score, reasons = score_fn(signals_model, permit, own=False)
         else:
-            value = _parse_value(permit.project_value)
-            score = min(100, 45 + (15 if value >= 250_000 else 0))
+            score = min(100, 45 + (15 if permit_value >= 250_000 else 0))
             reasons = ["Recent permit application in your market"]
             lag = pipeline_lag_days(permit)
             if lag:
                 reasons.append(f"{lag}-day application-to-issue pipeline")
 
-        payload = _signal_payload(permit, score=score, reasons=reasons)
+        quality_score, quality_tier, quality_reasons = _classify_signal_quality(
+            signal_type="permit_application",
+            haystack=_permit_haystack(permit),
+            estimated_value=permit_value if permit_value > 0 else None,
+            specializations=market_project_types,
+        )
+
+        payload = _signal_payload(
+            permit,
+            score=score,
+            reasons=reasons,
+            quality_score=quality_score,
+            quality_tier=quality_tier,
+            quality_reasons=quality_reasons,
+        )
         payload["scraped_at"] = (
             permit.scraped_at.astimezone(timezone.utc).isoformat()
             if permit.scraped_at
@@ -475,7 +671,23 @@ def _collect_event_signals(
             event,
             market_project_types=market_project_types,
         )
-        scored.append(_event_payload(event, score=score, reasons=reasons))
+        event_value = _parse_value(getattr(event, "project_value", "") or "")
+        quality_score, quality_tier, quality_reasons = _classify_signal_quality(
+            signal_type=event.signal_type,
+            haystack=_event_haystack(event),
+            estimated_value=event_value if event_value > 0 else None,
+            specializations=market_project_types,
+        )
+        scored.append(
+            _event_payload(
+                event,
+                score=score,
+                reasons=reasons,
+                quality_score=quality_score,
+                quality_tier=quality_tier,
+                quality_reasons=quality_reasons,
+            )
+        )
     return scored, diagnostics
 
 
@@ -488,14 +700,20 @@ def _signal_type_sort_rank(signal_type: str) -> str:
 def _order_signals_deterministically(
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Newest signal first; identical dates broken by score (higher first),
-    then signal_type (lexicographic), then id (ascending) -- fully
-    deterministic regardless of input order, since Python's sort is stable
-    and each pass below is applied from least- to most-significant key."""
+    """Primary: quality_score (highest first) -- the deterministic
+    project-quality ranking layer (PR-EARLY-3A), so a handful of strong
+    early-project signals are never buried under a long list of
+    technically-qualifying but weak/maintenance-scale ones. Then
+    freshness (newest first), then relevance score (higher first), then
+    signal_type (lexicographic), then id (ascending) as stable
+    tie-breakers -- fully deterministic regardless of input order, since
+    Python's sort is stable and each pass below is applied from least- to
+    most-significant key."""
     ordered = sorted(rows, key=lambda row: int(row.get("id") or 0))
     ordered.sort(key=lambda row: _signal_type_sort_rank(row.get("signal_type")))
     ordered.sort(key=lambda row: int(row.get("score") or 0), reverse=True)
     ordered.sort(key=_market_sort_key, reverse=True)
+    ordered.sort(key=lambda row: int(row.get("quality_score") or 0), reverse=True)
     return ordered
 
 
@@ -515,7 +733,8 @@ def get_early_signals(
     limit: int = 15,
     regions: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Collect, score, threshold, and rank early market signals.
+    """Collect, score, threshold, quality-rank, and return early market
+    signals.
 
     ``min_score`` is enforced uniformly across every collected signal type
     (permit_application, development_permit_application,
@@ -524,11 +743,23 @@ def get_early_signals(
     a score below it is excluded. Existing score formulas, region/
     project-type/value gates, and the lookback-day default are unchanged.
 
-    Ordering is fully deterministic: newest signal first (by
-    scraped_at/application_date), ties broken by score (highest first),
-    then signal_type (lexicographic), then id (ascending) -- the same set
-    of input rows always produces the same output order, regardless of the
-    order they were collected in.
+    Each signal also carries an additive, deterministic quality layer
+    (PR-EARLY-3A) -- ``quality_score``, ``quality_tier``
+    ("high_potential"/"market_watch"/"low_priority"), and
+    ``quality_reasons`` -- describing how early/large a project signal is
+    (see ``_classify_signal_quality``). This never gates which signals are
+    returned (a low_priority signal is still returned, only ranked lower
+    by default) and is never a win-probability, tender-guarantee, or
+    participation claim. Each signal also carries a machine-readable
+    ``lead_time_label``/``lead_time_confidence`` pair describing a
+    historical pattern, not a promise.
+
+    Ordering is fully deterministic: ``quality_score`` first (highest
+    first), then freshness (newest first, by scraped_at/application_date),
+    then relevance ``score`` (highest first), then signal_type
+    (lexicographic), then id (ascending) -- the same set of input rows
+    always produces the same output order, regardless of the order they
+    were collected in.
 
     The response's ``diagnostics`` block is additive and aggregate-only
     (counts, never raw ids/names/addresses/payload/exception text):

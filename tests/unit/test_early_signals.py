@@ -5,7 +5,10 @@ from __future__ import annotations
 import random
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from pipeline.early_signals import (
+    _classify_signal_quality,
     _event_matches_project_types,
     _event_matches_regions,
     _matches_project_types,
@@ -446,3 +449,331 @@ def test_early_signals_endpoint_passes_and_enforces_min_score():
     assert captured["min_score"] == 72
     body = response.json()
     assert "diagnostics" in body
+
+
+# --- PR-EARLY-3A: deterministic signal quality layer ------------------
+
+
+def test_development_and_rezoning_get_high_potential_quality():
+    for signal_type in ("development_permit_application", "rezoning_application"):
+        score, tier, reasons = _classify_signal_quality(
+            signal_type=signal_type,
+            haystack="New Building - Mixed Use Development",
+            estimated_value=None,
+            specializations=[],
+        )
+        assert tier == "high_potential"
+        assert score >= 70
+        assert reasons
+
+
+def test_small_interior_permit_downranked_for_general_contractor():
+    score, tier, reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="Interior Alteration - Single Family Dwelling",
+        estimated_value=None,
+        specializations=["General Contracting"],
+    )
+    assert tier == "low_priority"
+    assert any("maintenance-scale" in r.lower() for r in reasons)
+
+
+def test_development_outranks_small_interior_permit_for_general_contractor():
+    dev_score, dev_tier, _ = _classify_signal_quality(
+        signal_type="development_permit_application",
+        haystack="New Building - Mixed Use Development",
+        estimated_value=None,
+        specializations=["General Contracting"],
+    )
+    permit_score, permit_tier, _ = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="Interior Alteration - Single Family Dwelling",
+        estimated_value=None,
+        specializations=["General Contracting"],
+    )
+    assert dev_score > permit_score
+    assert dev_tier == "high_potential"
+    assert permit_tier == "low_priority"
+
+
+def test_electrical_solar_specialization_prevents_unfair_downrank():
+    baseline_score, baseline_tier, _ = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="Interior Alteration - Single Family Dwelling",
+        estimated_value=None,
+        specializations=["General Contracting"],
+    )
+    solar_score, solar_tier, solar_reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="Interior Alteration - Solar Panel Installation Single Family Dwelling",
+        estimated_value=None,
+        specializations=["Solar", "Electrical"],
+    )
+    assert solar_score > baseline_score
+    assert baseline_tier == "low_priority"
+    assert solar_tier != "low_priority"
+    assert any("specialization" in r.lower() for r in solar_reasons)
+
+
+def test_renovation_specialization_prevents_unfair_interior_alteration_downrank():
+    unprotected_score, unprotected_tier, _ = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="Interior Alteration - Retail Space",
+        estimated_value=None,
+        specializations=["Commercial Development"],
+    )
+    protected_score, protected_tier, protected_reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="Interior Alteration - Retail Space",
+        estimated_value=None,
+        specializations=["Renovation", "Interior Alteration"],
+    )
+    assert protected_score > unprotected_score
+    assert unprotected_tier == "low_priority"
+    assert protected_tier != "low_priority"
+    assert any("specialization" in r.lower() for r in protected_reasons)
+
+
+def test_value_boost_only_applies_when_value_present():
+    no_value_score, _no_value_tier, no_value_reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="New Building - Commercial",
+        estimated_value=None,
+        specializations=[],
+    )
+    with_value_score, _with_value_tier, with_value_reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="New Building - Commercial",
+        estimated_value=6_000_000,
+        specializations=[],
+    )
+    assert with_value_score > no_value_score
+    assert not any("value" in r.lower() for r in no_value_reasons)
+    assert any("value" in r.lower() for r in with_value_reasons)
+
+
+def test_zero_value_never_boosts_and_never_penalizes():
+    zero_score, _tier, zero_reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="New Building - Commercial",
+        estimated_value=0,
+        specializations=[],
+    )
+    none_score, _tier2, _none_reasons = _classify_signal_quality(
+        signal_type="permit_application",
+        haystack="New Building - Commercial",
+        estimated_value=None,
+        specializations=[],
+    )
+    assert zero_score == none_score
+    assert not any("value" in r.lower() for r in zero_reasons)
+
+
+@pytest.mark.parametrize(
+    ("signal_type", "haystack", "specializations", "expected_tier"),
+    [
+        ("development_permit_application", "New Building", [], "high_potential"),
+        ("permit_application", "New Commercial Building Addition", [], "market_watch"),
+        (
+            "permit_application",
+            "Medical Lift Installation",
+            ["General Contracting"],
+            "low_priority",
+        ),
+    ],
+)
+def test_all_three_tiers_are_reachable_and_explainable(
+    signal_type, haystack, specializations, expected_tier
+):
+    score, tier, reasons = _classify_signal_quality(
+        signal_type=signal_type,
+        haystack=haystack,
+        estimated_value=None,
+        specializations=specializations,
+    )
+    assert tier == expected_tier
+    assert reasons
+    assert all(isinstance(reason, str) and reason for reason in reasons)
+
+
+def test_quality_score_never_claims_win_probability_or_tender_guarantee():
+    forbidden_phrases = (
+        "win probability",
+        "will win",
+        "guaranteed tender",
+        "guaranteed to",
+    )
+    for signal_type, haystack, specializations in (
+        ("development_permit_application", "New Building", []),
+        ("permit_application", "Interior Alteration - Single Family Dwelling", []),
+        ("permit_application", "Solar Panel Installation", ["Solar"]),
+    ):
+        _score, _tier, reasons = _classify_signal_quality(
+            signal_type=signal_type,
+            haystack=haystack,
+            estimated_value=None,
+            specializations=specializations,
+        )
+        combined = " ".join(reasons).lower()
+        for phrase in forbidden_phrases:
+            assert phrase not in combined
+
+
+# --- deterministic ordering: quality_score as primary sort key ---------
+
+
+def _row_with_quality(
+    *, id, score, quality_score, scraped_at, signal_type="permit_application"
+):
+    return {
+        "id": id,
+        "signal_type": signal_type,
+        "score": score,
+        "quality_score": quality_score,
+        "scraped_at": scraped_at,
+        "application_date": scraped_at,
+    }
+
+
+def test_order_deterministically_quality_score_is_primary_key():
+    rows = [
+        _row_with_quality(id=1, score=90, quality_score=40, scraped_at="2026-07-05"),
+        _row_with_quality(id=2, score=50, quality_score=80, scraped_at="2026-07-01"),
+    ]
+    ordered = _order_signals_deterministically(rows)
+    # id=2 has a lower relevance score AND an older date, but a higher
+    # quality_score -- it must still rank first.
+    assert [row["id"] for row in ordered] == [2, 1]
+
+
+def test_order_deterministically_quality_ties_fall_back_to_existing_chain():
+    rows = [
+        _row_with_quality(
+            id=5,
+            score=60,
+            quality_score=70,
+            scraped_at="2026-07-01",
+            signal_type="rezoning_application",
+        ),
+        _row_with_quality(id=1, score=70, quality_score=70, scraped_at="2026-07-03"),
+        _row_with_quality(
+            id=2,
+            score=70,
+            quality_score=70,
+            scraped_at="2026-07-03",
+            signal_type="development_permit_application",
+        ),
+    ]
+    ordered = _order_signals_deterministically(rows)
+    # All quality_score=70 (tied). Freshness: ids 1 & 2 (2026-07-03) before
+    # id 5 (2026-07-01). Among the tied-freshness pair, relevance score
+    # ties too (70), so signal_type breaks it lexicographically:
+    # "development_permit_application" < "permit_application".
+    assert [row["id"] for row in ordered] == [2, 1, 5]
+
+
+def test_order_deterministically_with_quality_is_input_order_independent():
+    rows = [
+        _row_with_quality(id=1, score=70, quality_score=50, scraped_at="2026-07-01"),
+        _row_with_quality(id=2, score=90, quality_score=90, scraped_at="2026-07-01"),
+        _row_with_quality(id=3, score=50, quality_score=50, scraped_at="2026-07-02"),
+        _row_with_quality(id=4, score=90, quality_score=90, scraped_at="2026-07-02"),
+    ]
+    expected = [row["id"] for row in _order_signals_deterministically(rows)]
+    for _ in range(5):
+        shuffled = list(rows)
+        random.Random(7).shuffle(shuffled)
+        result = [row["id"] for row in _order_signals_deterministically(shuffled)]
+        assert result == expected
+
+
+# --- get_early_signals: quality ordering + unchanged score/min_score ---
+
+
+def _quality_row(
+    id, score, quality_score, scraped_at, signal_type="permit_application"
+):
+    return {
+        "id": id,
+        "signal_type": signal_type,
+        "score": score,
+        "quality_score": quality_score,
+        "quality_tier": "market_watch",
+        "quality_reasons": ["stub reason"],
+        "scraped_at": scraped_at,
+        "application_date": scraped_at,
+    }
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_get_early_signals_orders_by_quality_score_first(mock_permits, mock_events):
+    mock_permits.return_value = (
+        [
+            _quality_row(
+                1, 90, 20, "2026-07-05"
+            ),  # newest, high relevance, LOW quality
+            _quality_row(
+                2, 60, 90, "2026-07-01"
+            ),  # older, lower relevance, HIGH quality
+        ],
+        _empty_diag(),
+    )
+    mock_events.return_value = ([], _empty_diag())
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    assert [row["id"] for row in result["signals"]] == [2, 1]
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_min_score_still_gates_on_relevance_score_not_quality_score(
+    mock_permits, mock_events
+):
+    mock_permits.return_value = (
+        [
+            # Low relevance score, very high quality -- must still be
+            # excluded by min_score (the score/min_score contract is
+            # unchanged by the quality layer).
+            _quality_row(1, 30, 95, "2026-07-01"),
+            # High relevance score, very low quality -- must still be
+            # included.
+            _quality_row(2, 80, 5, "2026-07-02"),
+        ],
+        _empty_diag(),
+    )
+    mock_events.return_value = ([], _empty_diag())
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    ids = [row["id"] for row in result["signals"]]
+    assert ids == [2]
+    assert result["diagnostics"]["rejected_by_min_score"] == 1
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_diagnostics_still_aggregate_only_with_quality_layer_present(
+    mock_permits, mock_events
+):
+    mock_permits.return_value = (
+        [_quality_row(1, 90, 80, "2026-07-01")],
+        {"scanned": 10, "rejected_by_region": 3, "rejected_by_project_type": 2},
+    )
+    mock_events.return_value = (
+        [_quality_row(2, 30, 20, "2026-07-02", signal_type="rezoning_application")],
+        {"scanned": 5, "rejected_by_region": 1, "rejected_by_project_type": 0},
+    )
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    diagnostics = result["diagnostics"]
+    assert set(diagnostics.keys()) == {
+        "scanned_permits",
+        "scanned_events",
+        "rejected_by_region",
+        "rejected_by_project_type",
+        "rejected_by_min_score",
+        "returned_count",
+    }
+    for value in diagnostics.values():
+        assert isinstance(value, int) and not isinstance(value, bool)
+        assert value >= 0
