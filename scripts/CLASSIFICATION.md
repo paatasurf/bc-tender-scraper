@@ -104,6 +104,7 @@ max timestamps, identity checksum, schema migration version).
 | `probe_vercel_006.py` | A | No | No | N/A | 2026-07-03 |  |
 | `probe_vercel_bundles.py` | A | No | No | N/A | 2026-07-03 |  |
 | `report_opportunity_before_after.py` | A | No | No | N/A | 2026-07-03 |  |
+| `run_company_classification_audit.py` | A | No | No | Read-only (`--use-production`) | 2026-07-21 | No `--apply`/`--allow-production` in this script at all -- cannot write under any flag combination, and never calls AI/enrichment/the scraper/the scheduler. Single connection, single `REPEATABLE READ, READ ONLY` transaction, always rolled back. Writes an aggregate-only artifact (review-category counts, signal histogram, current-type/proposed-category breakdowns, SHA-256 examined-Company-id digest) -- never a company id, name, or other identifying value. See PR-MARKET-2B. |
 | `run_company_canonical_merge.py` | C | Yes | Yes | Local write; `--allow-production` + dry-run | 2026-07-03 | Effective escalates to Class D whenever init_db() runs. --apply requires fresh dry-run artifact. |
 | `run_parsed_identity_canonical_merge.py` | C | Yes | Yes | Local write; `--allow-production` + dry-run; `--use-production` read-only dry-run | 2026-07-04 | Scenario B applicant-field PI merge. Alias-only; no inserts. --apply requires fresh dry-run artifact. |
 | `run_construction_tiers.py` | D | Yes | Yes | `--allow-production` + phrase | 2026-07-03 |  |
