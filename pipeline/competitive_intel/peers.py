@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pipeline.cip_schema import CompanyIntelligenceProfile
+from pipeline.company_name_heuristics import is_probable_person_name
 from pipeline.competitive_intel.activity import build_activity_stats
 from pipeline.competitive_intel.cohort import filter_peer_candidates
 from pipeline.competitive_intel.overlap import (
@@ -143,6 +144,18 @@ def select_top_competitors(
                 award_count=award_count,
             )
         )
+
+    if kind == "construction":
+        # Defense-in-depth layer 3: the final guard on the actual
+        # get_top_competitors_for_company output. Every upstream cohort
+        # layer already excludes person-like rows, but this check is
+        # independent of entity_role and re-applied to the assembled
+        # TopCompetitor.name here -- if any earlier layer were ever
+        # bypassed or a future code path fed a person-like row into
+        # `results`, it still cannot reach the caller (and, by extension,
+        # Potential opportunity gaps / Competitor fit-scoring coverage,
+        # which both source their peer list from this function).
+        results = [c for c in results if not is_probable_person_name(c.name)]
 
     results.sort(key=lambda c: (-c.threat_score, -c.total_value, c.company_id))
     return results
