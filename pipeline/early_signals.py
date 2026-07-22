@@ -81,7 +81,9 @@ def _matches_project_types(haystack: str, project_types: list[str]) -> bool:
     return bool(matched)
 
 
-def _event_matches_project_types(event: EarlySignalEvent, project_types: list[str]) -> bool:
+def _event_matches_project_types(
+    event: EarlySignalEvent, project_types: list[str]
+) -> bool:
     return _matches_project_types(_event_haystack(event), project_types)
 
 
@@ -226,7 +228,9 @@ def _score_early_signal_event(
     return score, reasons
 
 
-def _breakdown_from_score(score: int, reasons: list[str], *, lag_days: int | None) -> list[dict[str, Any]]:
+def _breakdown_from_score(
+    score: int, reasons: list[str], *, lag_days: int | None
+) -> list[dict[str, Any]]:
     base_points = min(25, max(0, score - 15))
     lag_points = 0
     lag_detail = "Issue date recorded"
@@ -235,9 +239,19 @@ def _breakdown_from_score(score: int, reasons: list[str], *, lag_days: int | Non
         lag_detail = f"{lag_days} days from application to issuance"
     region_points = min(20, max(0, score - base_points - lag_points))
     factors = [
-        BreakdownFactor("permit_fit", "Permit relevance", base_points, 25, "; ".join(reasons[:2])),
-        BreakdownFactor("pipeline_lag", "Application lead time", lag_points, 15, lag_detail),
-        BreakdownFactor("region_value", "Region & value fit", region_points, 20, reasons[-1] if reasons else ""),
+        BreakdownFactor(
+            "permit_fit", "Permit relevance", base_points, 25, "; ".join(reasons[:2])
+        ),
+        BreakdownFactor(
+            "pipeline_lag", "Application lead time", lag_points, 15, lag_detail
+        ),
+        BreakdownFactor(
+            "region_value",
+            "Region & value fit",
+            region_points,
+            20,
+            reasons[-1] if reasons else "",
+        ),
     ]
     total = sum(f.points for f in factors)
     if total != score and factors:
@@ -256,8 +270,16 @@ def _event_breakdown_from_score(score: int, reasons: list[str]) -> list[dict[str
     base_points = min(35, max(0, score - 10))
     region_points = min(25, max(0, score - base_points))
     factors = [
-        BreakdownFactor("signal_fit", "Signal relevance", base_points, 35, "; ".join(reasons[:2])),
-        BreakdownFactor("region_fit", "Region fit", region_points, 25, reasons[-1] if reasons else ""),
+        BreakdownFactor(
+            "signal_fit", "Signal relevance", base_points, 35, "; ".join(reasons[:2])
+        ),
+        BreakdownFactor(
+            "region_fit",
+            "Region fit",
+            region_points,
+            25,
+            reasons[-1] if reasons else "",
+        ),
     ]
     total = sum(f.points for f in factors)
     if total != score and factors:
@@ -272,7 +294,9 @@ def _event_breakdown_from_score(score: int, reasons: list[str]) -> list[dict[str
     return [f.to_dict() for f in factors]
 
 
-def _signal_payload(permit: Permit, *, score: int, reasons: list[str]) -> dict[str, Any]:
+def _signal_payload(
+    permit: Permit, *, score: int, reasons: list[str]
+) -> dict[str, Any]:
     lag = pipeline_lag_days(permit)
     value = _parse_value(permit.project_value)
     return {
@@ -296,7 +320,9 @@ def _signal_payload(permit: Permit, *, score: int, reasons: list[str]) -> dict[s
     }
 
 
-def _event_payload(event: EarlySignalEvent, *, score: int, reasons: list[str]) -> dict[str, Any]:
+def _event_payload(
+    event: EarlySignalEvent, *, score: int, reasons: list[str]
+) -> dict[str, Any]:
     observed = ""
     scraped_at = ""
     if event.scraped_at:
@@ -304,7 +330,9 @@ def _event_payload(event: EarlySignalEvent, *, score: int, reasons: list[str]) -
         observed = event.scraped_at.astimezone(timezone.utc).date().isoformat()
     application_date = event.transaction_date or observed
     value = _parse_value(getattr(event, "project_value", "") or "")
-    title = event.property_type or SIGNAL_TYPE_LABELS.get(event.signal_type, "Early signal")
+    title = event.property_type or SIGNAL_TYPE_LABELS.get(
+        event.signal_type, "Early signal"
+    )
     if event.address:
         title = event.address
     return {
@@ -362,7 +390,7 @@ def _collect_permit_signals(
     min_value: float | None,
     max_value: float | None,
     fetch_limit: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     query = apply_active_permit_filter(
         select(Permit)
         .where(Permit.source == "vancouver")
@@ -374,16 +402,24 @@ def _collect_permit_signals(
     )
     rows = session.scalars(query).all()
     score_fn = (
-        _score_architecture_permit if kind == "architecture" else _score_construction_permit
+        _score_architecture_permit
+        if kind == "architecture"
+        else _score_construction_permit
     )
 
+    diagnostics = {"scanned": 0, "rejected_by_region": 0, "rejected_by_project_type": 0}
     scored: list[dict[str, Any]] = []
     for permit in rows:
+        diagnostics["scanned"] += 1
         if market_regions and not _permit_matches_regions(permit, market_regions):
+            diagnostics["rejected_by_region"] += 1
             continue
         if not _permit_matches_project_types(permit, market_project_types):
+            diagnostics["rejected_by_project_type"] += 1
             continue
-        if not _permit_matches_value_band(permit, min_value=min_value, max_value=max_value):
+        if not _permit_matches_value_band(
+            permit, min_value=min_value, max_value=max_value
+        ):
             continue
 
         if signals_model is not None:
@@ -403,7 +439,7 @@ def _collect_permit_signals(
             else permit.application_date
         )
         scored.append(payload)
-    return scored
+    return scored, diagnostics
 
 
 def _collect_event_signals(
@@ -414,7 +450,7 @@ def _collect_event_signals(
     market_regions: list[str],
     market_project_types: list[str],
     fetch_limit: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     query = (
         select(EarlySignalEvent)
         .where(EarlySignalEvent.signal_type.in_(EVENT_SIGNAL_TYPES))
@@ -424,11 +460,15 @@ def _collect_event_signals(
     )
     rows = session.scalars(query).all()
 
+    diagnostics = {"scanned": 0, "rejected_by_region": 0, "rejected_by_project_type": 0}
     scored: list[dict[str, Any]] = []
     for event in rows:
+        diagnostics["scanned"] += 1
         if market_regions and not _event_matches_regions(event, market_regions):
+            diagnostics["rejected_by_region"] += 1
             continue
         if not _event_matches_project_types(event, market_project_types):
+            diagnostics["rejected_by_project_type"] += 1
             continue
         score, reasons = _score_early_signal_event(
             signals_model,
@@ -436,7 +476,27 @@ def _collect_event_signals(
             market_project_types=market_project_types,
         )
         scored.append(_event_payload(event, score=score, reasons=reasons))
-    return scored
+    return scored, diagnostics
+
+
+def _signal_type_sort_rank(signal_type: str) -> str:
+    """Lexicographic tie-break key -- stable and well-defined regardless of
+    how many/which signal types exist, no arbitrary priority table needed."""
+    return str(signal_type or "")
+
+
+def _order_signals_deterministically(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Newest signal first; identical dates broken by score (higher first),
+    then signal_type (lexicographic), then id (ascending) -- fully
+    deterministic regardless of input order, since Python's sort is stable
+    and each pass below is applied from least- to most-significant key."""
+    ordered = sorted(rows, key=lambda row: int(row.get("id") or 0))
+    ordered.sort(key=lambda row: _signal_type_sort_rank(row.get("signal_type")))
+    ordered.sort(key=lambda row: int(row.get("score") or 0), reverse=True)
+    ordered.sort(key=_market_sort_key, reverse=True)
+    return ordered
 
 
 def _market_sort_key(row: dict[str, Any]) -> str:
@@ -455,11 +515,40 @@ def get_early_signals(
     limit: int = 15,
     regions: list[str] | None = None,
 ) -> dict[str, Any]:
-    since = (datetime.now(timezone.utc).date() - timedelta(days=lookback_days)).isoformat()
+    """Collect, score, threshold, and rank early market signals.
+
+    ``min_score`` is enforced uniformly across every collected signal type
+    (permit_application, development_permit_application,
+    rezoning_application), applied after each row's existing scoring and
+    before ``limit`` -- a score exactly equal to ``min_score`` is included,
+    a score below it is excluded. Existing score formulas, region/
+    project-type/value gates, and the lookback-day default are unchanged.
+
+    Ordering is fully deterministic: newest signal first (by
+    scraped_at/application_date), ties broken by score (highest first),
+    then signal_type (lexicographic), then id (ascending) -- the same set
+    of input rows always produces the same output order, regardless of the
+    order they were collected in.
+
+    The response's ``diagnostics`` block is additive and aggregate-only
+    (counts, never raw ids/names/addresses/payload/exception text):
+    ``scanned_permits``, ``scanned_events`` -- rows read from each source
+    before any filtering; ``rejected_by_region``, ``rejected_by_project_type``
+    -- rows dropped by those existing gates (summed across both sources);
+    ``rejected_by_min_score`` -- scored rows dropped by the score
+    threshold; ``returned_count`` -- rows actually returned in ``signals``
+    (equal to ``total``). The existing ``signals``/``signal_types``/
+    ``total`` fields are unchanged in shape.
+    """
+    since = (
+        datetime.now(timezone.utc).date() - timedelta(days=lookback_days)
+    ).isoformat()
     since_dt = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     fetch_limit = max(limit * 8, 120)
 
-    signals_model, _company = _load_company_signals(session, company_id=company_id, kind=kind)
+    signals_model, _company = _load_company_signals(
+        session, company_id=company_id, kind=kind
+    )
     market_regions = _resolve_market_regions(
         session,
         company_id=company_id,
@@ -472,7 +561,7 @@ def get_early_signals(
         signals_model=signals_model,
     )
 
-    permit_signals = _collect_permit_signals(
+    permit_signals, permit_diagnostics = _collect_permit_signals(
         session,
         since=since,
         signals_model=signals_model,
@@ -483,7 +572,7 @@ def get_early_signals(
         max_value=max_value,
         fetch_limit=fetch_limit,
     )
-    event_signals = _collect_event_signals(
+    event_signals, event_diagnostics = _collect_event_signals(
         session,
         since_dt=since_dt,
         signals_model=signals_model,
@@ -493,8 +582,15 @@ def get_early_signals(
     )
 
     merged = permit_signals + event_signals
-    merged.sort(key=_market_sort_key, reverse=True)
-    matches = merged[:limit]
+    # Score threshold applies uniformly to every collected signal type,
+    # after scoring and before limit -- exactly at min_score is included,
+    # below it is excluded (>=, never >).
+    rejected_by_min_score = sum(
+        1 for row in merged if int(row.get("score") or 0) < min_score
+    )
+    qualifying = [row for row in merged if int(row.get("score") or 0) >= min_score]
+    ordered = _order_signals_deterministically(qualifying)
+    matches = ordered[:limit]
 
     type_counts = {
         signal_type: sum(1 for row in matches if row.get("signal_type") == signal_type)
@@ -503,6 +599,21 @@ def get_early_signals(
             "development_permit_application",
             "rezoning_application",
         )
+    }
+
+    diagnostics = {
+        "scanned_permits": permit_diagnostics["scanned"],
+        "scanned_events": event_diagnostics["scanned"],
+        "rejected_by_region": (
+            permit_diagnostics["rejected_by_region"]
+            + event_diagnostics["rejected_by_region"]
+        ),
+        "rejected_by_project_type": (
+            permit_diagnostics["rejected_by_project_type"]
+            + event_diagnostics["rejected_by_project_type"]
+        ),
+        "rejected_by_min_score": rejected_by_min_score,
+        "returned_count": len(matches),
     }
 
     return {
@@ -514,6 +625,7 @@ def get_early_signals(
         "market_regions": market_regions,
         "market_project_types": market_project_types,
         "signal_types": type_counts,
+        "diagnostics": diagnostics,
         "signals": matches,
     }
 

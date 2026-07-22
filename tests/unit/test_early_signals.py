@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import random
+from unittest.mock import MagicMock, patch
+
 from pipeline.early_signals import (
     _event_matches_project_types,
     _event_matches_regions,
     _matches_project_types,
+    _order_signals_deterministically,
     _permit_matches_regions,
     _permit_matches_value_band,
     _score_early_signal_event,
+    get_early_signals,
     pipeline_lag_days,
 )
 
@@ -43,7 +48,9 @@ class _EventStub:
 
 
 def test_event_matches_regions():
-    event = _EventStub(region="Downtown", municipality="Vancouver", property_type="Mixed-use")
+    event = _EventStub(
+        region="Downtown", municipality="Vancouver", property_type="Mixed-use"
+    )
     assert _event_matches_regions(event, ["Downtown"])
     assert _event_matches_regions(event, ["vancouver"])
     assert not _event_matches_regions(event, ["Burnaby"])
@@ -69,7 +76,9 @@ def test_resolve_market_regions_uses_city_from_google_address():
         ai_reliability_score=None,
     )
     regions = _resolve_market_regions(
-        session=type("S", (), {"scalars": lambda *a, **k: type("R", (), {"all": lambda: []})()})(),
+        session=type(
+            "S", (), {"scalars": lambda *a, **k: type("R", (), {"all": lambda: []})()}
+        )(),
         company_id=None,
         signals_model=signals,
         explicit_regions=None,
@@ -105,3 +114,335 @@ def test_event_matches_project_types():
 
 def test_matches_project_types_empty_list_allows_all():
     assert _matches_project_types("Commercial tower", [])
+
+
+# --- PR-EARLY-1: min_score enforcement, deterministic ordering, diagnostics
+
+
+def _row(*, id, score, scraped_at, signal_type="permit_application"):
+    return {
+        "id": id,
+        "signal_type": signal_type,
+        "score": score,
+        "scraped_at": scraped_at,
+        "application_date": scraped_at,
+    }
+
+
+def _empty_diag():
+    return {"scanned": 0, "rejected_by_region": 0, "rejected_by_project_type": 0}
+
+
+# --- _order_signals_deterministically: pure ordering logic ----------------
+
+
+def test_order_deterministically_newest_first():
+    rows = [
+        _row(id=1, score=80, scraped_at="2026-07-01"),
+        _row(id=2, score=80, scraped_at="2026-07-03"),
+        _row(id=3, score=80, scraped_at="2026-07-02"),
+    ]
+    ordered = _order_signals_deterministically(rows)
+    assert [row["id"] for row in ordered] == [2, 3, 1]
+
+
+def test_order_deterministically_ties_broken_by_score_then_type_then_id():
+    same_date = "2026-07-01"
+    rows = [
+        _row(id=5, score=60, scraped_at=same_date, signal_type="rezoning_application"),
+        _row(id=1, score=70, scraped_at=same_date, signal_type="permit_application"),
+        _row(
+            id=2,
+            score=70,
+            scraped_at=same_date,
+            signal_type="development_permit_application",
+        ),
+        _row(
+            id=3,
+            score=70,
+            scraped_at=same_date,
+            signal_type="development_permit_application",
+        ),
+    ]
+    ordered = _order_signals_deterministically(rows)
+    # Highest score first (70s before 60); among the 70s, signal_type
+    # lexicographic ("development_permit_application" < "permit_application");
+    # among the two development_permit_application rows (id 2 and 3), id
+    # ascending.
+    assert [row["id"] for row in ordered] == [2, 3, 1, 5]
+
+
+def test_order_deterministically_is_input_order_independent():
+    rows = [
+        _row(id=1, score=70, scraped_at="2026-07-01"),
+        _row(id=2, score=90, scraped_at="2026-07-01"),
+        _row(id=3, score=50, scraped_at="2026-07-02"),
+        _row(id=4, score=90, scraped_at="2026-07-02"),
+    ]
+    expected = [row["id"] for row in _order_signals_deterministically(rows)]
+    for _ in range(5):
+        shuffled = list(rows)
+        random.Random(42).shuffle(shuffled)
+        result = [row["id"] for row in _order_signals_deterministically(shuffled)]
+        assert result == expected
+
+
+# --- get_early_signals: min_score enforcement, limit, diagnostics --------
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_permit_and_event_below_threshold_are_excluded(mock_permits, mock_events):
+    mock_permits.return_value = (
+        [
+            _row(id=1, score=70, scraped_at="2026-07-03"),
+            _row(id=2, score=40, scraped_at="2026-07-02"),
+        ],
+        _empty_diag(),
+    )
+    mock_events.return_value = (
+        [
+            _row(
+                id=3,
+                score=65,
+                scraped_at="2026-07-01",
+                signal_type="rezoning_application",
+            ),
+            _row(
+                id=4,
+                score=10,
+                scraped_at="2026-07-04",
+                signal_type="rezoning_application",
+            ),
+        ],
+        _empty_diag(),
+    )
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    ids = {row["id"] for row in result["signals"]}
+    assert ids == {1, 3}
+    assert result["diagnostics"]["rejected_by_min_score"] == 2
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_score_exactly_at_threshold_is_included(mock_permits, mock_events):
+    mock_permits.return_value = (
+        [_row(id=1, score=50, scraped_at="2026-07-01")],
+        _empty_diag(),
+    )
+    mock_events.return_value = ([], _empty_diag())
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    assert [row["id"] for row in result["signals"]] == [1]
+    assert result["diagnostics"]["rejected_by_min_score"] == 0
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_score_one_below_threshold_is_excluded(mock_permits, mock_events):
+    mock_permits.return_value = (
+        [_row(id=1, score=49, scraped_at="2026-07-01")],
+        _empty_diag(),
+    )
+    mock_events.return_value = ([], _empty_diag())
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    assert result["signals"] == []
+    assert result["diagnostics"]["rejected_by_min_score"] == 1
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_limit_applies_after_threshold_filtering(mock_permits, mock_events):
+    # 5 rows qualify (score >= 50); 2 more are below threshold. With
+    # limit=3, exactly the 3 best-qualifying rows must be returned -- the
+    # below-threshold rows must never occupy a limited slot.
+    mock_permits.return_value = (
+        [
+            _row(id=1, score=90, scraped_at="2026-07-05"),
+            _row(id=2, score=80, scraped_at="2026-07-04"),
+            _row(id=3, score=70, scraped_at="2026-07-03"),
+            _row(id=4, score=60, scraped_at="2026-07-02"),
+            _row(id=5, score=50, scraped_at="2026-07-01"),
+            _row(
+                id=6, score=49, scraped_at="2026-07-06"
+            ),  # newest, but below threshold
+            _row(
+                id=7, score=10, scraped_at="2026-07-07"
+            ),  # newest, but below threshold
+        ],
+        _empty_diag(),
+    )
+    mock_events.return_value = ([], _empty_diag())
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=3)
+    assert [row["id"] for row in result["signals"]] == [1, 2, 3]
+    assert result["diagnostics"]["rejected_by_min_score"] == 2
+    assert result["diagnostics"]["returned_count"] == 3
+    assert result["total"] == 3
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_diagnostics_counts_are_correct_and_aggregate_only(mock_permits, mock_events):
+    mock_permits.return_value = (
+        [_row(id=1, score=90, scraped_at="2026-07-01")],
+        {"scanned": 10, "rejected_by_region": 3, "rejected_by_project_type": 2},
+    )
+    mock_events.return_value = (
+        [
+            _row(
+                id=2,
+                score=30,
+                scraped_at="2026-07-02",
+                signal_type="rezoning_application",
+            )
+        ],
+        {"scanned": 5, "rejected_by_region": 1, "rejected_by_project_type": 0},
+    )
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    diagnostics = result["diagnostics"]
+
+    assert diagnostics == {
+        "scanned_permits": 10,
+        "scanned_events": 5,
+        "rejected_by_region": 4,
+        "rejected_by_project_type": 2,
+        "rejected_by_min_score": 1,
+        "returned_count": 1,
+    }
+    # Aggregate-only: exactly these six counters, every value a plain
+    # non-negative int -- no raw ids/names/addresses/payload/exception text.
+    assert set(diagnostics.keys()) == {
+        "scanned_permits",
+        "scanned_events",
+        "rejected_by_region",
+        "rejected_by_project_type",
+        "rejected_by_min_score",
+        "returned_count",
+    }
+    for value in diagnostics.values():
+        assert isinstance(value, int) and not isinstance(value, bool)
+        assert value >= 0
+
+
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_existing_signals_payload_and_signal_types_preserved(mock_permits, mock_events):
+    mock_permits.return_value = (
+        [_row(id=1, score=90, scraped_at="2026-07-01")],
+        _empty_diag(),
+    )
+    mock_events.return_value = (
+        [
+            _row(
+                id=2,
+                score=80,
+                scraped_at="2026-07-02",
+                signal_type="rezoning_application",
+            )
+        ],
+        _empty_diag(),
+    )
+
+    result = get_early_signals(MagicMock(), company_id=None, min_score=50, limit=15)
+    assert set(result.keys()) >= {
+        "data_scope",
+        "lookback_days",
+        "company_id",
+        "kind",
+        "total",
+        "market_regions",
+        "market_project_types",
+        "signal_types",
+        "diagnostics",
+        "signals",
+    }
+    assert result["signal_types"] == {
+        "permit_application": 1,
+        "development_permit_application": 0,
+        "rezoning_application": 1,
+    }
+
+
+@patch("pipeline.early_signals._load_company_signals")
+@patch("pipeline.early_signals._collect_event_signals")
+@patch("pipeline.early_signals._collect_permit_signals")
+def test_get_early_signals_for_profile_now_enforces_min_score(
+    mock_permits, mock_events, mock_load_signals
+):
+    from pipeline.early_signals import get_early_signals_for_profile
+
+    mock_load_signals.return_value = (None, None)
+    mock_permits.return_value = (
+        [
+            _row(id=1, score=60, scraped_at="2026-07-01"),
+            _row(id=2, score=30, scraped_at="2026-07-02"),
+        ],
+        _empty_diag(),
+    )
+    mock_events.return_value = ([], _empty_diag())
+
+    profile = MagicMock()
+    profile.company_id = 1921
+    profile.min_project_value = None
+    profile.max_project_value = None
+    profile.regions = []
+
+    signals = get_early_signals_for_profile(
+        MagicMock(), profile, lookback_days=7, limit=8
+    )
+    assert [row["id"] for row in signals] == [1]
+
+
+# --- API endpoint: threads and enforces min_score --------------------------
+
+
+def test_early_signals_endpoint_passes_and_enforces_min_score():
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    captured = {}
+
+    def fake_get_early_signals(_session, **kwargs):
+        captured.update(kwargs)
+        return {
+            "data_scope": "market_early_signal_events",
+            "lookback_days": kwargs["lookback_days"],
+            "company_id": kwargs["company_id"],
+            "kind": kwargs["kind"],
+            "total": 0,
+            "market_regions": [],
+            "market_project_types": [],
+            "signal_types": {
+                "permit_application": 0,
+                "development_permit_application": 0,
+                "rezoning_application": 0,
+            },
+            "diagnostics": {
+                "scanned_permits": 0,
+                "scanned_events": 0,
+                "rejected_by_region": 0,
+                "rejected_by_project_type": 0,
+                "rejected_by_min_score": 0,
+                "returned_count": 0,
+            },
+            "signals": [],
+        }
+
+    client = TestClient(app)
+    with patch("pipeline.early_signals.get_early_signals", fake_get_early_signals):
+        with patch("api.main.get_session") as mock_get_session:
+            mock_get_session.return_value = MagicMock()
+            response = client.get(
+                "/api/early-signals",
+                params={"company_id": 1921, "min_score": 72},
+            )
+
+    assert response.status_code == 200
+    assert captured["min_score"] == 72
+    body = response.json()
+    assert "diagnostics" in body
