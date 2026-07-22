@@ -9,9 +9,12 @@ import pytest
 from pipeline.unified_opportunities import (
     BUSINESS_PURSUIT_SCORE_LABEL,
     CONSTRUCTION_SCORE_LABEL_AI,
+    CONSTRUCTION_SCORE_LABEL_PERMIT,
     _interleave_tender_ids,
     get_unified_opportunities,
 )
+
+PERMIT_1780_FIR = 4365025
 
 PONTEM_ID = 8638
 TENDER_HEAT_PUMP = 16992
@@ -30,7 +33,9 @@ def _pontem_construction_discovery() -> dict:
                 "score": 86,
                 "source": "ai_match",
                 "context": "cached_tender_match",
-                "reasons": ["Match driven by industry keyword match, domain specialization."],
+                "reasons": [
+                    "Match driven by industry keyword match, domain specialization."
+                ],
                 "payload": {
                     "id": TENDER_HEAT_PUMP,
                     "title": "Air-to-Water Heat Pump Workforce Capacity Building",
@@ -39,11 +44,11 @@ def _pontem_construction_discovery() -> dict:
             },
             {
                 "type": "permit",
-                "id": 4365025,
+                "id": PERMIT_1780_FIR,
                 "score": 75,
                 "source": "rules",
                 "context": "own_permit",
-                "payload": {"id": 4365025, "address": "1780 FIR STREET"},
+                "payload": {"id": PERMIT_1780_FIR, "address": "1780 FIR STREET"},
             },
             {
                 "type": "tender",
@@ -52,7 +57,10 @@ def _pontem_construction_discovery() -> dict:
                 "source": "ai_match",
                 "context": "cached_tender_match",
                 "reasons": ["Match driven by industry keyword match."],
-                "payload": {"id": 14434, "title": "Firehall No.1 Building Envelope Renewal"},
+                "payload": {
+                    "id": 14434,
+                    "title": "Firehall No.1 Building Envelope Renewal",
+                },
             },
         ],
     }
@@ -91,30 +99,52 @@ def test_pontem_unified_includes_both_models(mock_discover, mock_bd):
 
     result = get_unified_opportunities(MagicMock(), PONTEM_ID, limit=20)
 
-    by_id = {item["tender_id"]: item for item in result["items"]}
+    # Composite (type, id) keying: a permit and a tender could in
+    # principle share a numeric id, so index by that pair, never a bare
+    # numeric id.
+    by_key = {(item["type"], item["id"]): item for item in result["items"]}
 
-    assert TENDER_HEAT_PUMP in by_id
-    assert TENDER_CAMPUS_VIEW in by_id
+    assert ("tender", TENDER_HEAT_PUMP) in by_key
+    assert ("tender", TENDER_CAMPUS_VIEW) in by_key
+    assert ("permit", PERMIT_1780_FIR) in by_key
 
-    heat = by_id[TENDER_HEAT_PUMP]
+    heat = by_key[("tender", TENDER_HEAT_PUMP)]
     assert heat["model"] == "construction_hybrid"
     assert heat["construction_hybrid"]["score"] == 86
     assert heat["construction_hybrid"]["score_label"] == CONSTRUCTION_SCORE_LABEL_AI
     assert heat["construction_hybrid"]["source"] == "ai_match"
     assert heat["business_pursuit"] is None
 
-    campus = by_id[TENDER_CAMPUS_VIEW]
+    campus = by_key[("tender", TENDER_CAMPUS_VIEW)]
     assert campus["model"] == "business_pursuit"
     assert campus["business_pursuit"]["score"] == 80
     assert campus["business_pursuit"]["score_label"] == BUSINESS_PURSUIT_SCORE_LABEL
     assert campus["construction_hybrid"] is None
 
+    permit = by_key[("permit", PERMIT_1780_FIR)]
+    assert permit["model"] == "construction_hybrid"
+    assert permit["tender_id"] is None
+    assert permit["construction_hybrid"]["score"] == 75
+    assert (
+        permit["construction_hybrid"]["score_label"] == CONSTRUCTION_SCORE_LABEL_PERMIT
+    )
+    assert permit["business_pursuit"] is None
+    assert permit["payload"]["address"] == "1780 FIR STREET"
+
+    # 2 construction-hybrid tenders + 1 permit (also construction_hybrid
+    # model, since permit has no BD-equivalent dual source today) + 1
+    # business-pursuit tender.
     assert result["model_coverage"] == {
-        "construction_hybrid": 2,
+        "construction_hybrid": 3,
         "business_pursuit": 1,
         "both": 0,
     }
-    assert result["total"] == 3
+    assert result["type_coverage"] == {
+        "tender": 3,
+        "permit": 1,
+        "contract_award": 0,
+    }
+    assert result["total"] == 4
 
 
 @patch("pipeline.unified_opportunities.recommend_bd_intelligence")
