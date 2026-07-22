@@ -6,7 +6,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from db.company_analytics import company_analytics_entity_filter
-from db.company_canonical_constants import ENTITY_ROLE_STANDALONE
+from db.company_canonical_constants import COMPANY_ANALYTICS_EXCLUDED_ENTITY_ROLES
 from db.models import ArchCompany, Company
 from pipeline.cip_schema import CompanyIntelligenceProfile
 from pipeline.company_name_heuristics import is_probable_person_name
@@ -102,29 +102,37 @@ def construction_company_analytics_clause():
 
 
 def filter_construction_peer_pool(members: list[CompanyRow]) -> list[CompanyRow]:
-    """Post-filter construction peers: drop standalone rows that look like individuals."""
-    return _exclude_misclassified_person_standalone(members, kind="construction")
+    """Post-filter construction peers: drop any row that looks like an
+    individual, regardless of its entity_role -- see
+    ``_is_person_like_construction_peer``."""
+    return [m for m in members if not _is_person_like_construction_peer(m)]
 
 
-def _exclude_misclassified_person_standalone(
-    members: list[CompanyRow], *, kind: Kind
-) -> list[CompanyRow]:
-    """Drop standalone rows that look like individuals (same signal as mark_legacy_person_companies).
+def _is_person_like_construction_peer(member: CompanyRow) -> bool:
+    """True when a construction-cohort row must never surface as a Market
+    peer (Top competitors, Potential opportunity gaps, Competitor
+    fit-scoring coverage).
 
-    company_analytics_entity_filter() excludes applicant_alias and probable_person at SQL
-    level; standalone permit-applicant person names that were never reclassified still
-    leak through without this post-filter.
+    Two independent, rule-based signals, neither of which hardcodes a
+    specific name:
+
+    - entity_role in COMPANY_ANALYTICS_EXCLUDED_ENTITY_ROLES (applicant_alias,
+      probable_person). company_analytics_entity_filter() already applies
+      this at SQL level for the initial fetch; repeated here so this
+      function is a complete, self-contained guard usable on rows from any
+      source (SQL fetch, cohort-isolation output, or a future path that
+      doesn't apply the SQL clause).
+    - is_probable_person_name(name), applied regardless of entity_role.
+      This is what catches a row that carries any other entity_role
+      (including one erroneously left/marked "canonical" by the merge
+      pipeline) despite its name reading as an individual -- a hardening
+      gap distinct from, and in addition to, the confirmed standalone
+      production leak (see PR-MARKET-2A).
     """
-    if kind != "construction":
-        return members
-    return [
-        member
-        for member in members
-        if not (
-            (getattr(member, "entity_role", "") or "") == ENTITY_ROLE_STANDALONE
-            and is_probable_person_name(getattr(member, "name", "") or "")
-        )
-    ]
+    role = getattr(member, "entity_role", "") or ""
+    if role in COMPANY_ANALYTICS_EXCLUDED_ENTITY_ROLES:
+        return True
+    return is_probable_person_name(getattr(member, "name", "") or "")
 
 
 def _quality_clause(model, kind: Kind):
@@ -215,6 +223,13 @@ def build_market_cohort(
         members, subject, kind=kind, subject_cip=subject_cip, session=session
     )
     members = _apply_cohort_quality_gate(members, subject, kind=kind)
+    if kind == "construction":
+        # Defense-in-depth layer 2: cohort-type isolation and the quality
+        # gate only ever narrow the set, never add rows, so this is
+        # normally a no-op on top of the fetch-time filter in
+        # _fetch_cohort_rows -- it exists so a future change to either
+        # step can never silently reintroduce a person-like row here.
+        members = filter_construction_peer_pool(members)
 
     definition_key = "sector_and_city"
     if city:
@@ -230,6 +245,8 @@ def build_market_cohort(
             members, subject, kind=kind, subject_cip=subject_cip, session=session
         )
         members = _apply_cohort_quality_gate(members, subject, kind=kind)
+        if kind == "construction":
+            members = filter_construction_peer_pool(members)
         definition_key = "sector_only_widened"
         definition = f"dominant_sector={sector} (widened — cohort < 8 with city gate)"
 
