@@ -208,3 +208,52 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrape_initializes_coordinator_before_worker(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch(
+            "api.internal._enqueue_step",
+            return_value={"status": "started", "run_id": "ignored"},
+        ) as enqueue_step:
+            response = internal_api.scrape_federal(background_tasks, None)
+
+    enqueue_step.assert_called_once()
+    actual_run_id = enqueue_step.call_args.args[3]
+    assert response == {"status": "started", "run_id": "ignored"}
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == actual_run_id
+    assert state.phase == "tender_scrape"
+    assert state.tender_scrape_started_at is not None
+
+
+def test_internal_tender_scrape_without_body_reuses_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-scrape-run")
+    coordinator.begin_tender_scrape("active-scrape-run")
+    coordinator.mark_tender_scrape_step("active-scrape-run", "scrape-federal")
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch(
+            "api.internal._enqueue_step",
+            return_value={"status": "started"},
+        ) as enqueue_step:
+            response = internal_api.scrape_merx_arch(background_tasks, None)
+
+    assert response == {"status": "started"}
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[3] == "active-scrape-run"
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "active-scrape-run"
+    assert state.completed_tender_scrapes == ["scrape-federal"]

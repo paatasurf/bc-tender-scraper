@@ -25,7 +25,12 @@ from pipeline.internal_steps import (
     run_registry_verification_match_step,
     run_construction_tiers_step,
 )
-from pipeline.run_coordinator import PipelineOrderError, get_run_state
+from pipeline.run_coordinator import (
+    PipelineOrderError,
+    begin_run,
+    begin_tender_scrape,
+    get_run_state,
+)
 from pipeline.lifecycle_resolver import resolve_tender_lifecycle
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
@@ -164,13 +169,33 @@ def _enqueue_tender_scrape_step(
     runner,
     run_id: str | None,
 ) -> dict[str, Any]:
-    actual_run_id = run_id or new_run_id()
+    actual_run_id = _prepare_tender_scrape_run_id(run_id)
     return _enqueue_step(
         background_tasks,
         step,
         make_tender_scrape_worker(step, runner, actual_run_id),
         actual_run_id,
     )
+
+
+def _prepare_tender_scrape_run_id(run_id: str | None) -> str:
+    """Bind standalone tender scraper endpoints to one coordinator run."""
+    actual_run_id = run_id
+    state = get_run_state()
+    if actual_run_id is None:
+        if (
+            state is not None
+            and state.finished_at is None
+            and state.tender_scrape_finished_at is None
+        ):
+            actual_run_id = state.run_id
+        else:
+            actual_run_id = new_run_id()
+
+    if state is None or state.run_id != actual_run_id:
+        begin_run(actual_run_id)
+    begin_tender_scrape(actual_run_id)
+    return actual_run_id
 
 
 def _enqueue_import_step(
