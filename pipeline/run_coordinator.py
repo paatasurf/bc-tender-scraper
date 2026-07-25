@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +67,41 @@ def get_run_state() -> RunState | None:
         return _load_state()
 
 
+def _can_reuse_tender_scrape_run(state: RunState) -> bool:
+    return (
+        state.finished_at is None
+        and state.tender_scrape_finished_at is None
+        and any(step not in state.completed_tender_scrapes for step in TENDER_SCRAPE_STEPS)
+    )
+
+
+def _set_tender_scrape_started(state: RunState) -> None:
+    now = _iso(_utc_now())
+    state.phase = "tender_scrape"
+    state.tender_scrape_started_at = state.tender_scrape_started_at or now
+    state.scrape_phase_started_at = state.scrape_phase_started_at or now
+
+
+def begin_or_resume_tender_scrape_run(run_id: str | None = None) -> RunState:
+    """Start a tender scrape run, or reuse the active incomplete run when implicit."""
+    with _LOCK:
+        state = _load_state()
+        actual_run_id = run_id
+        if (
+            actual_run_id is None
+            and state is not None
+            and _can_reuse_tender_scrape_run(state)
+        ):
+            actual_run_id = state.run_id
+        if actual_run_id is None:
+            actual_run_id = str(uuid.uuid4())
+        if state is None or state.run_id != actual_run_id:
+            state = RunState(run_id=actual_run_id, phase="tender_scrape")
+        _set_tender_scrape_started(state)
+        _save_state(state)
+        return state
+
+
 def begin_run(run_id: str) -> RunState:
     with _LOCK:
         state = RunState(run_id=run_id, phase="running")
@@ -78,10 +114,7 @@ def begin_tender_scrape(run_id: str) -> None:
         state = _load_state()
         if state is None or state.run_id != run_id:
             state = RunState(run_id=run_id, phase="tender_scrape")
-        now = _iso(_utc_now())
-        state.phase = "tender_scrape"
-        state.tender_scrape_started_at = state.tender_scrape_started_at or now
-        state.scrape_phase_started_at = state.scrape_phase_started_at or now
+        _set_tender_scrape_started(state)
         _save_state(state)
 
 

@@ -208,3 +208,51 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    second_worker = None
+
+    def _run_second_then_return() -> dict:
+        assert second_worker is not None
+        second_worker()
+        return {"arch_tenders": 1}
+
+    first_background_tasks = MagicMock()
+    second_background_tasks = MagicMock()
+    session = MagicMock()
+    first_record = MagicMock()
+    first_record.id = 101
+    second_record = MagicMock()
+    second_record.id = 102
+
+    with patch("api.internal.get_session", return_value=session):
+        with patch("api.internal.start_run", side_effect=[first_record, second_record]):
+            first_response = internal_api._enqueue_tender_scrape_step(
+                first_background_tasks,
+                "scrape-merx-arch",
+                _run_second_then_return,
+                None,
+            )
+            second_response = internal_api._enqueue_tender_scrape_step(
+                second_background_tasks,
+                "scrape-commercial",
+                lambda: {"commercial_tenders": 1},
+                None,
+            )
+
+    first_worker = first_background_tasks.add_task.call_args.args[2]
+    second_worker = second_background_tasks.add_task.call_args.args[2]
+
+    assert first_response["run_id"] == second_response["run_id"]
+    assert first_worker() == {"arch_tenders": 1}
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == first_response["run_id"]
+    assert "scrape-merx-arch" in state.completed_tender_scrapes
+    assert "scrape-commercial" in state.completed_tender_scrapes
