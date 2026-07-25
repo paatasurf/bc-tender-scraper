@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,32 @@ def begin_tender_scrape(run_id: str) -> None:
         state.tender_scrape_started_at = state.tender_scrape_started_at or now
         state.scrape_phase_started_at = state.scrape_phase_started_at or now
         _save_state(state)
+
+
+def _has_incomplete_tender_scrape(state: RunState) -> bool:
+    if state.finished_at or state.tender_scrape_finished_at:
+        return False
+    return any(step not in state.completed_tender_scrapes for step in TENDER_SCRAPE_STEPS)
+
+
+def begin_or_resume_tender_scrape_run(run_id: str | None = None) -> RunState:
+    """Start a tender scrape run, or reuse the active one for implicit requests."""
+    with _LOCK:
+        state = _load_state()
+        actual_run_id = run_id
+        if actual_run_id is None and state is not None and _has_incomplete_tender_scrape(state):
+            actual_run_id = state.run_id
+        actual_run_id = actual_run_id or str(uuid.uuid4())
+
+        if state is None or state.run_id != actual_run_id:
+            state = RunState(run_id=actual_run_id, phase="tender_scrape")
+
+        now = _iso(_utc_now())
+        state.phase = "tender_scrape"
+        state.tender_scrape_started_at = state.tender_scrape_started_at or now
+        state.scrape_phase_started_at = state.scrape_phase_started_at or now
+        _save_state(state)
+        return state
 
 
 def mark_tender_scrape_step(run_id: str, step: str) -> None:

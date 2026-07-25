@@ -208,3 +208,36 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+
+    def _started(_background_tasks, step, _worker, run_id):
+        return {"status": "started", "step": step, "run_id": run_id}
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._enqueue_step", side_effect=_started) as enqueue_step:
+            responses = [
+                internal_api.scrape_federal(background_tasks, None),
+                internal_api.scrape_merx_arch(background_tasks, None),
+                internal_api.scrape_commercial(background_tasks, None),
+            ]
+
+    run_ids = {response["run_id"] for response in responses}
+    assert len(run_ids) == 1
+    actual_run_id = responses[0]["run_id"]
+    assert [call.args[3] for call in enqueue_step.call_args_list] == [
+        actual_run_id,
+        actual_run_id,
+        actual_run_id,
+    ]
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == actual_run_id
+    assert state.tender_scrape_started_at is not None
