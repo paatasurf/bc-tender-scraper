@@ -13,11 +13,9 @@ from pipeline.construction_tier import compute_construction_tiers
 from pipeline.project_intelligence import rebuild_project_contacts
 from pipeline.run_coordinator import (
     assert_ready_for_import,
+    begin_or_resume_tender_scrape_run,
     begin_import,
-    begin_run,
-    begin_tender_scrape,
     complete_import,
-    get_run_state,
     mark_tender_scrape_step,
 )
 
@@ -163,17 +161,9 @@ def run_cip_backfill_step(
         session.close()
 
 
-def ensure_run_started(run_id: str) -> None:
-    state = get_run_state()
-    if state is None or state.run_id != run_id:
-        begin_run(run_id)
-        begin_tender_scrape(run_id)
-
-
 def make_tender_scrape_worker(step: str, runner: TenderScrapeRunner, run_id: str) -> Callable[[], dict[str, Any]]:
     def worker() -> dict[str, Any]:
-        ensure_run_started(run_id)
-        begin_tender_scrape(run_id)
+        begin_or_resume_tender_scrape_run(run_id)
         result = runner()
         mark_tender_scrape_step(run_id, step)
         return result

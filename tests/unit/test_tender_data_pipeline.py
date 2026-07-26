@@ -194,7 +194,7 @@ def test_internal_tender_scrape_without_body_starts_coordinator_run(
 
     background_tasks = MagicMock()
     with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
-        with patch("api.internal.new_run_id", return_value="new-scrape-run"):
+        with patch("pipeline.run_coordinator.uuid.uuid4", return_value="new-scrape-run"):
             with patch(
                 "api.internal._enqueue_step", return_value={"status": "started"}
             ) as enqueue_step:
@@ -219,14 +219,14 @@ def test_internal_tender_scrape_without_body_reuses_active_scrape_run(
 
     background_tasks = MagicMock()
     with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
-        with patch("api.internal.new_run_id") as new_run_id:
+        with patch("pipeline.run_coordinator.uuid.uuid4") as uuid4:
             with patch(
                 "api.internal._enqueue_step", return_value={"status": "started"}
             ) as enqueue_step:
                 response = internal_api.scrape_merx_arch(background_tasks, None)
 
     assert response == {"status": "started"}
-    new_run_id.assert_not_called()
+    uuid4.assert_not_called()
     enqueue_step.assert_called_once()
     assert enqueue_step.call_args.args[3] == "active-scrape-run"
 
