@@ -187,6 +187,72 @@ def test_internal_import_without_body_uses_active_run(coordinator_state: Path) -
     assert enqueue_step.call_args.args[3] == "active-run"
 
 
+def test_internal_tender_scrape_without_body_starts_coordinator_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("pipeline.run_coordinator.uuid.uuid4", return_value="new-scrape-run"):
+            with patch(
+                "api.internal._enqueue_step", return_value={"status": "started"}
+            ) as enqueue_step:
+                response = internal_api.scrape_merx_arch(background_tasks, None)
+
+    assert response == {"status": "started"}
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[3] == "new-scrape-run"
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "new-scrape-run"
+    assert state.phase == "tender_scrape"
+
+
+def test_internal_tender_scrape_without_body_reuses_active_scrape_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_tender_scrape("active-scrape-run")
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("pipeline.run_coordinator.uuid.uuid4") as uuid4:
+            with patch(
+                "api.internal._enqueue_step", return_value={"status": "started"}
+            ) as enqueue_step:
+                response = internal_api.scrape_merx_arch(background_tasks, None)
+
+    assert response == {"status": "started"}
+    uuid4.assert_not_called()
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[3] == "active-scrape-run"
+
+
+def test_internal_tender_scrape_explicit_body_initializes_requested_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    body = internal_api.InternalRunRequest(run_id="requested-scrape-run")
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch(
+            "api.internal._enqueue_step", return_value={"status": "started"}
+        ) as enqueue_step:
+            response = internal_api.scrape_merx_arch(background_tasks, body)
+
+    assert response == {"status": "started"}
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[3] == "requested-scrape-run"
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "requested-scrape-run"
+
+
 def test_internal_import_sync_without_body_uses_active_run(
     coordinator_state: Path,
 ) -> None:
