@@ -85,6 +85,33 @@ def begin_tender_scrape(run_id: str) -> None:
         _save_state(state)
 
 
+def begin_or_resume_tender_scrape_run(run_id: str | None = None) -> str:
+    """Start a tender scrape run or reuse the active incomplete scrape run."""
+    with _LOCK:
+        state = _load_state()
+        if run_id is None:
+            if (
+                state is not None
+                and state.success is None
+                and state.tender_scrape_finished_at is None
+            ):
+                run_id = state.run_id
+            else:
+                from pipeline.runs import new_run_id
+
+                run_id = new_run_id()
+
+        if state is None or state.run_id != run_id:
+            state = RunState(run_id=run_id, phase="tender_scrape")
+
+        now = _iso(_utc_now())
+        state.phase = "tender_scrape"
+        state.tender_scrape_started_at = state.tender_scrape_started_at or now
+        state.scrape_phase_started_at = state.scrape_phase_started_at or now
+        _save_state(state)
+        return run_id
+
+
 def mark_tender_scrape_step(run_id: str, step: str) -> None:
     if step not in TENDER_SCRAPE_STEPS:
         raise ValueError(f"Unknown tender scrape step: {step}")
