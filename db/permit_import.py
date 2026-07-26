@@ -114,6 +114,22 @@ def _keyed_permit_exists_for_fingerprint(
     return existing is not None
 
 
+def _keyed_permit_exists_for_external_id(
+    session: Session,
+    *,
+    source: str,
+    external_id: str,
+) -> bool:
+    if not external_id:
+        return False
+    existing = session.scalar(
+        select(Permit.id)
+        .where(Permit.source == source, Permit.external_id == external_id)
+        .limit(1)
+    )
+    return existing is not None
+
+
 def _upsert_blank_fingerprint_permit(
     session: Session,
     row: dict[str, str],
@@ -153,6 +169,10 @@ def _promote_blank_permit_if_exists(
     """Upgrade a blank-external_id duplicate to the keyed row instead of inserting anew."""
     external_id = row.get("external_id") or ""
     if not external_id:
+        return False
+    if _keyed_permit_exists_for_external_id(
+        session, source=source, external_id=external_id
+    ):
         return False
 
     fingerprint = _permit_fingerprint(row, source=source)

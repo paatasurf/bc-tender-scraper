@@ -64,7 +64,7 @@ def local_db_session() -> Session:
 
 def test_promote_blank_permit_if_exists_updates_blank_row():
     session = MagicMock()
-    session.scalar.return_value = 4317394
+    session.scalar.side_effect = [None, 4317394]
     row = {
         "external_id": "BP-2025-00202",
         "address": "3380 VANNESS AVENUE, Vancouver, BC V5R 6B8",
@@ -77,6 +77,26 @@ def test_promote_blank_permit_if_exists_updates_blank_row():
     promoted = _promote_blank_permit_if_exists(session, row, source="vancouver")
     assert promoted is True
     session.execute.assert_called_once()
+
+
+def test_promote_blank_permit_skips_when_keyed_external_id_already_exists():
+    session = MagicMock()
+    session.scalar.return_value = 4315436
+    row = {
+        "external_id": "BP-2026-02400",
+        "address": "1501 HARO STREET, Vancouver, BC V6G 1G4",
+        "project_value": "40000.0",
+        "applicant": "McCuaig and Associates Engineering Ltd.",
+        "contractor": "Solid General Contractors Inc",
+        "source": "vancouver",
+        "city": "Vancouver",
+    }
+
+    promoted = _promote_blank_permit_if_exists(session, row, source="vancouver")
+
+    assert promoted is False
+    session.execute.assert_not_called()
+    assert session.scalar.call_count == 1
 
 
 def test_dedupe_permit_rows_keeps_last_duplicate():
