@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,10 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _new_run_id() -> str:
+    return str(uuid.uuid4())
+
+
 def _load_state() -> RunState | None:
     if not _STATE_PATH.exists():
         return None
@@ -69,6 +74,31 @@ def get_run_state() -> RunState | None:
 def begin_run(run_id: str) -> RunState:
     with _LOCK:
         state = RunState(run_id=run_id, phase="running")
+        _save_state(state)
+        return state
+
+
+def _can_reuse_for_tender_scrape(state: RunState) -> bool:
+    if state.finished_at or state.import_started_at:
+        return False
+    missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
+    return bool(missing)
+
+
+def begin_or_resume_tender_scrape_run(run_id: str | None = None) -> RunState:
+    """Claim a run id for tender scrapes before background workers execute."""
+    with _LOCK:
+        state = _load_state()
+        if run_id:
+            if state is None or state.run_id != run_id:
+                state = RunState(run_id=run_id, phase="tender_scrape")
+        elif state is None or not _can_reuse_for_tender_scrape(state):
+            state = RunState(run_id=_new_run_id(), phase="tender_scrape")
+
+        now = _iso(_utc_now())
+        state.phase = "tender_scrape"
+        state.tender_scrape_started_at = state.tender_scrape_started_at or now
+        state.scrape_phase_started_at = state.scrape_phase_started_at or now
         _save_state(state)
         return state
 
