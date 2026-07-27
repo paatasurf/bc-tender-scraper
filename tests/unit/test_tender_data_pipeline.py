@@ -59,6 +59,35 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     assert state.tender_scrape_finished_at is not None
 
 
+def test_begin_or_resume_tender_scrape_reuses_active_run(coordinator_state: Path) -> None:
+    coordinator.begin_run("active-scrape")
+    coordinator.begin_tender_scrape("active-scrape")
+    coordinator.mark_tender_scrape_step("active-scrape", coordinator.TENDER_SCRAPE_STEPS[0])
+
+    state = coordinator.begin_or_resume_tender_scrape_run()
+
+    assert state.run_id == "active-scrape"
+    assert state.phase == "tender_scrape"
+    assert state.completed_tender_scrapes == [coordinator.TENDER_SCRAPE_STEPS[0]]
+
+
+def test_begin_or_resume_tender_scrape_starts_new_run_after_import(
+    coordinator_state: Path,
+) -> None:
+    coordinator.begin_run("imported-run")
+    coordinator.begin_tender_scrape("imported-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("imported-run", step)
+    coordinator.begin_import("imported-run")
+    coordinator.complete_import("imported-run")
+
+    state = coordinator.begin_or_resume_tender_scrape_run()
+
+    assert state.run_id != "imported-run"
+    assert state.phase == "tender_scrape"
+    assert state.completed_tender_scrapes == []
+
+
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
     phase_log: list[str] = []
     scrape_started = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
@@ -208,3 +237,31 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    enqueued: list[tuple[str, str]] = []
+
+    def _fake_enqueue_step(background_tasks, step, worker, run_id):
+        enqueued.append((step, run_id))
+        return {"status": "started", "step": step, "run_id": run_id}
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._enqueue_step", side_effect=_fake_enqueue_step):
+            federal = internal_api.scrape_federal(background_tasks, None)
+            merx_arch = internal_api.scrape_merx_arch(background_tasks, None)
+            commercial = internal_api.scrape_commercial(background_tasks, None)
+
+    shared_run_id = federal["run_id"]
+    assert merx_arch["run_id"] == shared_run_id
+    assert commercial["run_id"] == shared_run_id
+    assert enqueued == [
+        ("scrape-federal", shared_run_id),
+        ("scrape-merx-arch", shared_run_id),
+        ("scrape-commercial", shared_run_id),
+    ]
