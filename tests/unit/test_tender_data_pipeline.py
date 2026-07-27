@@ -208,3 +208,48 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_gated_import_worker_tolerates_replaced_state_after_import(
+    coordinator_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import internal_steps
+
+    coordinator.begin_run("import-run")
+    coordinator.begin_tender_scrape("import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("import-run", step)
+
+    def _import_and_roll_state() -> dict[str, int]:
+        coordinator.begin_run("next-run")
+        return {"tenders": 3}
+
+    monkeypatch.setattr(internal_steps, "run_import_step", _import_and_roll_state)
+
+    assert internal_steps.make_gated_import_worker("import-run")() == {"tenders": 3}
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "next-run"
+
+
+def test_gated_import_worker_preserves_import_error_when_state_replaced(
+    coordinator_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import internal_steps
+
+    coordinator.begin_run("import-run")
+    coordinator.begin_tender_scrape("import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("import-run", step)
+
+    def _fail_after_state_roll() -> dict[str, int]:
+        coordinator.begin_run("next-run")
+        raise RuntimeError("real import failure")
+
+    monkeypatch.setattr(internal_steps, "run_import_step", _fail_after_state_roll)
+
+    with pytest.raises(RuntimeError, match="real import failure"):
+        internal_steps.make_gated_import_worker("import-run")()

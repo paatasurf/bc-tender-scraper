@@ -183,6 +183,18 @@ def complete_import(run_id: str) -> None:
         _save_state(state)
 
 
+def complete_import_if_active(run_id: str) -> bool:
+    """Mark import complete if this run still owns the coordinator state."""
+    with _LOCK:
+        state = _load_state()
+        if state is None or state.run_id != run_id:
+            return False
+        state.import_finished_at = _iso(_utc_now())
+        state.phase = "import_complete"
+        _save_state(state)
+        return True
+
+
 def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
     with _LOCK:
         state = _load_state()

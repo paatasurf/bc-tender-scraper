@@ -16,7 +16,7 @@ from pipeline.run_coordinator import (
     begin_import,
     begin_run,
     begin_tender_scrape,
-    complete_import,
+    complete_import_if_active,
     get_run_state,
     mark_tender_scrape_step,
 )
@@ -188,7 +188,7 @@ def make_gated_import_worker(run_id: str) -> Callable[[], dict[str, Any]]:
         try:
             return run_import_step()
         finally:
-            complete_import(run_id)
+            complete_import_if_active(run_id)
 
     return worker
 
