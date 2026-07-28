@@ -14,9 +14,8 @@ from pipeline.project_intelligence import rebuild_project_contacts
 from pipeline.run_coordinator import (
     assert_ready_for_import,
     begin_import,
-    begin_run,
-    begin_tender_scrape,
-    complete_import,
+    begin_or_resume_tender_scrape_run,
+    complete_import_if_active,
     get_run_state,
     mark_tender_scrape_step,
 )
@@ -166,15 +165,14 @@ def run_cip_backfill_step(
 def ensure_run_started(run_id: str) -> None:
     state = get_run_state()
     if state is None or state.run_id != run_id:
-        begin_run(run_id)
-        begin_tender_scrape(run_id)
+        begin_or_resume_tender_scrape_run(run_id)
 
 
 def make_tender_scrape_worker(step: str, runner: TenderScrapeRunner, run_id: str) -> Callable[[], dict[str, Any]]:
     def worker() -> dict[str, Any]:
-        ensure_run_started(run_id)
-        begin_tender_scrape(run_id)
+        begin_or_resume_tender_scrape_run(run_id)
         result = runner()
+        ensure_run_started(run_id)
         mark_tender_scrape_step(run_id, step)
         return result
 
@@ -188,7 +186,7 @@ def make_gated_import_worker(run_id: str) -> Callable[[], dict[str, Any]]:
         try:
             return run_import_step()
         finally:
-            complete_import(run_id)
+            complete_import_if_active(run_id)
 
     return worker
 
