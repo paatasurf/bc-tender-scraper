@@ -59,6 +59,25 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     assert state.tender_scrape_finished_at is not None
 
 
+def test_tender_scrape_worker_recovers_if_active_run_changes(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_tender_scrape_worker
+
+    def _runner() -> dict:
+        coordinator.begin_run("other-run")
+        coordinator.begin_tender_scrape("other-run")
+        return {"tenders": 1}
+
+    worker = make_tender_scrape_worker("scrape-federal", _runner, "incident-run")
+
+    assert worker() == {"tenders": 1}
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "incident-run"
+    assert state.completed_tender_scrapes == ["scrape-federal"]
+
+
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
     phase_log: list[str] = []
     scrape_started = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)

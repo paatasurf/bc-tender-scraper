@@ -175,6 +175,7 @@ def make_tender_scrape_worker(step: str, runner: TenderScrapeRunner, run_id: str
         ensure_run_started(run_id)
         begin_tender_scrape(run_id)
         result = runner()
+        ensure_run_started(run_id)
         mark_tender_scrape_step(run_id, step)
         return result
 
