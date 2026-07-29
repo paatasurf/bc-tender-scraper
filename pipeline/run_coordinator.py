@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +70,37 @@ def get_run_state() -> RunState | None:
 def begin_run(run_id: str) -> RunState:
     with _LOCK:
         state = RunState(run_id=run_id, phase="running")
+        _save_state(state)
+        return state
+
+
+def _tender_scrape_incomplete(state: RunState) -> bool:
+    missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
+    return bool(missing) or not state.tender_scrape_finished_at
+
+
+def begin_or_resume_tender_scrape_run(run_id: str | None = None) -> RunState:
+    """Start a tender scrape run, reusing an active incomplete scrape when possible."""
+    with _LOCK:
+        state = _load_state()
+        if run_id is None:
+            if (
+                state is not None
+                and not state.finished_at
+                and not state.import_started_at
+                and _tender_scrape_incomplete(state)
+            ):
+                run_id = state.run_id
+            else:
+                run_id = str(uuid.uuid4())
+
+        if state is None or state.run_id != run_id:
+            state = RunState(run_id=run_id, phase="tender_scrape")
+
+        now = _iso(_utc_now())
+        state.phase = "tender_scrape"
+        state.tender_scrape_started_at = state.tender_scrape_started_at or now
+        state.scrape_phase_started_at = state.scrape_phase_started_at or now
         _save_state(state)
         return state
 
@@ -181,6 +213,17 @@ def complete_import(run_id: str) -> None:
         state.import_finished_at = _iso(_utc_now())
         state.phase = "import_complete"
         _save_state(state)
+
+
+def complete_import_if_active(run_id: str) -> bool:
+    with _LOCK:
+        state = _load_state()
+        if state is None or state.run_id != run_id:
+            return False
+        state.import_finished_at = _iso(_utc_now())
+        state.phase = "import_complete"
+        _save_state(state)
+        return True
 
 
 def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
