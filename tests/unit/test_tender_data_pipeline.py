@@ -208,3 +208,48 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrape_without_body_reuses_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    coordinator.begin_run("active-scrape-run")
+    coordinator.begin_tender_scrape("active-scrape-run")
+    coordinator.mark_tender_scrape_step("active-scrape-run", "scrape-federal")
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch(
+            "api.internal._enqueue_step", return_value={"status": "started"}
+        ) as enqueue_step:
+            response = internal_api.scrape_merx_arch(background_tasks, None)
+
+    assert response == {"status": "started"}
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[1] == "scrape-merx-arch"
+    assert enqueue_step.call_args.args[3] == "active-scrape-run"
+
+
+def test_tender_scrape_worker_rebinds_run_before_marking(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_tender_scrape_worker
+
+    def _runner() -> dict:
+        coordinator.begin_run("interleaving-run")
+        coordinator.begin_tender_scrape("interleaving-run")
+        return {"tenders_saved": 3}
+
+    worker = make_tender_scrape_worker(
+        "scrape-merx-arch",
+        _runner,
+        "target-run",
+    )
+
+    assert worker() == {"tenders_saved": 3}
+    state = json.loads(coordinator_state.read_text(encoding="utf-8"))
+    assert state["run_id"] == "target-run"
+    assert state["phase"] == "tender_scrape"
+    assert state["completed_tender_scrapes"] == ["scrape-merx-arch"]

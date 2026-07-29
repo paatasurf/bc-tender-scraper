@@ -164,13 +164,27 @@ def _enqueue_tender_scrape_step(
     runner,
     run_id: str | None,
 ) -> dict[str, Any]:
-    actual_run_id = run_id or new_run_id()
+    actual_run_id = _resolve_tender_scrape_run_id(run_id)
     return _enqueue_step(
         background_tasks,
         step,
         make_tender_scrape_worker(step, runner, actual_run_id),
         actual_run_id,
     )
+
+
+def _resolve_tender_scrape_run_id(run_id: str | None) -> str:
+    if run_id:
+        return run_id
+    state = get_run_state()
+    if (
+        state is not None
+        and state.success is None
+        and not state.tender_scrape_finished_at
+        and state.phase in {"running", "full_scrape", "tender_scrape"}
+    ):
+        return state.run_id
+    return new_run_id()
 
 
 def _enqueue_import_step(
