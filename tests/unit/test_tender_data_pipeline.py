@@ -232,6 +232,27 @@ def test_internal_tender_scrape_without_body_reuses_active_run(
     assert enqueue_step.call_args.args[3] == "active-scrape-run"
 
 
+def test_internal_tender_scrape_without_body_prepares_new_run_before_enqueue(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.new_run_id", return_value="prepared-run"):
+            with patch(
+                "api.internal._enqueue_step", return_value={"status": "started"}
+            ) as enqueue_step:
+                response = internal_api.scrape_federal(background_tasks, None)
+
+    assert response == {"status": "started"}
+    enqueue_step.assert_called_once()
+    assert enqueue_step.call_args.args[3] == "prepared-run"
+    state = json.loads(coordinator_state.read_text(encoding="utf-8"))
+    assert state["run_id"] == "prepared-run"
+    assert state["phase"] == "tender_scrape"
+
+
 def test_tender_scrape_worker_rebinds_run_before_marking(
     coordinator_state: Path,
 ) -> None:

@@ -25,7 +25,7 @@ from pipeline.internal_steps import (
     run_registry_verification_match_step,
     run_construction_tiers_step,
 )
-from pipeline.run_coordinator import PipelineOrderError, get_run_state
+from pipeline.run_coordinator import PipelineOrderError, begin_tender_scrape, get_run_state
 from pipeline.lifecycle_resolver import resolve_tender_lifecycle
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
@@ -165,6 +165,7 @@ def _enqueue_tender_scrape_step(
     run_id: str | None,
 ) -> dict[str, Any]:
     actual_run_id = _resolve_tender_scrape_run_id(run_id)
+    begin_tender_scrape(actual_run_id)
     return _enqueue_step(
         background_tasks,
         step,
