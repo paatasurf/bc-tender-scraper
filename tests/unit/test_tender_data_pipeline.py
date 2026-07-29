@@ -59,6 +59,42 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     assert state.tender_scrape_finished_at is not None
 
 
+def test_begin_or_resume_tender_scrape_run_reuses_incomplete_run(
+    coordinator_state: Path,
+) -> None:
+    first = coordinator.begin_or_resume_tender_scrape_run()
+    second = coordinator.begin_or_resume_tender_scrape_run()
+
+    assert second.run_id == first.run_id
+
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step(first.run_id, step)
+
+    next_run = coordinator.begin_or_resume_tender_scrape_run()
+
+    assert next_run.run_id != first.run_id
+
+
+def test_tender_scrape_worker_reclaims_run_before_marking(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_tender_scrape_worker
+
+    coordinator.begin_or_resume_tender_scrape_run("intended-run")
+
+    def _runner() -> dict[str, int]:
+        coordinator.begin_or_resume_tender_scrape_run("other-run")
+        return {"tenders": 1}
+
+    worker = make_tender_scrape_worker("scrape-federal", _runner, "intended-run")
+
+    assert worker() == {"tenders": 1}
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "intended-run"
+    assert state.completed_tender_scrapes == ["scrape-federal"]
+
+
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
     phase_log: list[str] = []
     scrape_started = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
@@ -208,3 +244,36 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    session = MagicMock()
+    records: list[MagicMock] = []
+
+    def _record(_session: MagicMock, step: str, run_id: str) -> MagicMock:
+        record = MagicMock()
+        record.id = len(records) + 1
+        record.step = step
+        record.run_id = run_id
+        records.append(record)
+        return record
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.get_session", return_value=session):
+            with patch("api.internal.start_run", side_effect=_record):
+                federal = internal_api.scrape_federal(background_tasks, None)
+                merx_arch = internal_api.scrape_merx_arch(background_tasks, None)
+                commercial = internal_api.scrape_commercial(background_tasks, None)
+
+    assert federal["run_id"] == merx_arch["run_id"] == commercial["run_id"]
+    assert [record.step for record in records] == [
+        "scrape-federal",
+        "scrape-merx-arch",
+        "scrape-commercial",
+    ]
+    assert background_tasks.add_task.call_count == 3

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,27 @@ def _save_state(state: RunState) -> None:
     _STATE_PATH.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
 
 
+def _is_active_tender_scrape_state(state: RunState | None) -> bool:
+    if state is None:
+        return False
+    return (
+        state.finished_at is None
+        and state.import_started_at is None
+        and state.tender_scrape_finished_at is None
+    )
+
+
+def _begin_tender_scrape_locked(run_id: str, state: RunState | None) -> RunState:
+    if state is None or state.run_id != run_id:
+        state = RunState(run_id=run_id, phase="tender_scrape")
+    now = _iso(_utc_now())
+    state.phase = "tender_scrape"
+    state.tender_scrape_started_at = state.tender_scrape_started_at or now
+    state.scrape_phase_started_at = state.scrape_phase_started_at or now
+    _save_state(state)
+    return state
+
+
 def get_run_state() -> RunState | None:
     with _LOCK:
         return _load_state()
@@ -76,13 +98,19 @@ def begin_run(run_id: str) -> RunState:
 def begin_tender_scrape(run_id: str) -> None:
     with _LOCK:
         state = _load_state()
-        if state is None or state.run_id != run_id:
-            state = RunState(run_id=run_id, phase="tender_scrape")
-        now = _iso(_utc_now())
-        state.phase = "tender_scrape"
-        state.tender_scrape_started_at = state.tender_scrape_started_at or now
-        state.scrape_phase_started_at = state.scrape_phase_started_at or now
-        _save_state(state)
+        _begin_tender_scrape_locked(run_id, state)
+
+
+def begin_or_resume_tender_scrape_run(run_id: str | None = None) -> RunState:
+    """Claim a coordinator run for standalone tender scraper endpoints."""
+    with _LOCK:
+        state = _load_state()
+        actual_run_id = run_id
+        if actual_run_id is None and _is_active_tender_scrape_state(state):
+            actual_run_id = state.run_id
+        if actual_run_id is None:
+            actual_run_id = str(uuid.uuid4())
+        return _begin_tender_scrape_locked(actual_run_id, state)
 
 
 def mark_tender_scrape_step(run_id: str, step: str) -> None:
@@ -181,6 +209,17 @@ def complete_import(run_id: str) -> None:
         state.import_finished_at = _iso(_utc_now())
         state.phase = "import_complete"
         _save_state(state)
+
+
+def complete_import_if_active(run_id: str) -> bool:
+    with _LOCK:
+        state = _load_state()
+        if state is None or state.run_id != run_id:
+            return False
+        state.import_finished_at = _iso(_utc_now())
+        state.phase = "import_complete"
+        _save_state(state)
+        return True
 
 
 def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
