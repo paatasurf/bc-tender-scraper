@@ -208,3 +208,24 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_import_can_begin_after_another_run_becomes_active(
+    coordinator_state: Path,
+) -> None:
+    coordinator.begin_run("import-run")
+    coordinator.begin_tender_scrape("import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("import-run", step)
+
+    coordinator.begin_run("new-active-run")
+    coordinator.begin_tender_scrape("new-active-run")
+
+    coordinator.assert_ready_for_import("import-run")
+    coordinator.begin_import("import-run")
+    coordinator.complete_import("import-run")
+
+    raw = json.loads(coordinator_state.read_text(encoding="utf-8"))
+    assert raw["active_run_id"] == "new-active-run"
+    assert raw["runs"]["import-run"]["phase"] == "import_complete"
+    assert raw["runs"]["new-active-run"]["phase"] == "tender_scrape"
