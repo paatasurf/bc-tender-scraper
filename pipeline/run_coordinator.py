@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +41,9 @@ class RunState:
         return asdict(self)
 
 
+_RUN_STATE_FIELDS = {item.name for item in fields(RunState)}
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -50,15 +53,64 @@ def _iso(dt: datetime) -> str:
 
 
 def _load_state() -> RunState | None:
+    active_run_id, states = _load_store()
+    if active_run_id and active_run_id in states:
+        return states[active_run_id]
+    if len(states) == 1:
+        return next(iter(states.values()))
+    return None
+
+
+def _load_state_for_run(run_id: str | None) -> RunState | None:
+    active_run_id, states = _load_store()
+    if run_id:
+        return states.get(run_id)
+    if active_run_id and active_run_id in states:
+        return states[active_run_id]
+    if len(states) == 1:
+        return next(iter(states.values()))
+    return None
+
+
+def _load_store() -> tuple[str | None, dict[str, RunState]]:
     if not _STATE_PATH.exists():
-        return None
+        return None, {}
     raw = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
-    return RunState(**raw)
+    if isinstance(raw, dict) and isinstance(raw.get("runs"), dict):
+        states: dict[str, RunState] = {}
+        for run_id, value in raw["runs"].items():
+            if isinstance(value, dict):
+                state = _state_from_dict({**value, "run_id": value.get("run_id", run_id)})
+                states[state.run_id or run_id] = state
+        active_run_id = raw.get("active_run_id")
+        return active_run_id if isinstance(active_run_id, str) else None, states
+    if isinstance(raw, dict):
+        state = _state_from_dict(raw)
+        return state.run_id, {state.run_id: state}
+    return None, {}
+
+
+def _state_from_dict(raw: dict[str, Any]) -> RunState:
+    data = {key: raw[key] for key in _RUN_STATE_FIELDS if key in raw}
+    return RunState(**data)
 
 
 def _save_state(state: RunState) -> None:
+    active_run_id, states = _load_store()
+    states[state.run_id] = state
+    _save_store(active_run_id=state.run_id or active_run_id, states=states)
+
+
+def _save_store(*, active_run_id: str | None, states: dict[str, RunState]) -> None:
     _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_PATH.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
+    if len(states) == 1:
+        payload: dict[str, Any] = next(iter(states.values())).to_dict()
+    else:
+        payload = {
+            "active_run_id": active_run_id,
+            "runs": {run_id: state.to_dict() for run_id, state in states.items()},
+        }
+    _STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def get_run_state() -> RunState | None:
@@ -75,8 +127,8 @@ def begin_run(run_id: str) -> RunState:
 
 def begin_tender_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             state = RunState(run_id=run_id, phase="tender_scrape")
         now = _iso(_utc_now())
         state.phase = "tender_scrape"
@@ -89,8 +141,8 @@ def mark_tender_scrape_step(run_id: str, step: str) -> None:
     if step not in TENDER_SCRAPE_STEPS:
         raise ValueError(f"Unknown tender scrape step: {step}")
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         if step not in state.completed_tender_scrapes:
             state.completed_tender_scrapes.append(step)
@@ -103,8 +155,8 @@ def mark_tender_scrape_step(run_id: str, step: str) -> None:
 
 def complete_tender_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
         if missing:
@@ -118,8 +170,8 @@ def complete_tender_scrape(run_id: str) -> None:
 
 def begin_full_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             state = RunState(run_id=run_id, phase="full_scrape")
         state.scrape_phase_started_at = state.scrape_phase_started_at or _iso(_utc_now())
         state.phase = "full_scrape"
@@ -128,8 +180,8 @@ def begin_full_scrape(run_id: str) -> None:
 
 def complete_full_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         state.scrape_phase_finished_at = _iso(_utc_now())
         if state.phase != "tender_scrape_complete":
@@ -141,15 +193,11 @@ def assert_ready_for_import(run_id: str | None, *, force: bool = False) -> None:
     if force:
         return
     with _LOCK:
-        state = _load_state()
+        state = _load_state_for_run(run_id)
         if state is None:
             raise PipelineOrderError(
                 "Import blocked: no pipeline run has completed tender scrapers. "
                 "Run the full scrape phase first."
-            )
-        if run_id and state.run_id != run_id:
-            raise PipelineOrderError(
-                f"Import blocked: active run is {state.run_id!r}, requested {run_id!r}"
             )
         missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
         if missing:
@@ -165,8 +213,8 @@ def assert_ready_for_import(run_id: str | None, *, force: bool = False) -> None:
 
 def begin_import(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         state.phase = "import"
         state.import_started_at = _iso(_utc_now())
@@ -175,8 +223,8 @@ def begin_import(run_id: str) -> None:
 
 def complete_import(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         state.import_finished_at = _iso(_utc_now())
         state.phase = "import_complete"
@@ -185,8 +233,8 @@ def complete_import(run_id: str) -> None:
 
 def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             return
         state.phase = "finished"
         state.finished_at = _iso(_utc_now())

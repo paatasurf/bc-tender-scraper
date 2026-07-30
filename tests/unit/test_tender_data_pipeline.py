@@ -59,6 +59,28 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     assert state.tender_scrape_finished_at is not None
 
 
+def test_scrape_step_can_finish_after_another_run_becomes_active(
+    coordinator_state: Path,
+) -> None:
+    coordinator.begin_run("merx-run")
+    coordinator.begin_tender_scrape("merx-run")
+
+    coordinator.begin_run("other-run")
+    coordinator.begin_tender_scrape("other-run")
+
+    coordinator.mark_tender_scrape_step("merx-run", "scrape-merx-arch")
+    for step in ("scrape-federal", "scrape-commercial"):
+        coordinator.mark_tender_scrape_step("merx-run", step)
+    coordinator.complete_tender_scrape("merx-run")
+    coordinator.assert_ready_for_import("merx-run")
+
+    state = json.loads(coordinator_state.read_text(encoding="utf-8"))
+    assert set(state["runs"]) == {"merx-run", "other-run"}
+    assert set(state["runs"]["merx-run"]["completed_tender_scrapes"]) == set(
+        coordinator.TENDER_SCRAPE_STEPS
+    )
+
+
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
     phase_log: list[str] = []
     scrape_started = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
