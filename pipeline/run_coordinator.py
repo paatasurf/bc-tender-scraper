@@ -80,7 +80,9 @@ def _load_store() -> tuple[str | None, dict[str, RunState]]:
         states: dict[str, RunState] = {}
         for run_id, value in raw["runs"].items():
             if isinstance(value, dict):
-                state = _state_from_dict({**value, "run_id": value.get("run_id", run_id)})
+                state = _state_from_dict(
+                    {**value, "run_id": value.get("run_id", run_id)}
+                )
                 states[state.run_id or run_id] = state
         active_run_id = raw.get("active_run_id")
         return active_run_id if isinstance(active_run_id, str) else None, states
@@ -146,7 +148,9 @@ def mark_tender_scrape_step(run_id: str, step: str) -> None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         if step not in state.completed_tender_scrapes:
             state.completed_tender_scrapes.append(step)
-        missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
+        missing = [
+            s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes
+        ]
         if not missing and not state.tender_scrape_finished_at:
             state.tender_scrape_finished_at = _iso(_utc_now())
             state.phase = "tender_scrape_complete"
@@ -158,7 +162,9 @@ def complete_tender_scrape(run_id: str) -> None:
         state = _load_state_for_run(run_id)
         if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
-        missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
+        missing = [
+            s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes
+        ]
         if missing:
             raise PipelineOrderError(
                 f"Tender scrape incomplete for run_id={run_id}; missing steps: {', '.join(missing)}"
@@ -173,7 +179,9 @@ def begin_full_scrape(run_id: str) -> None:
         state = _load_state_for_run(run_id)
         if state is None:
             state = RunState(run_id=run_id, phase="full_scrape")
-        state.scrape_phase_started_at = state.scrape_phase_started_at or _iso(_utc_now())
+        state.scrape_phase_started_at = state.scrape_phase_started_at or _iso(
+            _utc_now()
+        )
         state.phase = "full_scrape"
         _save_state(state)
 
@@ -199,7 +207,9 @@ def assert_ready_for_import(run_id: str | None, *, force: bool = False) -> None:
                 "Import blocked: no pipeline run has completed tender scrapers. "
                 "Run the full scrape phase first."
             )
-        missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
+        missing = [
+            s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes
+        ]
         if missing:
             raise PipelineOrderError(
                 "Import blocked: tender scrapers have not finished. "
