@@ -59,6 +59,38 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     assert state.tender_scrape_finished_at is not None
 
 
+def test_overlapping_scrape_runs_do_not_clobber_previous_run_state(
+    coordinator_state: Path,
+) -> None:
+    coordinator.begin_run("federal-run")
+    coordinator.begin_tender_scrape("federal-run")
+
+    coordinator.begin_run("commercial-run")
+    coordinator.begin_tender_scrape("commercial-run")
+
+    coordinator.mark_tender_scrape_step("federal-run", "scrape-federal")
+
+    federal_state = coordinator.get_run_state("federal-run")
+    active_state = coordinator.get_run_state()
+    assert federal_state is not None
+    assert active_state is not None
+    assert federal_state.completed_tender_scrapes == ["scrape-federal"]
+    assert active_state.run_id == "commercial-run"
+
+
+def test_explicit_import_uses_requested_run_when_another_run_is_active(
+    coordinator_state: Path,
+) -> None:
+    coordinator.begin_run("ready-run")
+    coordinator.begin_tender_scrape("ready-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("ready-run", step)
+
+    coordinator.begin_run("new-active-run")
+
+    coordinator.assert_ready_for_import("ready-run")
+
+
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
     phase_log: list[str] = []
     scrape_started = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
