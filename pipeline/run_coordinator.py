@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from dataclasses import asdict, dataclass, field
@@ -56,13 +57,55 @@ def _load_state() -> RunState | None:
     return RunState(**raw)
 
 
-def _save_state(state: RunState) -> None:
+def _run_state_dir() -> Path:
+    return _STATE_PATH.parent / f"{_STATE_PATH.stem}_runs"
+
+
+def _run_state_path(run_id: str) -> Path:
+    digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:12]
+    safe_prefix = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in run_id)
+    safe_prefix = safe_prefix[:48] or "run"
+    return _run_state_dir() / f"{safe_prefix}-{digest}.json"
+
+
+def _load_state_for_run(run_id: str) -> RunState | None:
+    active = _load_state()
+    if active is not None and active.run_id == run_id:
+        return active
+    path = _run_state_path(run_id)
+    if not path.exists():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return RunState(**raw)
+
+
+def _save_active_state(state: RunState) -> None:
     _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     _STATE_PATH.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
 
 
-def get_run_state() -> RunState | None:
+def _save_run_state(state: RunState) -> None:
+    path = _run_state_path(state.run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
+
+
+def _save_state(state: RunState) -> None:
+    _save_run_state(state)
+    _save_active_state(state)
+
+
+def _save_existing_run_state(state: RunState) -> None:
+    _save_run_state(state)
+    active = _load_state()
+    if active is None or active.run_id == state.run_id:
+        _save_active_state(state)
+
+
+def get_run_state(run_id: str | None = None) -> RunState | None:
     with _LOCK:
+        if run_id is not None:
+            return _load_state_for_run(run_id)
         return _load_state()
 
 
@@ -75,8 +118,8 @@ def begin_run(run_id: str) -> RunState:
 
 def begin_tender_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             state = RunState(run_id=run_id, phase="tender_scrape")
         now = _iso(_utc_now())
         state.phase = "tender_scrape"
@@ -89,8 +132,8 @@ def mark_tender_scrape_step(run_id: str, step: str) -> None:
     if step not in TENDER_SCRAPE_STEPS:
         raise ValueError(f"Unknown tender scrape step: {step}")
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         if step not in state.completed_tender_scrapes:
             state.completed_tender_scrapes.append(step)
@@ -98,13 +141,13 @@ def mark_tender_scrape_step(run_id: str, step: str) -> None:
         if not missing and not state.tender_scrape_finished_at:
             state.tender_scrape_finished_at = _iso(_utc_now())
             state.phase = "tender_scrape_complete"
-        _save_state(state)
+        _save_existing_run_state(state)
 
 
 def complete_tender_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
         if missing:
@@ -113,13 +156,13 @@ def complete_tender_scrape(run_id: str) -> None:
             )
         state.tender_scrape_finished_at = _iso(_utc_now())
         state.phase = "tender_scrape_complete"
-        _save_state(state)
+        _save_existing_run_state(state)
 
 
 def begin_full_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             state = RunState(run_id=run_id, phase="full_scrape")
         state.scrape_phase_started_at = state.scrape_phase_started_at or _iso(_utc_now())
         state.phase = "full_scrape"
@@ -128,28 +171,24 @@ def begin_full_scrape(run_id: str) -> None:
 
 def complete_full_scrape(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         state.scrape_phase_finished_at = _iso(_utc_now())
         if state.phase != "tender_scrape_complete":
             state.phase = "scrape_complete"
-        _save_state(state)
+        _save_existing_run_state(state)
 
 
 def assert_ready_for_import(run_id: str | None, *, force: bool = False) -> None:
     if force:
         return
     with _LOCK:
-        state = _load_state()
+        state = _load_state_for_run(run_id) if run_id else _load_state()
         if state is None:
             raise PipelineOrderError(
                 "Import blocked: no pipeline run has completed tender scrapers. "
                 "Run the full scrape phase first."
-            )
-        if run_id and state.run_id != run_id:
-            raise PipelineOrderError(
-                f"Import blocked: active run is {state.run_id!r}, requested {run_id!r}"
             )
         missing = [s for s in TENDER_SCRAPE_STEPS if s not in state.completed_tender_scrapes]
         if missing:
@@ -165,34 +204,34 @@ def assert_ready_for_import(run_id: str | None, *, force: bool = False) -> None:
 
 def begin_import(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         state.phase = "import"
         state.import_started_at = _iso(_utc_now())
-        _save_state(state)
+        _save_existing_run_state(state)
 
 
 def complete_import(run_id: str) -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             raise PipelineOrderError(f"No active run for run_id={run_id}")
         state.import_finished_at = _iso(_utc_now())
         state.phase = "import_complete"
-        _save_state(state)
+        _save_existing_run_state(state)
 
 
 def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
     with _LOCK:
-        state = _load_state()
-        if state is None or state.run_id != run_id:
+        state = _load_state_for_run(run_id)
+        if state is None:
             return
         state.phase = "finished"
         state.finished_at = _iso(_utc_now())
         state.success = success
         state.error = error[:4000]
-        _save_state(state)
+        _save_existing_run_state(state)
 
 
 def assert_import_not_before_scrape() -> dict[str, str | None]:
