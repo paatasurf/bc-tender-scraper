@@ -85,6 +85,27 @@ def begin_tender_scrape(run_id: str) -> None:
         _save_state(state)
 
 
+def begin_or_resume_tender_scrape_run(
+    run_id: str,
+    *,
+    prefer_active: bool = True,
+) -> RunState:
+    """Start a tender scrape run, reusing an unfinished active run when appropriate."""
+    with _LOCK:
+        state = _load_state()
+        if prefer_active and state is not None and not state.tender_scrape_finished_at:
+            run_id = state.run_id
+        elif state is None or state.run_id != run_id:
+            state = RunState(run_id=run_id, phase="tender_scrape")
+
+        now = _iso(_utc_now())
+        state.phase = "tender_scrape"
+        state.tender_scrape_started_at = state.tender_scrape_started_at or now
+        state.scrape_phase_started_at = state.scrape_phase_started_at or now
+        _save_state(state)
+        return state
+
+
 def mark_tender_scrape_step(run_id: str, step: str) -> None:
     if step not in TENDER_SCRAPE_STEPS:
         raise ValueError(f"Unknown tender scrape step: {step}")
@@ -181,6 +202,18 @@ def complete_import(run_id: str) -> None:
         state.import_finished_at = _iso(_utc_now())
         state.phase = "import_complete"
         _save_state(state)
+
+
+def complete_import_if_active(run_id: str) -> bool:
+    """Mark import complete if this run is still active; return False if it moved on."""
+    with _LOCK:
+        state = _load_state()
+        if state is None or state.run_id != run_id:
+            return False
+        state.import_finished_at = _iso(_utc_now())
+        state.phase = "import_complete"
+        _save_state(state)
+        return True
 
 
 def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
