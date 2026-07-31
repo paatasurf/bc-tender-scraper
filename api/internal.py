@@ -504,19 +504,26 @@ def import_csvs(
 
 @router.post("/pipeline/tender-data")
 def run_tender_data_pipeline_route(
+    background_tasks: BackgroundTasks,
     body: InternalRunRequest | None = None,
     sync: bool = Query(
-        True,
-        description="Run the full deterministic tender-data pipeline synchronously.",
+        False,
+        description=(
+            "When true, run the full deterministic tender-data pipeline synchronously. "
+            "Defaults to a tracked background run to avoid HTTP gateway timeouts."
+        ),
     ),
 ) -> dict[str, Any]:
     """Run tender scrapers → CSV verify → import → DB verify in strict order."""
     _require_manual_pipeline()
     run_id = body.run_id if body else None
     if not sync:
-        raise HTTPException(
-            status_code=400,
-            detail="Only sync=true is supported for /internal/pipeline/tender-data",
+        actual_run_id = run_id or new_run_id()
+        return _enqueue_step(
+            background_tasks,
+            "tender-data-pipeline",
+            lambda: run_tender_data_pipeline(run_id=actual_run_id),
+            actual_run_id,
         )
     try:
         summary = run_tender_data_pipeline(run_id=run_id)
