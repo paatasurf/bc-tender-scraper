@@ -208,3 +208,74 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    payloads: list[dict[str, str]] = []
+
+    def _fake_enqueue_step(_background_tasks, step, _worker, run_id):
+        payload = {"step": step, "run_id": run_id}
+        payloads.append(payload)
+        return payload
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._enqueue_step", side_effect=_fake_enqueue_step):
+            federal = internal_api.scrape_federal(background_tasks, None)
+            merx_arch = internal_api.scrape_merx_arch(background_tasks, None)
+            commercial = internal_api.scrape_commercial(background_tasks, None)
+
+    run_ids = {payload["run_id"] for payload in payloads}
+    assert len(run_ids) == 1
+    assert federal["run_id"] == merx_arch["run_id"] == commercial["run_id"]
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == federal["run_id"]
+    assert state.completed_tender_scrapes == []
+
+
+def test_scrape_step_can_finish_after_another_run_becomes_active(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_tender_scrape_worker
+
+    def _runner() -> dict:
+        coordinator.begin_or_resume_tender_scrape_run("newer-run")
+        return {"federal_tenders": 1}
+
+    worker = make_tender_scrape_worker("scrape-federal", _runner, "original-run")
+
+    assert worker() == {"federal_tenders": 1}
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "original-run"
+    assert state.completed_tender_scrapes == ["scrape-federal"]
+
+
+def test_import_worker_completion_is_nonfatal_after_state_rollover(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_gated_import_worker
+
+    coordinator.begin_run("import-run")
+    coordinator.begin_tender_scrape("import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("import-run", step)
+
+    def _import_counts() -> dict:
+        coordinator.begin_or_resume_tender_scrape_run("newer-run")
+        return {"tenders": 2}
+
+    worker = make_gated_import_worker("import-run")
+    with patch("pipeline.internal_steps.run_import_step", side_effect=_import_counts):
+        assert worker() == {"tenders": 2}
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "newer-run"
