@@ -15,6 +15,7 @@ from pipeline.internal_steps import (
     make_gated_import_worker,
     make_tender_scrape_worker,
     run_ai_scoring_step,
+    run_ai_scoring_sync_step,
     run_arch_company_intelligence_step,
     run_company_intelligence_step,
     run_import_contract_awards_step,
@@ -544,7 +545,7 @@ def ai_scoring(
     _require_manual_pipeline()
     run_id = body.run_id if body else None
     if sync:
-        return _run_step_sync("ai-scoring", run_ai_scoring_step, run_id)
+        return _run_step_sync("ai-scoring", run_ai_scoring_sync_step, run_id)
     return _enqueue_step(
         background_tasks,
         "ai-scoring",

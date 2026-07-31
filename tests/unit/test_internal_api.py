@@ -30,6 +30,19 @@ def test_enqueue_step_returns_int_pipeline_run_id():
     assert payload["poll_url"] == "/internal/steps/123"
 
 
+def test_ai_scoring_sync_uses_budgeted_worker():
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._run_step_sync", return_value={"status": "success"}) as run_sync:
+            payload = internal_api.ai_scoring(MagicMock(), None, True)
+
+    assert payload == {"status": "success"}
+    run_sync.assert_called_once_with(
+        "ai-scoring",
+        internal_api.run_ai_scoring_sync_step,
+        None,
+    )
+
+
 def test_background_internal_routes_allow_non_string_response_fields():
     """FastAPI validates route return types; int fields must not use dict[str, str]."""
     for name, func in inspect.getmembers(internal_api, inspect.isfunction):

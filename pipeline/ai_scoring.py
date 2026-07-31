@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 import anthropic
@@ -19,11 +20,38 @@ from db.models import ArchTender, CommercialTender, Tender
 CLAUDE_MODEL = "claude-sonnet-4-5"
 SCORING_DELAY_SECONDS = 0.5
 DEFAULT_AI_BATCH_LIMIT = 10
+DEFAULT_ANTHROPIC_TIMEOUT_SECONDS = 30.0
+DEFAULT_AI_SCORING_SYNC_TIME_BUDGET_SECONDS = 240.0
 FEDERAL_GOV_SOURCE = "buyandsell.gc.ca"
 MERX_SOURCE = "merx.com"
 
 ScoredTender = ArchTender | CommercialTender | Tender
 ScoredModel = type[ArchTender] | type[CommercialTender] | type[Tender]
+
+
+@dataclass
+class _ScoringRunBudget:
+    limit_seconds: float | None
+    started_at: float = field(default_factory=time.monotonic)
+    exhausted: bool = False
+
+    def remaining_seconds(self) -> float | None:
+        if self.limit_seconds is None:
+            return None
+        return self.limit_seconds - (time.monotonic() - self.started_at)
+
+    def can_start_request(self, reserve_seconds: float) -> bool:
+        remaining = self.remaining_seconds()
+        if remaining is None:
+            return True
+        if remaining >= reserve_seconds:
+            return True
+        self.exhausted = True
+        return False
+
+    def can_sleep(self, delay_seconds: float) -> bool:
+        remaining = self.remaining_seconds()
+        return remaining is None or remaining > delay_seconds
 
 
 def _ai_batch_limit() -> int:
@@ -32,6 +60,29 @@ def _ai_batch_limit() -> int:
         return max(1, int(raw))
     except ValueError:
         return DEFAULT_AI_BATCH_LIMIT
+
+
+def _anthropic_timeout_seconds() -> float:
+    raw = get_env("ANTHROPIC_TIMEOUT_SECONDS", str(int(DEFAULT_ANTHROPIC_TIMEOUT_SECONDS)))
+    try:
+        return max(5.0, float(raw))
+    except ValueError:
+        return DEFAULT_ANTHROPIC_TIMEOUT_SECONDS
+
+
+def ai_scoring_sync_time_budget_seconds() -> float:
+    raw = get_env(
+        "AI_SCORING_SYNC_TIME_BUDGET_SECONDS",
+        str(int(DEFAULT_AI_SCORING_SYNC_TIME_BUDGET_SECONDS)),
+    )
+    try:
+        return max(30.0, float(raw))
+    except ValueError:
+        return DEFAULT_AI_SCORING_SYNC_TIME_BUDGET_SECONDS
+
+
+def _anthropic_client(api_key: str) -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=api_key, timeout=_anthropic_timeout_seconds())
 
 
 def _value_is_empty(value: str | None) -> bool:
@@ -253,6 +304,8 @@ def _score_table(
     *,
     extra_filter=None,
     label: str | None = None,
+    budget: _ScoringRunBudget | None = None,
+    request_reserve_seconds: float = DEFAULT_ANTHROPIC_TIMEOUT_SECONDS,
 ) -> int:
     batch_limit = _ai_batch_limit()
     backlog = _count_unscored(session, model, extra_filter=extra_filter)
@@ -271,6 +324,14 @@ def _score_table(
     scored = 0
 
     for index, tender in enumerate(rows, start=1):
+        if budget is not None and not budget.can_start_request(request_reserve_seconds):
+            logger.warning(
+                "[AI Scoring] Time budget exhausted before %s %s/%s; returning partial counts",
+                table_label,
+                index,
+                len(rows),
+            )
+            break
         logger.info("[AI Scoring] %s %s/%s: %s", table_label, index, len(rows), tender.title[:70])
         try:
             score, summary, budget_estimate = _score_tender(client, tender)
@@ -284,7 +345,8 @@ def _score_table(
             session.rollback()
             logger.warning("[AI Scoring] Failed (%s): %s", table_label, exc)
 
-        time.sleep(SCORING_DELAY_SECONDS)
+        if budget is None or budget.can_sleep(SCORING_DELAY_SECONDS):
+            time.sleep(SCORING_DELAY_SECONDS)
 
     logger.info("[AI Scoring] %s scored=%s attempted=%s", table_label, scored, len(rows))
     return scored
@@ -296,12 +358,20 @@ def _estimate_budgets_table(
     model: ScoredModel,
     *,
     extra_filter=None,
+    budget: _ScoringRunBudget | None = None,
+    request_reserve_seconds: float = DEFAULT_ANTHROPIC_TIMEOUT_SECONDS,
 ) -> int:
     batch_limit = _ai_batch_limit()
     estimated = 0
     processed_ids: set[int] = set()
 
     while estimated < batch_limit:
+        if budget is not None and not budget.can_start_request(request_reserve_seconds):
+            logger.warning(
+                "[AI Budget] Time budget exhausted before querying %s; returning partial counts",
+                model.__tablename__,
+            )
+            break
         remaining = batch_limit - estimated
         query = select(model).where(
             or_(model.ai_budget_estimate.is_(None), model.ai_budget_estimate == "")
@@ -326,6 +396,12 @@ def _estimate_budgets_table(
             break
 
         for tender in targets:
+            if budget is not None and not budget.can_start_request(request_reserve_seconds):
+                logger.warning(
+                    "[AI Budget] Time budget exhausted before %s; returning partial counts",
+                    tender.title[:70],
+                )
+                return estimated
             label = model.__tablename__
             logger.info(
                 "[AI Budget] %s %s/%s: %s",
@@ -342,14 +418,21 @@ def _estimate_budgets_table(
                 session.rollback()
                 logger.warning("[AI Budget] Failed (%s): %s", label, exc)
 
-            time.sleep(SCORING_DELAY_SECONDS)
+            if budget is None or budget.can_sleep(SCORING_DELAY_SECONDS):
+                time.sleep(SCORING_DELAY_SECONDS)
 
     return estimated
 
 
-def score_unscored_tenders(session: Session) -> dict[str, int]:
+def score_unscored_tenders(
+    session: Session,
+    *,
+    time_budget_seconds: float | None = None,
+) -> dict[str, Any]:
     batch_limit = _ai_batch_limit()
     api_key = get_anthropic_api_key()
+    budget = _ScoringRunBudget(time_budget_seconds)
+    request_reserve_seconds = _anthropic_timeout_seconds() + SCORING_DELAY_SECONDS
     if not api_key:
         hint = (
             " Add ANTHROPIC_API_KEY to this Railway service's environment variables."
@@ -373,10 +456,12 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
             "total_tenders_scored": 0,
             "total_tenders_budgeted": 0,
             "batch_limit_per_table": batch_limit,
+            "time_budget_seconds": time_budget_seconds,
+            "time_budget_exhausted": False,
             "backlog": {},
         }
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _anthropic_client(api_key)
     federal_gov_filter = _source_filter(Tender, FEDERAL_GOV_SOURCE)
     merx_filter = _source_filter(Tender, MERX_SOURCE)
 
@@ -398,6 +483,8 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         Tender,
         extra_filter=federal_gov_filter,
         label="federal_gov",
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
     )
     merx_scored = _score_table(
         session,
@@ -405,22 +492,56 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         Tender,
         extra_filter=merx_filter,
         label="merx_provincial",
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
     )
-    arch_scored = _score_table(session, client, ArchTender)
+    arch_scored = _score_table(
+        session,
+        client,
+        ArchTender,
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
+    )
     bidcentral_scored = _score_table(
         session,
         client,
         CommercialTender,
         label="commercial_tenders",
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
     )
 
     logger.info("[AI Budget] Estimating budgets for tenders with missing values...")
     federal_gov_budgeted = _estimate_budgets_table(
-        session, client, Tender, extra_filter=federal_gov_filter
+        session,
+        client,
+        Tender,
+        extra_filter=federal_gov_filter,
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
     )
-    merx_budgeted = _estimate_budgets_table(session, client, Tender, extra_filter=merx_filter)
-    arch_budgeted = _estimate_budgets_table(session, client, ArchTender)
-    bidcentral_budgeted = _estimate_budgets_table(session, client, CommercialTender)
+    merx_budgeted = _estimate_budgets_table(
+        session,
+        client,
+        Tender,
+        extra_filter=merx_filter,
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
+    )
+    arch_budgeted = _estimate_budgets_table(
+        session,
+        client,
+        ArchTender,
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
+    )
+    bidcentral_budgeted = _estimate_budgets_table(
+        session,
+        client,
+        CommercialTender,
+        budget=budget,
+        request_reserve_seconds=request_reserve_seconds,
+    )
 
     tenders_scored = federal_gov_scored + merx_scored
     commercial_tenders_scored = bidcentral_scored + merx_scored
@@ -453,5 +574,7 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         "total_tenders_scored": total_scored,
         "total_tenders_budgeted": total_budgeted,
         "batch_limit_per_table": batch_limit,
+        "time_budget_seconds": time_budget_seconds,
+        "time_budget_exhausted": budget.exhausted,
         "backlog": backlog,
     }
