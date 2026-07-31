@@ -59,6 +59,63 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     assert state.tender_scrape_finished_at is not None
 
 
+def test_begin_or_resume_tender_scrape_run_reuses_unfinished_active_run(
+    coordinator_state: Path,
+) -> None:
+    state = coordinator.begin_or_resume_tender_scrape_run("run-a")
+    assert state.run_id == "run-a"
+
+    resumed = coordinator.begin_or_resume_tender_scrape_run("run-b")
+
+    assert resumed.run_id == "run-a"
+
+
+def test_import_completion_is_nonfatal_after_active_run_moves(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_gated_import_worker
+
+    coordinator.begin_run("import-run")
+    coordinator.begin_tender_scrape("import-run")
+    for step in coordinator.TENDER_SCRAPE_STEPS:
+        coordinator.mark_tender_scrape_step("import-run", step)
+
+    def _move_active_run() -> dict:
+        coordinator.begin_run("newer-run")
+        return {"tenders": 1}
+
+    with patch("pipeline.internal_steps.run_import_step", side_effect=_move_active_run):
+        result = make_gated_import_worker("import-run")()
+
+    assert result == {"tenders": 1}
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "newer-run"
+
+
+def test_scrape_step_can_finish_after_another_run_becomes_active(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_tender_scrape_worker
+
+    def _move_active_run() -> dict:
+        coordinator.begin_run("newer-run")
+        coordinator.begin_tender_scrape("newer-run")
+        return {"rows": 1}
+
+    worker = make_tender_scrape_worker(
+        "scrape-federal",
+        _move_active_run,
+        "scrape-run",
+    )
+
+    assert worker() == {"rows": 1}
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "scrape-run"
+    assert state.completed_tender_scrapes == ["scrape-federal"]
+
+
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
     phase_log: list[str] = []
     scrape_started = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
@@ -208,3 +265,23 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal.new_run_id", side_effect=["run-a", "run-b", "run-c"]):
+            with patch(
+                "api.internal._enqueue_step",
+                return_value={"status": "started"},
+            ) as enqueue_step:
+                internal_api.scrape_federal(background_tasks, None)
+                internal_api.scrape_merx_arch(background_tasks, None)
+                internal_api.scrape_commercial(background_tasks, None)
+
+    run_ids = [call.args[3] for call in enqueue_step.call_args_list]
+    assert run_ids == ["run-a", "run-a", "run-a"]
