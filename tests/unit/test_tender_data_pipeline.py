@@ -208,3 +208,56 @@ def test_internal_import_sync_without_body_uses_active_run(
     run_step_sync.assert_called_once()
     assert run_step_sync.call_args.args[0] == "import-csvs"
     assert run_step_sync.call_args.args[2] == "sync-run"
+
+
+def test_internal_tender_scrapes_without_body_share_active_run(
+    coordinator_state: Path,
+) -> None:
+    from api import internal as internal_api
+
+    background_tasks = MagicMock()
+
+    def _fake_enqueue(background_tasks, step, worker, run_id):
+        return {"status": "started", "step": step, "run_id": run_id}
+
+    with patch.dict("os.environ", {"ALLOW_MANUAL_PIPELINE": "true"}, clear=False):
+        with patch("api.internal._enqueue_step", side_effect=_fake_enqueue) as enqueue:
+            federal = internal_api.scrape_federal(background_tasks, None)
+            merx_arch = internal_api.scrape_merx_arch(background_tasks, None)
+            commercial = internal_api.scrape_commercial(background_tasks, None)
+
+    run_ids = {federal["run_id"], merx_arch["run_id"], commercial["run_id"]}
+    assert len(run_ids) == 1
+    assert [call.args[1] for call in enqueue.call_args_list] == [
+        "scrape-federal",
+        "scrape-merx-arch",
+        "scrape-commercial",
+    ]
+    assert {call.args[3] for call in enqueue.call_args_list} == run_ids
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == federal["run_id"]
+    assert state.tender_scrape_started_at is not None
+
+
+def test_scrape_step_can_finish_after_another_run_becomes_active(
+    coordinator_state: Path,
+) -> None:
+    from pipeline.internal_steps import make_tender_scrape_worker
+
+    def _runner() -> dict[str, bool]:
+        coordinator.begin_tender_scrape("later-run")
+        return {"ok": True}
+
+    worker = make_tender_scrape_worker(
+        "scrape-merx-arch",
+        _runner,
+        "merx-run",
+    )
+
+    assert worker() == {"ok": True}
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.run_id == "merx-run"
+    assert state.completed_tender_scrapes == ["scrape-merx-arch"]
