@@ -169,6 +169,20 @@ def _promote_blank_permit_if_exists(
         return False
 
     values = _importable_row_values(row, source=source)
+    keyed_id = session.scalar(
+        select(Permit.id)
+        .where(Permit.source == source, Permit.external_id == external_id)
+        .limit(1)
+    )
+    if keyed_id is not None:
+        # A prior keyed import and a legacy blank-id row describe the same
+        # permit. Updating the blank row to this key would violate the partial
+        # unique index, so retain the keyed record and remove only its blank
+        # duplicate.
+        session.execute(update(Permit).where(Permit.id == keyed_id).values(**values))
+        session.execute(delete(Permit).where(Permit.id == existing_id))
+        return True
+
     session.execute(update(Permit).where(Permit.id == existing_id).values(**values))
     return True
 
