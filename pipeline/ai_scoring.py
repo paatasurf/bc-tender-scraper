@@ -253,7 +253,13 @@ def _score_table(
     *,
     extra_filter=None,
     label: str | None = None,
-) -> int:
+) -> tuple[int, int]:
+    """Returns ``(scored, attempted)``. ``attempted`` is always
+    ``len(rows)`` -- every fetched row goes through the try/except below,
+    whether it succeeds or not. Callers use ``attempted`` to detect a
+    100%-failure batch (attempted > 0 but scored == 0), which the per-row
+    ``except`` here deliberately never raises for -- see
+    ``score_unscored_tenders``'s ``partial_failure`` computation."""
     batch_limit = _ai_batch_limit()
     backlog = _count_unscored(session, model, extra_filter=extra_filter)
     query = select(model).where(_needs_ai_scoring_filter(model))
@@ -287,7 +293,7 @@ def _score_table(
         time.sleep(SCORING_DELAY_SECONDS)
 
     logger.info("[AI Scoring] %s scored=%s attempted=%s", table_label, scored, len(rows))
-    return scored
+    return scored, len(rows)
 
 
 def _estimate_budgets_table(
@@ -372,6 +378,8 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
             "bidcentral_tenders_budgeted": 0,
             "total_tenders_scored": 0,
             "total_tenders_budgeted": 0,
+            "total_tenders_attempted": 0,
+            "partial_failure": False,
             "batch_limit_per_table": batch_limit,
             "backlog": {},
         }
@@ -392,22 +400,22 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         backlog,
     )
 
-    federal_gov_scored = _score_table(
+    federal_gov_scored, federal_gov_attempted = _score_table(
         session,
         client,
         Tender,
         extra_filter=federal_gov_filter,
         label="federal_gov",
     )
-    merx_scored = _score_table(
+    merx_scored, merx_attempted = _score_table(
         session,
         client,
         Tender,
         extra_filter=merx_filter,
         label="merx_provincial",
     )
-    arch_scored = _score_table(session, client, ArchTender)
-    bidcentral_scored = _score_table(
+    arch_scored, arch_attempted = _score_table(session, client, ArchTender)
+    bidcentral_scored, bidcentral_attempted = _score_table(
         session,
         client,
         CommercialTender,
@@ -426,10 +434,26 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
     commercial_tenders_scored = bidcentral_scored + merx_scored
     total_scored = tenders_scored + arch_scored + bidcentral_scored
     total_budgeted = federal_gov_budgeted + merx_budgeted + arch_budgeted + bidcentral_budgeted
+    total_attempted = (
+        federal_gov_attempted + merx_attempted + arch_attempted + bidcentral_attempted
+    )
+    # Every fetched row went through _score_table's per-row try/except,
+    # which never raises -- so a run can reach here having attempted real
+    # work (a non-empty backlog existed and rows were fetched) yet scored
+    # nothing at all, with pipeline_runs otherwise reporting "success".
+    # This is exactly the failure mode that let a full week of 100%
+    # scoring failure go unnoticed: every run looked green. Flagging it
+    # here (checked by pipeline.runs._execute_tracked_worker, which sets
+    # pipeline_runs.status="partial_failure" instead of "success" when
+    # this is true) makes that failure visible without ever raising and
+    # losing the per-table counts already collected above.
+    partial_failure = total_attempted > 0 and total_scored == 0
     logger.info(
-        "[AI Scoring] Run complete total_scored=%s "
+        "[AI Scoring] Run complete total_scored=%s attempted=%s partial_failure=%s "
         "(federal_gov=%s merx=%s bidcentral=%s arch=%s) budgeted=%s",
         total_scored,
+        total_attempted,
+        partial_failure,
         federal_gov_scored,
         merx_scored,
         bidcentral_scored,
@@ -452,6 +476,8 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         "bidcentral_tenders_budgeted": bidcentral_budgeted,
         "total_tenders_scored": total_scored,
         "total_tenders_budgeted": total_budgeted,
+        "total_tenders_attempted": total_attempted,
+        "partial_failure": partial_failure,
         "batch_limit_per_table": batch_limit,
         "backlog": backlog,
     }
