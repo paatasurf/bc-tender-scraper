@@ -64,7 +64,8 @@ def local_db_session() -> Session:
 
 def test_promote_blank_permit_if_exists_updates_blank_row():
     session = MagicMock()
-    session.scalar.return_value = 4317394
+    # Legacy blank row exists; no keyed permit exists yet.
+    session.scalar.side_effect = [4317394, None]
     row = {
         "external_id": "BP-2025-00202",
         "address": "3380 VANNESS AVENUE, Vancouver, BC V5R 6B8",
@@ -77,6 +78,28 @@ def test_promote_blank_permit_if_exists_updates_blank_row():
     promoted = _promote_blank_permit_if_exists(session, row, source="vancouver")
     assert promoted is True
     session.execute.assert_called_once()
+
+
+def test_promote_blank_permit_merges_when_keyed_duplicate_already_exists():
+    session = MagicMock()
+    # First lookup finds the blank legacy row; second finds the keyed row.
+    session.scalar.side_effect = [4317394, 4317395]
+    row = {
+        "external_id": "BP-2025-00202",
+        "address": "3380 VANNESS AVENUE, Vancouver, BC V5R 6B8",
+        "project_value": "144787150.0",
+        "applicant": "Tijana Sljivic",
+        "source": "vancouver",
+        "city": "Vancouver",
+    }
+
+    promoted = _promote_blank_permit_if_exists(session, row, source="vancouver")
+
+    assert promoted is True
+    statements = [call.args[0] for call in session.execute.call_args_list]
+    assert len(statements) == 2
+    assert statements[0].is_update
+    assert statements[1].is_delete
 
 
 def test_dedupe_permit_rows_keeps_last_duplicate():
