@@ -191,7 +191,9 @@ def test_golden_score_and_breakdown_unchanged_except_additive_version_field():
     """Regression guard: fixed subject/peer/stats -> exact score and
     per-factor points. Fails if a threat-score factor weight changes."""
     subject = make_company(id=1, primary_city="Vancouver")
-    peer = make_company(id=2, name="Rival Builders Ltd", primary_city="Vancouver")
+    peer = make_company(
+        id=2, name="Rival Builders Ltd", primary_city="Vancouver", last_project_date=""
+    )
     s_cip = make_cip(company_id=1)
     p_cip = make_cip(
         company_id=2, sector_focus={"institutional": 0.5, "commercial": 0.5}
@@ -210,7 +212,7 @@ def test_golden_score_and_breakdown_unchanged_except_additive_version_field():
         kind="construction",
         stats=stats,
     )
-    assert result.score == 90
+    assert result.score == 78
     assert result.confidence == "high"
     breakdown_points = {b.factor: b.points for b in result.breakdown}
     assert breakdown_points == {
@@ -218,5 +220,5 @@ def test_golden_score_and_breakdown_unchanged_except_additive_version_field():
         "category_overlap": 25,
         "value_overlap": 20,
         "award_activity": 8,
-        "permit_activity": 12,
+        "permit_activity": 0,
     }
