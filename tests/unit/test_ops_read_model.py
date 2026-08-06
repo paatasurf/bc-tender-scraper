@@ -379,6 +379,9 @@ def test_expired_lease_active_row_is_not_reported_as_active_run():
         "phase": "import",
         "lease_expires_at": datetime.now(timezone.utc) - timedelta(hours=1),
         "created_at": datetime.now(timezone.utc) - timedelta(hours=5),
+        "success": None,
+        "stale_reclaimed": False,
+        "error": "",
     }
 
     session.execute.side_effect = [schema_check_result, row_mapping]
@@ -402,6 +405,9 @@ def test_valid_lease_active_row_is_reported_as_active_run_not_expired():
         "phase": "import",
         "lease_expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
         "created_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+        "success": None,
+        "stale_reclaimed": False,
+        "error": "",
     }
 
     session.execute.side_effect = [schema_check_result, row_mapping]
@@ -412,6 +418,262 @@ def test_valid_lease_active_row_is_reported_as_active_run_not_expired():
     assert summary["active_run"]["run_id"] == "live-run-id"
     assert summary["active_run"]["lease_valid"] is True
     assert summary["expired_lease_run"] is None
+    # (M2B) new fields present with honest values, no crash on lookup.
+    assert summary["active_run"]["success"] is None
+    assert summary["active_run"]["stale_reclaimed"] is False
+    assert summary["active_run"]["error_present"] is False
+    assert summary["active_run"]["error_summary"] is None
+
+
+# ---------------------------------------------------------------------
+# M2B -- coordinator error/success never leaks raw text
+# ---------------------------------------------------------------------
+
+
+def test_lease_row_payload_never_leaks_raw_coordinator_error():
+    session = MagicMock()
+    schema_check_result = MagicMock()
+    schema_check_result.scalar_one.return_value = True
+
+    row_mapping = MagicMock()
+    row_mapping.mappings.return_value.first.return_value = {
+        "run_id": "r1",
+        "phase": "import",
+        "lease_expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        "created_at": datetime.now(timezone.utc),
+        "success": False,
+        "stale_reclaimed": False,
+        "error": "postgresql://user:hunter2@host/db failed; Authorization: Bearer secret-value",
+    }
+    session.execute.side_effect = [schema_check_result, row_mapping]
+
+    summary = rm.get_coordinator_summary(session, backend="postgres")
+    active_run = summary["active_run"]
+
+    assert "error" not in active_run
+    assert active_run["error_present"] is True
+    assert active_run["error_summary"] in _VALID_ERROR_SUMMARIES
+    assert active_run["success"] is False
+
+    serialized = json.dumps(summary)
+    for leaked_marker in (
+        "hunter2",
+        "secret-value",
+        "user:hunter2",
+        "Bearer secret-value",
+    ):
+        assert (
+            leaked_marker not in serialized
+        ), f"leaked {leaked_marker!r} into API payload"
+
+
+def test_lease_row_payload_no_error_is_error_present_false():
+    session = MagicMock()
+    schema_check_result = MagicMock()
+    schema_check_result.scalar_one.return_value = True
+
+    row_mapping = MagicMock()
+    row_mapping.mappings.return_value.first.return_value = {
+        "run_id": "r1",
+        "phase": "import",
+        "lease_expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        "created_at": datetime.now(timezone.utc),
+        "success": True,
+        "stale_reclaimed": False,
+        "error": "",
+    }
+    session.execute.side_effect = [schema_check_result, row_mapping]
+
+    summary = rm.get_coordinator_summary(session, backend="postgres")
+    active_run = summary["active_run"]
+
+    assert active_run["error_present"] is False
+    assert active_run["error_summary"] is None
+    assert active_run["success"] is True
+
+
+# ---------------------------------------------------------------------
+# M2B -- container_lock: independent signal, never blended with
+# coordinator active/expired semantics
+# ---------------------------------------------------------------------
+
+
+def test_container_lock_status_active_when_read_succeeds_and_held(monkeypatch):
+    monkeypatch.setattr(rm, "pipeline_status", lambda: {"running": True, "pid": 4242})
+    result = rm.get_container_lock_status()
+    assert result == {
+        "status": "active",
+        "running": True,
+        "scope": "current_container",
+        "pid": 4242,
+    }
+
+
+def test_container_lock_status_idle_when_read_succeeds_and_not_held(monkeypatch):
+    monkeypatch.setattr(rm, "pipeline_status", lambda: {"running": False, "pid": 0})
+    result = rm.get_container_lock_status()
+    assert result == {
+        "status": "idle",
+        "running": False,
+        "scope": "current_container",
+        "pid": None,
+    }
+
+
+def test_container_lock_status_unknown_on_read_failure_never_leaks_exception_text(
+    monkeypatch,
+):
+    def _boom():
+        raise RuntimeError("filesystem unavailable: /some/sensitive/path denied")
+
+    monkeypatch.setattr(rm, "pipeline_status", _boom)
+    result = rm.get_container_lock_status()  # must not raise
+
+    assert result == {
+        "status": "unknown",
+        "running": None,
+        "scope": "current_container",
+        "pid": None,
+    }
+    # "unknown" must never be silently reported as idle (would hide a
+    # possibly-active run) nor as active (would fabricate one), and the
+    # exception's own text must never appear anywhere in the result.
+    serialized = json.dumps(result)
+    assert "filesystem unavailable" not in serialized
+    assert "/some/sensitive/path" not in serialized
+
+
+def test_get_coordinator_summary_never_touches_container_lock(monkeypatch):
+    """Proof of independence: computing the coordinator summary must never
+    call pipeline_status()/the container lock at all -- these are two
+    completely separate signals, not derived from one another."""
+    calls: list[None] = []
+    monkeypatch.setattr(
+        rm, "pipeline_status", lambda: calls.append(None) or {"running": True, "pid": 1}
+    )
+
+    session = MagicMock()
+    session.execute.return_value.scalar_one.return_value = False
+    rm.get_coordinator_summary(session, backend="postgres")
+
+    assert calls == [], "get_coordinator_summary() must never call pipeline_status()"
+
+
+def test_container_lock_status_never_touches_a_db_session(monkeypatch):
+    """The inverse proof: container lock status must never require or
+    accept a database Session -- it is computed purely from the local
+    filesystem PID lock."""
+    monkeypatch.setattr(rm, "pipeline_status", lambda: {"running": False, "pid": 0})
+    # get_container_lock_status() takes no arguments at all.
+    result = rm.get_container_lock_status()
+    assert result["scope"] == "current_container"
+
+
+# ---------------------------------------------------------------------
+# M2B -- honest capability flags: stable shape, never a health signal
+# ---------------------------------------------------------------------
+
+
+def test_capability_flags_are_stable_and_never_signal_health():
+    for flag in (
+        rm.SURREY_IDENTITY_SCHEDULER_TELEMETRY,
+        rm.AI_PIPELINE_TELEMETRY,
+    ):
+        assert flag == {"available": False, "reason": "run_history_not_persisted"}
+        # Must never grow a "status"/"health"/"configured" key that could
+        # be confused with an actual health or configuration check.
+        assert set(flag.keys()) == {"available", "reason"}
+
+
+_FORBIDDEN_ENV_SNIPPETS = ("RESEND_API_KEY", "ANTHROPIC_API_KEY", "N8N_", "RAILWAY_")
+
+
+def test_ops_read_model_never_reads_external_integration_env_vars():
+    """The task explicitly rejected a boolean 'configured' check for
+    Resend/Anthropic/n8n/Railway -- this module must not read any of
+    their env var names, even just to check presence."""
+    source = _strip_docstrings_and_comments(inspect.getsource(rm))
+    for snippet in _FORBIDDEN_ENV_SNIPPETS:
+        assert (
+            snippet not in source
+        ), f"pipeline/ops_read_model.py must not reference {snippet!r}"
+
+
+# ---------------------------------------------------------------------
+# M2B -- enrichment freshness sources (Google enrichment / CIP / tier):
+# fresh, stale, and missing/unknown
+# ---------------------------------------------------------------------
+
+_ENRICHMENT_SOURCE_NAMES = ("Google Enrichment", "CIP", "Construction Tier")
+
+
+def test_enrichment_freshness_sources_are_registered_with_correct_columns():
+    by_name = {s.name: s for s in rm.FRESHNESS_SOURCES}
+    for name in _ENRICHMENT_SOURCE_NAMES:
+        assert name in by_name, f"{name} must be a registered freshness source"
+
+    assert by_name["Google Enrichment"].model is rm.Company
+    assert by_name["Google Enrichment"].timestamp_column == "last_enriched_at"
+    assert by_name["CIP"].model is rm.Company
+    assert by_name["CIP"].timestamp_column == "cip_at"
+    assert by_name["Construction Tier"].model is rm.Company
+    assert by_name["Construction Tier"].timestamp_column == "construction_tier_at"
+
+
+@pytest.mark.parametrize("source_name", _ENRICHMENT_SOURCE_NAMES)
+def test_enrichment_freshness_source_fresh_is_healthy(source_name):
+    source = next(s for s in rm.FRESHNESS_SOURCES if s.name == source_name)
+    session = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = datetime.now(
+        timezone.utc
+    ) - timedelta(hours=1)
+
+    result = rm.compute_source_freshness(session, source)
+
+    assert result["status"] == "healthy"
+    assert result["latest_record_at"] is not None
+    assert result["reason"] is None
+    assert result["source_of_truth"] == "companies." + source.timestamp_column
+
+
+@pytest.mark.parametrize("source_name", _ENRICHMENT_SOURCE_NAMES)
+def test_enrichment_freshness_source_stale(source_name):
+    source = next(s for s in rm.FRESHNESS_SOURCES if s.name == source_name)
+    session = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = datetime.now(
+        timezone.utc
+    ) - timedelta(hours=rm.FRESHNESS_DEGRADED_HOURS + 10)
+
+    result = rm.compute_source_freshness(session, source)
+
+    assert result["status"] == "stale"
+    assert result["latest_record_at"] is not None
+    assert result["reason"] is None
+
+
+@pytest.mark.parametrize("source_name", _ENRICHMENT_SOURCE_NAMES)
+def test_enrichment_freshness_source_missing_is_unknown(source_name):
+    source = next(s for s in rm.FRESHNESS_SOURCES if s.name == source_name)
+    session = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+
+    result = rm.compute_source_freshness(session, source)
+
+    assert result["status"] == "unknown"
+    assert result["latest_record_at"] is None
+    assert result["reason"] == "telemetry_not_available"
+
+
+@pytest.mark.parametrize("source_name", _ENRICHMENT_SOURCE_NAMES)
+def test_enrichment_freshness_source_query_failure_degrades_to_unknown(source_name):
+    source = next(s for s in rm.FRESHNESS_SOURCES if s.name == source_name)
+    session = MagicMock()
+    session.execute.side_effect = RuntimeError("companies table unavailable")
+
+    result = rm.compute_source_freshness(session, source)  # must not raise
+
+    assert result["status"] == "unknown"
+    assert result["reason"] == "telemetry_not_available"
 
 
 # ---------------------------------------------------------------------

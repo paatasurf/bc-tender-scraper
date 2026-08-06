@@ -98,6 +98,10 @@ def test_ops_summary_never_500s_when_database_is_down():
     assert body["system"]["coordinator"]["active_run"] is None
     assert body["system"]["coordinator"]["expired_lease_run"] is None
     assert body["system"]["coordinator"]["schema_available"] is False
+    # container_lock is independent of database state -- must still be
+    # present (not dropped) when the DB is down.
+    assert "container_lock" in body["system"]
+    assert body["system"]["container_lock"]["scope"] == "current_container"
     # Integrations must be honestly not_connected, never fabricated healthy.
     for integration in body["integrations"]:
         assert integration["status"] == "not_connected"
@@ -105,6 +109,14 @@ def test_ops_summary_never_500s_when_database_is_down():
         "incidents_persisted": False,
         "scraper_heartbeats": False,
         "ai_chat_telemetry": False,
+        "surrey_identity_scheduler_telemetry": {
+            "available": False,
+            "reason": "run_history_not_persisted",
+        },
+        "ai_pipeline_telemetry": {
+            "available": False,
+            "reason": "run_history_not_persisted",
+        },
     }
 
 
@@ -319,12 +331,27 @@ def test_ops_summary_contract_shape_with_working_database():
         "database_connected",
         "scheduler",
         "coordinator",
+        "container_lock",
     }
     assert set(body["system"]["coordinator"].keys()) == {
         "backend",
         "schema_available",
         "active_run",
         "expired_lease_run",
+    }
+    assert set(body["system"]["container_lock"].keys()) == {
+        "status",
+        "running",
+        "scope",
+        "pid",
+    }
+    assert body["system"]["container_lock"]["scope"] == "current_container"
+    assert set(body["capabilities"].keys()) == {
+        "incidents_persisted",
+        "scraper_heartbeats",
+        "ai_chat_telemetry",
+        "surrey_identity_scheduler_telemetry",
+        "ai_pipeline_telemetry",
     }
     assert body["system"]["coordinator"]["backend"] == "legacy"
     integration_names = {i["name"] for i in body["integrations"]}
@@ -348,3 +375,182 @@ def test_ops_sources_includes_merx_open_separately_from_federal():
     assert "Federal" in names
     assert "MERX Open" in names
     assert "MERX Architecture" in names
+
+
+# ---------------------------------------------------------------------
+# M2B -- container_lock, coordinator error/success, honest capabilities
+# ---------------------------------------------------------------------
+
+
+def test_ops_summary_container_lock_reflects_active():
+    client = _client()
+    with patch.dict("os.environ", _KEY_ENV, clear=False):
+        with patch("api.ops.check_db_connection", return_value=True):
+            with patch("api.ops.get_session") as mock_get_session:
+                mock_get_session.return_value = mock_get_session.return_value
+                with patch(
+                    "api.ops.get_coordinator_summary",
+                    return_value={
+                        "backend": "postgres",
+                        "schema_available": True,
+                        "active_run": None,
+                        "expired_lease_run": None,
+                    },
+                ):
+                    with patch(
+                        "api.ops.get_container_lock_status",
+                        return_value={
+                            "status": "active",
+                            "running": True,
+                            "scope": "current_container",
+                            "pid": 4242,
+                        },
+                    ):
+                        response = client.get("/api/ops/summary", headers=_KEY_HEADER)
+    body = response.json()
+    assert body["system"]["container_lock"] == {
+        "status": "active",
+        "running": True,
+        "scope": "current_container",
+        "pid": 4242,
+    }
+    # Independence: a running container lock must never leak into or
+    # substitute for the coordinator's own active_run.
+    assert body["system"]["coordinator"]["active_run"] is None
+
+
+def test_ops_summary_container_lock_reflects_idle():
+    client = _client()
+    with patch.dict("os.environ", _KEY_ENV, clear=False):
+        with patch("api.ops.check_db_connection", return_value=True):
+            with patch(
+                "api.ops.get_container_lock_status",
+                return_value={
+                    "status": "idle",
+                    "running": False,
+                    "scope": "current_container",
+                    "pid": None,
+                },
+            ):
+                response = client.get("/api/ops/summary", headers=_KEY_HEADER)
+    body = response.json()
+    assert body["system"]["container_lock"] == {
+        "status": "idle",
+        "running": False,
+        "scope": "current_container",
+        "pid": None,
+    }
+
+
+def test_ops_summary_container_lock_reflects_unknown_on_read_failure():
+    """A container_lock read failure must surface as an honest
+    status="unknown"/running=None through the route, not be silently
+    collapsed into idle (running=False)."""
+    client = _client()
+    with patch.dict("os.environ", _KEY_ENV, clear=False):
+        with patch("api.ops.check_db_connection", return_value=True):
+            with patch(
+                "api.ops.get_container_lock_status",
+                return_value={
+                    "status": "unknown",
+                    "running": None,
+                    "scope": "current_container",
+                    "pid": None,
+                },
+            ):
+                response = client.get("/api/ops/summary", headers=_KEY_HEADER)
+    body = response.json()
+    assert body["system"]["container_lock"]["status"] == "unknown"
+    assert body["system"]["container_lock"]["running"] is None
+
+
+def test_ops_summary_container_lock_present_even_when_database_down():
+    """container_lock has nothing to do with the database -- it must not
+    be dropped or blanked out just because check_db_connection() is
+    False."""
+    client = _client()
+    with patch.dict("os.environ", _KEY_ENV, clear=False):
+        with patch("api.ops.check_db_connection", return_value=False):
+            with patch(
+                "api.ops.get_container_lock_status",
+                return_value={
+                    "status": "active",
+                    "running": True,
+                    "scope": "current_container",
+                    "pid": 7,
+                },
+            ):
+                response = client.get("/api/ops/summary", headers=_KEY_HEADER)
+    body = response.json()
+    assert body["system"]["database_connected"] is False
+    assert body["system"]["container_lock"] == {
+        "status": "active",
+        "running": True,
+        "scope": "current_container",
+        "pid": 7,
+    }
+
+
+def test_ops_summary_capabilities_are_stable_shape_not_health():
+    client = _client()
+    with patch.dict("os.environ", _KEY_ENV, clear=False):
+        with patch("api.ops.check_db_connection", return_value=True):
+            with patch("api.ops.get_session") as mock_get_session:
+                mock_get_session.return_value = mock_get_session.return_value
+                with patch(
+                    "api.ops.get_coordinator_summary",
+                    return_value={
+                        "backend": "postgres",
+                        "schema_available": True,
+                        "active_run": None,
+                        "expired_lease_run": None,
+                    },
+                ):
+                    response = client.get("/api/ops/summary", headers=_KEY_HEADER)
+    body = response.json()
+    assert body["capabilities"]["surrey_identity_scheduler_telemetry"] == {
+        "available": False,
+        "reason": "run_history_not_persisted",
+    }
+    assert body["capabilities"]["ai_pipeline_telemetry"] == {
+        "available": False,
+        "reason": "run_history_not_persisted",
+    }
+
+
+def test_ops_summary_coordinator_active_run_never_leaks_raw_error_via_api():
+    """Route-level proof that api/ops.py passes the coordinator payload
+    through untouched -- the raw-error-never-leaks guarantee itself is
+    proven in tests/unit/test_ops_read_model.py; this confirms the route
+    doesn't reintroduce a raw error field on the way out."""
+    client = _client()
+    with patch.dict("os.environ", _KEY_ENV, clear=False):
+        with patch("api.ops.check_db_connection", return_value=True):
+            with patch("api.ops.get_session") as mock_get_session:
+                mock_get_session.return_value = mock_get_session.return_value
+                with patch(
+                    "api.ops.get_coordinator_summary",
+                    return_value={
+                        "backend": "postgres",
+                        "schema_available": True,
+                        "active_run": {
+                            "run_id": "r1",
+                            "phase": "import",
+                            "lease_valid": True,
+                            "lease_expires_at": None,
+                            "started_at": None,
+                            "success": None,
+                            "stale_reclaimed": False,
+                            "error_present": False,
+                            "error_summary": None,
+                        },
+                        "expired_lease_run": None,
+                    },
+                ):
+                    response = client.get("/api/ops/summary", headers=_KEY_HEADER)
+    body = response.json()
+    active_run = body["system"]["coordinator"]["active_run"]
+    assert "error" not in active_run
+    assert active_run["success"] is None
+    assert active_run["stale_reclaimed"] is False
+    assert active_run["error_present"] is False

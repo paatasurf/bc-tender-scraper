@@ -26,6 +26,22 @@ MISSION_CONTROL_M1_READONLY_API.md for the full contract):
     -- callers (api/ops.py) must never let this module's failures become
     an unhandled 500.
   - Nothing here writes, migrates, or calls init_db().
+  - (M2B) The container-local PID-file lock (get_container_lock_status())
+    is a DIFFERENT source of truth from pipeline_coordinator_runs and must
+    never be blended into active_run/expired_lease_run -- it only proves
+    "this container's own lock file is held right now", says nothing
+    about other Railway replicas, and a coordinator active_run can exist
+    while this container's own lock is not held (the run may have started
+    on a different container) or vice versa.
+  - (M2B) Surrey identity scheduler run history and the AI-scoring /
+    company-intelligence / arch-company-intelligence steps of
+    pipeline.run.run_pipeline() are not persisted anywhere (see
+    SURREY_IDENTITY_SCHEDULER_TELEMETRY / AI_PIPELINE_TELEMETRY below) --
+    these are honest capability=unavailable flags, never a fabricated
+    health/configured status. Do not read Resend/Anthropic/n8n/Railway
+    environment variables here even for a boolean "configured" check --
+    that was explicitly rejected as not proving anything useful about
+    whether they actually work.
 """
 
 from __future__ import annotations
@@ -42,6 +58,7 @@ from sqlalchemy.orm import Session
 from db.models import (
     ArchTender,
     CommercialTender,
+    Company,
     EarlySignalEvent,
     LinkedInSignal,
     NewsSignal,
@@ -51,6 +68,7 @@ from db.models import (
     Tender,
 )
 from db.pipeline_coordinator_tables import pipeline_coordinator_runs
+from pipeline.executor import pipeline_status
 
 _TERMINAL_RUN_STATUSES = frozenset({"success", "failed", "skipped"})
 _COORDINATOR_SCOPE = "tender_data"
@@ -266,12 +284,24 @@ def get_coordinator_active_run_ids(session: Session) -> frozenset[str]:
 
 
 def _lease_row_payload(row: Any, *, lease_valid: bool) -> dict[str, Any]:
+    """Shape one pipeline_coordinator_runs row for active_run/
+    expired_lease_run. (M2B) Also reports success/stale_reclaimed, plus
+    error_present/error_summary derived through the same
+    classify_run_error() used for pipeline_runs.error -- the raw
+    pipeline_coordinator_runs.error text (a Text column, "" by default,
+    which can carry the same kind of operational detail as
+    pipeline_runs.error) is never returned verbatim here either."""
+    error_present, error_summary = classify_run_error(row["error"])
     return {
         "run_id": row["run_id"],
         "phase": row["phase"],
         "lease_valid": lease_valid,
         "lease_expires_at": _iso(row["lease_expires_at"]),
         "started_at": _iso(row["created_at"]),
+        "success": row["success"],
+        "stale_reclaimed": row["stale_reclaimed"],
+        "error_present": error_present,
+        "error_summary": error_summary,
     }
 
 
@@ -323,6 +353,85 @@ def get_coordinator_summary(session: Session, *, backend: str) -> dict[str, Any]
 
 
 # ---------------------------------------------------------------------
+# Container-local liveness (M2B) -- no DB access, no session needed
+# ---------------------------------------------------------------------
+
+
+def get_container_lock_status() -> dict[str, Any]:
+    """The `system.container_lock` block of GET /api/ops/summary.
+
+    Wraps pipeline.executor.pipeline_status(), itself backed by the
+    file-based PID lock in pipeline/lock.py (.pipeline.lock, with a real
+    os.kill(pid, 0) liveness check -- self-healing if the process that
+    held it has died). This is a DIFFERENT, independent source of truth
+    from pipeline_coordinator_runs.active_run: it only says "this
+    container's own lock file is currently held", nothing about other
+    Railway replicas, and must never be blended with or substituted for
+    the coordinator lease. `scope` is always "current_container" so
+    callers cannot mistake this for a fleet-wide signal.
+
+    Three-state result -- "the lock file was read and nothing holds it"
+    is NOT the same claim as "we couldn't tell", and this function must
+    never collapse the two into the same running=False shape:
+      - status="idle": read succeeded, no live PID holds the lock.
+        running=False, pid=None.
+      - status="active": read succeeded, a live PID holds the lock.
+        running=True, pid=<int>.
+      - status="unknown": pipeline_status() itself raised. running=None,
+        pid=None -- an honest "couldn't tell", never reported as idle
+        (which would silently hide a possibly-active run) or as active
+        (which would fabricate one). Never raises, never returns the
+        exception's text, and never logs it -- only the boolean/None
+        result is observable here."""
+    try:
+        status = pipeline_status()
+    except Exception:
+        return {
+            "status": "unknown",
+            "running": None,
+            "scope": "current_container",
+            "pid": None,
+        }
+
+    running = bool(status.get("running"))
+    pid = status.get("pid") or None
+    return {
+        "status": "active" if running else "idle",
+        "running": running,
+        "scope": "current_container",
+        "pid": pid if running else None,
+    }
+
+
+# ---------------------------------------------------------------------
+# Honest capability flags (M2B) -- static, not a health/configured check
+# ---------------------------------------------------------------------
+
+# Run history for the Surrey identity scheduler
+# (pipeline.surrey_identity_scheduler) is never persisted anywhere --
+# _scheduled_surrey_identity_run() only logs its SurreyIdentitySchedulerResult
+# via logger.info(). There is no table, no coordinator row, nothing to
+# query. This is a fixed capability=unavailable flag, not a health check --
+# it does not change based on env vars, DB state, or anything else, and it
+# must never be reinterpreted as "healthy" or "configured".
+SURREY_IDENTITY_SCHEDULER_TELEMETRY: dict[str, Any] = {
+    "available": False,
+    "reason": "run_history_not_persisted",
+}
+
+# Same situation for pipeline.run.run_pipeline()'s AI-scoring /
+# company-intelligence / arch-company-intelligence steps: no pipeline_runs
+# row, no coordinator row, only print() to stdout. A handful of Company
+# columns carry real timestamps for specific enrichment sub-steps (see
+# FRESHNESS_SOURCES below), but there is no run-history/success signal for
+# the AI pipeline steps themselves.
+AI_PIPELINE_TELEMETRY: dict[str, Any] = {
+    "available": False,
+    "reason": "run_history_not_persisted",
+}
+
+
+# ---------------------------------------------------------------------
 # Source freshness (DB access, degrades gracefully per source)
 # ---------------------------------------------------------------------
 
@@ -348,6 +457,14 @@ FRESHNESS_SOURCES: tuple[FreshnessSource, ...] = (
     FreshnessSource("News Signals", NewsSignal, "scraped_at"),
     FreshnessSource("LinkedIn Signals", LinkedInSignal, "scraped_at"),
     FreshnessSource("Early Signal Events", EarlySignalEvent, "scraped_at"),
+    # (M2B) These three measure enrichment DATA freshness only -- exactly
+    # like every other row above, MAX(timestamp) proves a row was last
+    # touched at that time and nothing about whether the run that touched
+    # it succeeded or covered every company. There is no separate
+    # run-history signal for any of these (see AI_PIPELINE_TELEMETRY).
+    FreshnessSource("Google Enrichment", Company, "last_enriched_at"),
+    FreshnessSource("CIP", Company, "cip_at"),
+    FreshnessSource("Construction Tier", Company, "construction_tier_at"),
 )
 
 

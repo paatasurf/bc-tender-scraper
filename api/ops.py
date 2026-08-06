@@ -35,8 +35,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from config.env import get_env
 from db.connection import check_db_connection, get_session
 from pipeline.ops_read_model import (
+    AI_PIPELINE_TELEMETRY,
     FRESHNESS_SOURCES,
+    SURREY_IDENTITY_SCHEDULER_TELEMETRY,
     compute_all_source_freshness,
+    get_container_lock_status,
     get_coordinator_active_run_ids,
     get_coordinator_summary,
     get_run_detail,
@@ -139,6 +142,11 @@ def ops_summary() -> dict[str, Any]:
                 "active_run": coordinator["active_run"],
                 "expired_lease_run": coordinator["expired_lease_run"],
             },
+            # (M2B) Independent of the coordinator lease above -- see
+            # get_container_lock_status()'s docstring. Computed
+            # unconditionally (no DB session needed) so a degraded
+            # database never hides this signal.
+            "container_lock": get_container_lock_status(),
         },
         # Not connected in M1 by design (task rule 8) -- an honest
         # not_connected, never a fabricated healthy status.
@@ -154,6 +162,11 @@ def ops_summary() -> dict[str, Any]:
             "incidents_persisted": False,
             "scraper_heartbeats": False,
             "ai_chat_telemetry": False,
+            # (M2B) Honest "this run history physically does not exist"
+            # flags -- not a health check, not an env-var "configured"
+            # check. See pipeline/ops_read_model.py's module docstring.
+            "surrey_identity_scheduler_telemetry": SURREY_IDENTITY_SCHEDULER_TELEMETRY,
+            "ai_pipeline_telemetry": AI_PIPELINE_TELEMETRY,
         },
     }
 
