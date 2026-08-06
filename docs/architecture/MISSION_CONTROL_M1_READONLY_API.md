@@ -1,8 +1,10 @@
 # Mission Control M1 — Read-only Ops API
 
-**Status:** implemented, not yet wired to any frontend. Code + tests only —
-no migration, no deploy, no Railway/n8n action, no production write of any
-kind is part of this PR.
+**Status:** M1 implemented; M2B (additive read-only telemetry — see
+[M2B section](#m2b--additive-read-only-telemetry-implemented) below) also
+implemented on top of it. Neither is wired to any frontend yet. Code +
+tests only — no migration, no deploy, no Railway/n8n action, no production
+write of any kind is part of either PR.
 
 ## Purpose
 
@@ -18,8 +20,8 @@ have a reliable source of truth in the database, and returns an honest
 
 | File | Role |
 |---|---|
-| `pipeline/ops_read_model.py` | Pure data-shaping logic: `pipeline_runs` normalization, coordinator-lease lookup, source freshness computation. No FastAPI imports — every function takes plain values or a `Session` and returns a plain dict, so it's unit-testable without routes. Never writes, never calls `init_db()`. |
-| `api/ops.py` | Thin FastAPI router (`ops_router`, mounted at `/api/ops`). Five `GET` routes, each backed by one or two `pipeline/ops_read_model.py` calls. Gated by the existing `X-Internal-Key` guard. |
+| `pipeline/ops_read_model.py` | Pure data-shaping logic: `pipeline_runs` normalization, coordinator-lease lookup, source freshness computation. No FastAPI imports — every function takes plain values or a `Session` and returns a plain dict, so it's unit-testable without routes. Never writes, never calls `init_db()`. (M2B) + `get_container_lock_status()`, the `SURREY_IDENTITY_SCHEDULER_TELEMETRY`/`AI_PIPELINE_TELEMETRY` capability constants, and 3 new `FRESHNESS_SOURCES` rows. |
+| `api/ops.py` | Thin FastAPI router (`ops_router`, mounted at `/api/ops`). Five `GET` routes, each backed by one or two `pipeline/ops_read_model.py` calls. Gated by the existing `X-Internal-Key` guard. (M2B) `ops_summary()` now also assembles `system.container_lock` and the two new `capabilities` entries — same route, same shape otherwise. |
 | `api/main.py` | +2 lines: import `ops_router`, `app.include_router(ops_router)`. |
 | `tests/unit/test_ops_read_model.py` | Pure-logic unit tests (no DB) + local-Postgres-gated integration tests (skipped if unavailable). |
 | `tests/unit/test_ops_api.py` | Route-level tests: auth guard, GET-only structure, graceful degradation under a down/mocked database. |
@@ -57,6 +59,12 @@ key), `404` (`/runs/{run_id}` for a run_id that exists nowhere), and `503`
       "schema_available": true,
       "active_run": null,
       "expired_lease_run": null
+    },
+    "container_lock": {
+      "status": "idle",
+      "running": false,
+      "scope": "current_container",
+      "pid": null
     }
   },
   "integrations": [
@@ -70,7 +78,15 @@ key), `404` (`/runs/{run_id}` for a run_id that exists nowhere), and `503`
   "capabilities": {
     "incidents_persisted": false,
     "scraper_heartbeats": false,
-    "ai_chat_telemetry": false
+    "ai_chat_telemetry": false,
+    "surrey_identity_scheduler_telemetry": {
+      "available": false,
+      "reason": "run_history_not_persisted"
+    },
+    "ai_pipeline_telemetry": {
+      "available": false,
+      "reason": "run_history_not_persisted"
+    }
   }
 }
 ```
@@ -83,17 +99,45 @@ key), `404` (`/runs/{run_id}` for a run_id that exists nowhere), and `503`
   "phase": "import",
   "lease_valid": true,
   "lease_expires_at": "2026-08-06T05:41:02+00:00",
-  "started_at": "2026-08-06T02:41:02+00:00"
+  "started_at": "2026-08-06T02:41:02+00:00",
+  "success": null,
+  "stale_reclaimed": false,
+  "error_present": false,
+  "error_summary": null
 }
 ```
 
-`system.coordinator.expired_lease_run`, when present — same shape, but
-`lease_valid: false`. **`active_run` and `expired_lease_run` are never
-both non-null at the same time** (there is at most one `status='active'`
-row per scope, per the R1 partial-unique-index guarantee, and it is either
-lease-valid or it isn't). See
-[Coordinator active-run semantics](#coordinator-active-run-semantics)
+(M2B) `success`, `stale_reclaimed`, `error_present`, `error_summary` were
+added on top of the M1 shape — `success`/`stale_reclaimed` are the raw
+`pipeline_coordinator_runs` columns passed through as-is (both are only
+meaningful once the run has actually finished; `success` is `null` while
+still genuinely active), and `error_present`/`error_summary` are computed
+through the exact same `classify_run_error()` already used for
+`pipeline_runs.error` — **the raw `pipeline_coordinator_runs.error` text
+is never returned, for the same reason `pipeline_runs.error` isn't** (see
+[Error handling](#error-handling) below).
+
+`system.coordinator.expired_lease_run`, when present — same shape
+(including the M2B fields above), but `lease_valid: false`. **`active_run`
+and `expired_lease_run` are never both non-null at the same time** (there
+is at most one `status='active'` row per scope, per the R1
+partial-unique-index guarantee, and it is either lease-valid or it isn't).
+See [Coordinator active-run semantics](#coordinator-active-run-semantics)
 below for why this distinction exists and is not optional.
+
+`system.container_lock` (M2B) is a **completely independent** signal from
+`system.coordinator` — see the
+[M2B section](#m2b--additive-read-only-telemetry-implemented) below.
+`status` is one of three honestly-distinct states, never collapsed into
+each other: `"idle"` (lock file read succeeded, nothing holds it —
+`running: false`, `pid: null`), `"active"` (lock file read succeeded, a
+live PID holds it — `running: true`, `pid: <int>`), or `"unknown"`
+(reading/checking the lock itself raised — `running: null`, `pid: null`).
+`"unknown"` is deliberately not the same shape as `"idle"`: reporting a
+read failure as if it were "confirmed nothing is running" would hide a
+possibly-active run, and reporting it as `"active"` would fabricate one.
+The underlying exception's text is never returned or logged by this
+endpoint.
 
 `database_connected` reuses `db.connection.check_db_connection()` — the
 exact function `/api/health` already uses. `scheduler` is
@@ -238,6 +282,9 @@ no data ever recorded → `unknown` with `reason: "telemetry_not_available"`.
 | News Signals | `news` | `scraped_at` | none | |
 | LinkedIn Signals | `linkedin_signals` | `scraped_at` | none | |
 | Early Signal Events | `early_signal_events` | `scraped_at` | none | Rezoning/development-permit pre-tender signals. |
+| Google Enrichment (M2B) | `companies` | `last_enriched_at` | none | Freshness of the Google-enrichment sub-step only — proves *a* company row was last touched at that time, not that enrichment ran to completion for all companies. See [Limitations](#limitations--what-m1-does-not-do). |
+| CIP (M2B) | `companies` | `cip_at` | none | Company Intelligence Profile builder freshness. |
+| Construction Tier (M2B) | `companies` | `construction_tier_at` | none | Tier-classification freshness. |
 
 **Deliberately no row count.** Every query above is a single `MAX()`
 aggregate — no `COUNT(*)`, no joins, no per-row scan. `permits` alone is a
@@ -440,12 +487,90 @@ frontend integration.
   integration entry is `not_connected` — there is no chat session/latency/
   tool-failure data source to read from yet.
 - No Railway/n8n/Clerk/Vercel/Resend status. All five report
-  `not_connected` — no HTTP calls to any of these are made by M1 code, by
-  design (task rule 8).
+  `not_connected` — no HTTP calls to any of these are made by M1/M2B code,
+  by design (task rule 8, reaffirmed explicitly for M2B: a boolean "is the
+  API key present" check was considered and deliberately rejected —
+  see [M2B](#m2b--additive-read-only-telemetry-implemented) — because it
+  doesn't prove the integration actually works and would invite exactly
+  the kind of "looks connected but isn't" confusion this API exists to
+  prevent).
 - Row counts are intentionally excluded from `/api/ops/sources` (see
   above).
 - `/api/ops/runs` has no real pagination — a bounded overfetch-then-filter,
   documented above.
+- (M2B) Surrey identity scheduler run history and the AI-scoring /
+  company-intelligence / arch-company-intelligence steps of
+  `pipeline.run.run_pipeline()` are still not persisted anywhere — M2B
+  makes this explicit via `capabilities.surrey_identity_scheduler_telemetry`
+  and `capabilities.ai_pipeline_telemetry` (`available: false`) rather than
+  building the telemetry itself.
+
+## M2B — additive read-only telemetry (implemented)
+
+A small, additive-only follow-up on top of M1 — same read-only guarantees,
+same `X-Internal-Key` gate, no new tables, no new routes, no changes to
+any existing field. Driven by a research-only audit of what's *actually*
+queryable today across scheduled pipeline, scraper/source runs, the
+coordinator lease, imports, and AI/company-intelligence classification
+(see the audit for the full findings) — three things came out of it as
+safe, honest additions and everything else stayed `unknown`:
+
+1. **`system.container_lock`.** Wraps the existing
+   `pipeline.executor.pipeline_status()` (itself backed by the self-healing
+   file PID lock in `pipeline/lock.py`) as a distinct signal from
+   `system.coordinator`. `scope: "current_container"` is always present
+   so a caller cannot mistake this for a fleet-wide/multi-replica signal —
+   it only says "this specific container's own lock file is held right
+   now." Three honestly-distinct states, never collapsed into each other:
+   `status="idle"` (read succeeded, nothing held — `running: false`,
+   `pid: null`), `status="active"` (read succeeded, a live PID holds it —
+   `running: true`, `pid: <int>`), `status="unknown"` (the read/check
+   itself raised — `running: null`, `pid: null`, and the exception's own
+   text is never returned or logged — verified by
+   `test_container_lock_status_unknown_on_read_failure_never_leaks_exception_text`).
+   A read failure is never silently reported as `"idle"` (would hide a
+   possibly-active run). `get_coordinator_summary()` never calls into
+   this, and `get_container_lock_status()` never touches a database
+   session — verified by
+   `test_get_coordinator_summary_never_touches_container_lock` and
+   `test_container_lock_status_never_touches_a_db_session`.
+2. **`system.coordinator.active_run`/`expired_lease_run.success` /
+   `.stale_reclaimed` / `.error_present` / `.error_summary`.** Same
+   `pipeline_coordinator_runs` row already being read for M1's
+   `active_run`/`expired_lease_run` — no new query. The raw
+   `pipeline_coordinator_runs.error` column is never returned, for exactly
+   the same reason `pipeline_runs.error` isn't (see
+   [Error handling](#error-handling)) — verified by
+   `test_lease_row_payload_never_leaks_raw_coordinator_error`.
+3. **Three new `/api/ops/sources` rows** (Google Enrichment, CIP,
+   Construction Tier — see the [source-of-truth matrix](#source-of-truth-matrix)
+   above), using the exact same honest `MAX(timestamp)` pattern as every
+   other row, including the same `unknown`/`telemetry_not_available`
+   degrade path when a query fails or no rows exist.
+4. **`capabilities.surrey_identity_scheduler_telemetry` /
+   `.ai_pipeline_telemetry`** — both a fixed
+   `{"available": false, "reason": "run_history_not_persisted"}`. These are
+   honest **capability** flags (the run history physically does not exist
+   anywhere to query), not health checks and not "is this configured"
+   checks — they never change based on env vars, DB state, or anything
+   else. Verified by `test_capability_flags_are_stable_and_never_signal_health`.
+
+**Explicitly not done, and why:** a boolean `configured: bool(env_var)`
+check for Resend/Anthropic/n8n/Railway was in an earlier draft of this
+audit's recommendations and was explicitly rejected before implementation
+— it doesn't prove an integration actually works, only that a key exists
+in this environment, and surfacing it next to real health signals risks a
+dashboard reader conflating "configured" with "healthy." `pipeline/
+ops_read_model.py` does not read `RESEND_API_KEY`, `ANTHROPIC_API_KEY`, any
+`N8N_*`, or any `RAILWAY_*` environment variable — enforced by
+`test_ops_read_model_never_reads_external_integration_env_vars`.
+
+Still `unknown` after M2B, same as before: Surrey identity scheduler run
+history/counts; AI-scoring / company-intelligence / arch-company-intelligence
+run health and last-successful-run; n8n/Vercel/Resend/AI Assistant/Railway
+actual working status. None of these have a real event/heartbeat source to
+read from yet — see the [M2 plan](#m2-plan-not-started-not-scoped-here)
+below for what each would actually require.
 
 ## M2 plan (not started, not scoped here)
 
