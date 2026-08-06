@@ -47,7 +47,6 @@ MISSION_CONTROL_M1_READONLY_API.md for the full contract):
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -68,6 +67,7 @@ from db.models import (
     Tender,
 )
 from db.pipeline_coordinator_tables import pipeline_coordinator_runs
+from pipeline.error_classification import classify_run_error
 from pipeline.executor import pipeline_status
 
 _TERMINAL_RUN_STATUSES = frozenset({"success", "failed", "skipped"})
@@ -114,70 +114,12 @@ def parse_counts_json(raw: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-# Fixed, non-parameterized classification labels. classify_run_error()
-# only ever returns one of these constants -- never any substring of the
-# input -- so a raw error containing a connection string, bearer token, or
-# API key can never leak into the response, regardless of which category
-# it happens to match.
-_ERROR_SUMMARY_TIMEOUT = "timeout"
-_ERROR_SUMMARY_HTTP_4XX = "http_4xx"
-_ERROR_SUMMARY_HTTP_5XX = "http_5xx"
-_ERROR_SUMMARY_DATABASE = "database"
-_ERROR_SUMMARY_VALIDATION = "validation"
-_ERROR_SUMMARY_UNKNOWN = "unknown"
-
-_TIMEOUT_MARKERS = ("timeout", "timed out")
-_HTTP_5XX_RE = re.compile(r"\b5\d{2}\b")
-_HTTP_4XX_RE = re.compile(r"\b4\d{2}\b")
-_DATABASE_MARKERS = (
-    "database",
-    "postgres",
-    "psycopg",
-    "sqlalchemy",
-    "connection refused",
-    "relation does not exist",
-    "integrityerror",
-    "operationalerror",
-    "could not connect",
-)
-_VALIDATION_MARKERS = (
-    "validation",
-    "valueerror",
-    "keyerror",
-    "typeerror",
-    "required field",
-    "invalid ",
-)
-
-
-def classify_run_error(raw: str | None) -> tuple[bool, str | None]:
-    """Classify a raw pipeline_runs.error value into (error_present,
-    error_summary) WITHOUT ever returning any part of the original text.
-
-    error_summary is always one of: timeout, http_4xx, http_5xx, database,
-    validation, unknown -- a fixed label, never interpolated from the
-    input. Classification is keyword-matching on a lowercased copy of the
-    input purely to pick a label; that lowercased copy itself is
-    discarded and never part of the return value. Checked in this order
-    (most specific/actionable first): timeout, http 5xx, http 4xx,
-    database, validation, else unknown.
-    """
-    if not raw:
-        return False, None
-
-    lowered = str(raw).lower()
-
-    if any(marker in lowered for marker in _TIMEOUT_MARKERS):
-        return True, _ERROR_SUMMARY_TIMEOUT
-    if _HTTP_5XX_RE.search(lowered):
-        return True, _ERROR_SUMMARY_HTTP_5XX
-    if _HTTP_4XX_RE.search(lowered):
-        return True, _ERROR_SUMMARY_HTTP_4XX
-    if any(marker in lowered for marker in _DATABASE_MARKERS):
-        return True, _ERROR_SUMMARY_DATABASE
-    if any(marker in lowered for marker in _VALIDATION_MARKERS):
-        return True, _ERROR_SUMMARY_VALIDATION
-    return True, _ERROR_SUMMARY_UNKNOWN
+# classify_run_error() now lives in pipeline/error_classification.py
+# (M3B) -- shared with pipeline/job_run.py so the security-critical
+# "never return raw error text" logic has exactly one implementation.
+# Imported above; kept referenced here so existing callers/tests that do
+# `from pipeline import ops_read_model as rm; rm.classify_run_error(...)`
+# keep working unchanged.
 
 
 def normalize_pipeline_run_status(
