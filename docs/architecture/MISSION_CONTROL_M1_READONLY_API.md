@@ -20,7 +20,7 @@ have a reliable source of truth in the database, and returns an honest
 
 | File | Role |
 |---|---|
-| `pipeline/ops_read_model.py` | Pure data-shaping logic: `pipeline_runs` normalization, coordinator-lease lookup, source freshness computation. No FastAPI imports — every function takes plain values or a `Session` and returns a plain dict, so it's unit-testable without routes. Never writes, never calls `init_db()`. (M2B) + `get_container_lock_status()`, the `SURREY_IDENTITY_SCHEDULER_TELEMETRY`/`AI_PIPELINE_TELEMETRY` capability constants, and 3 new `FRESHNESS_SOURCES` rows. |
+| `pipeline/ops_read_model.py` | Pure data-shaping logic: `pipeline_runs` normalization, coordinator-lease lookup, source freshness computation. No FastAPI imports — every function takes plain values or a `Session` and returns a plain dict, so it's unit-testable without routes. Never writes, never calls `init_db()`. (M2B) + `get_container_lock_status()`, the `AI_PIPELINE_TELEMETRY` capability constant, and 3 new `FRESHNESS_SOURCES` rows. (M3E-A) The Surrey identity scheduler's equivalent capability moved to `pipeline/ops_jobs_read_model.py::surrey_identity_scheduler_telemetry_capability()` — dynamic (flag + real schema check) now that M3C gave it a writer, not a fixed constant. |
 | `api/ops.py` | Thin FastAPI router (`ops_router`, mounted at `/api/ops`). Five `GET` routes, each backed by one or two `pipeline/ops_read_model.py` calls. Gated by the existing `X-Internal-Key` guard. (M2B) `ops_summary()` now also assembles `system.container_lock` and the two new `capabilities` entries — same route, same shape otherwise. |
 | `api/main.py` | +2 lines: import `ops_router`, `app.include_router(ops_router)`. |
 | `tests/unit/test_ops_read_model.py` | Pure-logic unit tests (no DB) + local-Postgres-gated integration tests (skipped if unavailable). |
@@ -81,7 +81,7 @@ key), `404` (`/runs/{run_id}` for a run_id that exists nowhere), and `503`
     "ai_chat_telemetry": false,
     "surrey_identity_scheduler_telemetry": {
       "available": false,
-      "reason": "run_history_not_persisted"
+      "reason": "telemetry_disabled"
     },
     "ai_pipeline_telemetry": {
       "available": false,
@@ -90,6 +90,16 @@ key), `404` (`/runs/{run_id}` for a run_id that exists nowhere), and `503`
   }
 }
 ```
+
+(M3E-A) `capabilities.surrey_identity_scheduler_telemetry` is dynamic, not
+a fixed constant — the example above shows the default state
+(`ENABLE_SURREY_JOB_RUN_TELEMETRY` unset). Three states only, computed by
+`pipeline/ops_jobs_read_model.py::surrey_identity_scheduler_telemetry_capability()`:
+flag off → `{"available": false, "reason": "telemetry_disabled"}`; flag on
+but the `ops_job_runs`/`ops_job_run_events` schema (migration 033) isn't
+confirmed available (including "the database itself is down, so it
+couldn't be checked") → `{"available": false, "reason": "schema_unavailable"}`;
+flag on and schema confirmed available → `{"available": true, "reason": null}`.
 
 `system.coordinator.active_run`, when present (lease is currently valid):
 
@@ -498,12 +508,15 @@ frontend integration.
   above).
 - `/api/ops/runs` has no real pagination — a bounded overfetch-then-filter,
   documented above.
-- (M2B) Surrey identity scheduler run history and the AI-scoring /
-  company-intelligence / arch-company-intelligence steps of
-  `pipeline.run.run_pipeline()` are still not persisted anywhere — M2B
-  makes this explicit via `capabilities.surrey_identity_scheduler_telemetry`
-  and `capabilities.ai_pipeline_telemetry` (`available: false`) rather than
-  building the telemetry itself.
+- (M2B) The AI-scoring / company-intelligence / arch-company-intelligence
+  steps of `pipeline.run.run_pipeline()` are still not persisted anywhere
+  — M2B makes this explicit via `capabilities.ai_pipeline_telemetry`
+  (`available: false`) rather than building the telemetry itself. (M3C/
+  M3E-A) The Surrey identity scheduler is the exception now — it has a
+  real writer (`pipeline/job_run.py`, gated by
+  `ENABLE_SURREY_JOB_RUN_TELEMETRY`) and `capabilities.surrey_identity_scheduler_telemetry`
+  reflects that dynamically instead of a fixed `available: false` (see
+  the `system.summary` example above).
 
 ## M2B — additive read-only telemetry (implemented)
 
@@ -548,12 +561,21 @@ safe, honest additions and everything else stayed `unknown`:
    other row, including the same `unknown`/`telemetry_not_available`
    degrade path when a query fails or no rows exist.
 4. **`capabilities.surrey_identity_scheduler_telemetry` /
-   `.ai_pipeline_telemetry`** — both a fixed
-   `{"available": false, "reason": "run_history_not_persisted"}`. These are
-   honest **capability** flags (the run history physically does not exist
+   `.ai_pipeline_telemetry`** — as shipped in M2B, both were a fixed
+   `{"available": false, "reason": "run_history_not_persisted"}`: honest
+   **capability** flags (the run history physically did not exist
    anywhere to query), not health checks and not "is this configured"
-   checks — they never change based on env vars, DB state, or anything
-   else. Verified by `test_capability_flags_are_stable_and_never_signal_health`.
+   checks. `ai_pipeline_telemetry` still is exactly this today (verified
+   by `test_capability_flags_are_stable_and_never_signal_health`).
+   `surrey_identity_scheduler_telemetry` stopped being a fixed constant in
+   M3E-A once M3C gave the Surrey identity scheduler a real writer — it is
+   now computed per-request from `ENABLE_SURREY_JOB_RUN_TELEMETRY` and a
+   real `ops_job_runs`/`ops_job_run_events` schema check (see the
+   `system.summary` example above and
+   `pipeline/ops_jobs_read_model.py::surrey_identity_scheduler_telemetry_capability()`)
+   — still never a health check, never reads any other environment
+   variable, and never reports `available: true` on anything less than a
+   confirmed schema check.
 
 **Explicitly not done, and why:** a boolean `configured: bool(env_var)`
 check for Resend/Anthropic/n8n/Railway was in an earlier draft of this

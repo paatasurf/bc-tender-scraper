@@ -574,15 +574,18 @@ def test_container_lock_status_never_touches_a_db_session(monkeypatch):
 # ---------------------------------------------------------------------
 
 
-def test_capability_flags_are_stable_and_never_signal_health():
-    for flag in (
-        rm.SURREY_IDENTITY_SCHEDULER_TELEMETRY,
-        rm.AI_PIPELINE_TELEMETRY,
-    ):
-        assert flag == {"available": False, "reason": "run_history_not_persisted"}
-        # Must never grow a "status"/"health"/"configured" key that could
-        # be confused with an actual health or configuration check.
-        assert set(flag.keys()) == {"available", "reason"}
+def test_ai_pipeline_telemetry_capability_flag_is_stable_and_never_signals_health():
+    """SURREY_IDENTITY_SCHEDULER_TELEMETRY used to be tested here too, but
+    it was removed from this module in M3E-A -- see
+    tests/unit/test_ops_jobs_read_model.py's
+    surrey_identity_scheduler_telemetry_capability() tests for its dynamic
+    replacement. AI_PIPELINE_TELEMETRY stays a fixed constant: no writer
+    exists for the AI pipeline yet."""
+    flag = rm.AI_PIPELINE_TELEMETRY
+    assert flag == {"available": False, "reason": "run_history_not_persisted"}
+    # Must never grow a "status"/"health"/"configured" key that could
+    # be confused with an actual health or configuration check.
+    assert set(flag.keys()) == {"available", "reason"}
 
 
 _FORBIDDEN_ENV_SNIPPETS = ("RESEND_API_KEY", "ANTHROPIC_API_KEY", "N8N_", "RAILWAY_")
