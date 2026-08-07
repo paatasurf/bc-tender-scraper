@@ -6,10 +6,18 @@ import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from config.env import env_flag
 from pipeline.executor import start_pipeline_subprocess
+from pipeline.job_run import (
+    finish_job_run,
+    heartbeat_job_run,
+    record_job_step,
+    start_job_run,
+)
 from pipeline.lock import is_pipeline_running
 from pipeline.surrey_identity_scheduler import (
     SURREY_SCHEDULER_FLAG,
+    map_surrey_result_to_job_run_outcome,
     run_surrey_identity_import_once,
     surrey_scheduler_enabled,
 )
@@ -18,6 +26,107 @@ logger = logging.getLogger(__name__)
 _scheduler: BackgroundScheduler | None = None
 
 SURREY_JOB_ID = "surrey_identity_import"
+
+# (M3C) Observation-only: persists Surrey identity scheduler run history
+# to ops_job_runs/ops_job_run_events (pipeline/job_run.py, migration 033,
+# already applied in production and still completely inert). Default
+# false -- with the flag off, none of the _surrey_job_run_telemetry_*
+# helpers below are ever called, so behavior is functionally identical to
+# before this change: no extra get_session() calls, no ops_job_run*
+# writes. Never uses an idempotency_key -- this is pure observation, not
+# a change to the scheduler's own retry/dedup semantics.
+SURREY_JOB_RUN_TELEMETRY_FLAG = "ENABLE_SURREY_JOB_RUN_TELEMETRY"
+SURREY_JOB_RUN_JOB_TYPE = "surrey_identity_scheduler"
+
+
+def surrey_job_run_telemetry_enabled() -> bool:
+    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
+    every other flag in this repo. False by default."""
+    return env_flag(SURREY_JOB_RUN_TELEMETRY_FLAG, default=False)
+
+
+def _close_telemetry_session(session: object | None) -> None:
+    """Close a telemetry session if (and only if) one was actually
+    acquired -- never raises itself, so a close() failure can't mask
+    whatever the caller already decided to do."""
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
+def _surrey_job_run_telemetry_start() -> str | None:
+    """Best-effort start_job_run() call on its OWN session (never the
+    Surrey import's own session/transaction). Returns None -- never
+    raises -- on ANY failure, including get_session() itself raising,
+    which every other telemetry helper below treats as "telemetry
+    unavailable for this run", not an error."""
+    from db.connection import get_session
+
+    session = None
+    try:
+        session = get_session()
+        return start_job_run(
+            session,
+            job_type=SURREY_JOB_RUN_JOB_TYPE,
+            trigger="scheduler",
+            source="surrey",
+        )
+    except Exception:
+        logger.warning(
+            "Surrey identity scheduler telemetry: failed to start job run tracking"
+        )
+        return None
+    finally:
+        _close_telemetry_session(session)
+
+
+def _surrey_job_run_telemetry_phase(run_id: str, phase: str) -> None:
+    """Best-effort milestone event + heartbeat for one plan/validate/apply
+    boundary, on its own session. Never raises -- including if
+    get_session() itself raises."""
+    from db.connection import get_session
+
+    session = None
+    try:
+        session = get_session()
+        record_job_step(session, run_id, event_type="step_completed", step=phase)
+        heartbeat_job_run(session, run_id)
+    except Exception:
+        logger.warning(
+            "Surrey identity scheduler telemetry: failed to record phase=%s", phase
+        )
+    finally:
+        _close_telemetry_session(session)
+
+
+def _surrey_job_run_telemetry_finish(
+    run_id: str,
+    *,
+    status: str,
+    counts: dict[str, int] | None = None,
+    raw_error: str | None = None,
+) -> None:
+    """Best-effort finish_job_run() call on its own session. Never raises
+    -- including if get_session() itself raises. raw_error, if given, is
+    only ever handed to finish_job_run()'s own safe classifier
+    (pipeline.error_classification.classify_run_error) -- never logged or
+    stored verbatim here or anywhere else in this function."""
+    from db.connection import get_session
+
+    session = None
+    try:
+        session = get_session()
+        finish_job_run(
+            session, run_id, status=status, counts=counts, raw_error=raw_error
+        )
+    except Exception:
+        logger.warning(
+            "Surrey identity scheduler telemetry: failed to finish job run tracking"
+        )
+    finally:
+        _close_telemetry_session(session)
 
 
 def _scheduled_pipeline_run() -> None:
@@ -38,15 +147,68 @@ def _scheduled_surrey_identity_run() -> None:
     Never touches the generic importer
     (db.permit_import.upsert_city_permits) and never calls
     scrape_surrey_permits(persist=True) -- that is the pre-existing
-    generic-importer path used by the unrelated manual scrape endpoint."""
+    generic-importer path used by the unrelated manual scrape endpoint.
+
+    (M3C) When ENABLE_SURREY_JOB_RUN_TELEMETRY is unset/false, every
+    telemetry call below is skipped entirely -- this function is then
+    functionally identical to before M3C. When enabled, telemetry is
+    strictly observational: every _surrey_job_run_telemetry_* call is
+    best-effort on its OWN session (never the Surrey import's session/
+    transaction) and never raises, so a telemetry failure can never
+    change whether this job's real scrape/plan/apply work succeeds,
+    and the real work's own exception always still propagates exactly
+    as it did before this change -- only str(exc) is additionally
+    handed to finish_job_run() for safe classification, never logged or
+    stored verbatim anywhere.
+    """
     from db.connection import get_session
     from scraper.surrey_permits import iter_surrey_permits
 
-    rows = list(iter_surrey_permits(days=None))
-    session = get_session()
+    telemetry_run_id = (
+        _surrey_job_run_telemetry_start()
+        if surrey_job_run_telemetry_enabled()
+        else None
+    )
+
     try:
-        result = run_surrey_identity_import_once(session, rows=rows)
+        rows = list(iter_surrey_permits(days=None))
+        session = get_session()
+    except Exception as exc:
+        if telemetry_run_id is not None:
+            _surrey_job_run_telemetry_finish(
+                telemetry_run_id, status="failed", raw_error=str(exc)
+            )
+        raise
+
+    try:
+        try:
+            if telemetry_run_id is not None:
+
+                def on_phase(phase: str) -> None:
+                    _surrey_job_run_telemetry_phase(telemetry_run_id, phase)
+
+                result = run_surrey_identity_import_once(
+                    session, rows=rows, on_phase=on_phase
+                )
+            else:
+                # Flag off (or telemetry start failed): call with the exact
+                # pre-M3C signature -- no on_phase kwarg at all -- so this
+                # path is byte-for-byte the same call as before M3C.
+                result = run_surrey_identity_import_once(session, rows=rows)
+        except Exception as exc:
+            if telemetry_run_id is not None:
+                _surrey_job_run_telemetry_finish(
+                    telemetry_run_id, status="failed", raw_error=str(exc)
+                )
+            raise
+
         logger.info("Surrey identity scheduler run: %s", result.as_dict())
+
+        if telemetry_run_id is not None:
+            status, counts = map_surrey_result_to_job_run_outcome(result)
+            _surrey_job_run_telemetry_finish(
+                telemetry_run_id, status=status, counts=counts
+            )
     finally:
         session.close()
 
