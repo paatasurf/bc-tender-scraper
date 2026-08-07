@@ -71,6 +71,14 @@ def _execute_tracked_worker(
         counts = worker()
         if counts.get("skipped"):
             status = "skipped"
+        elif counts.get("partial_failure"):
+            # A worker can complete without raising yet still report that
+            # every individual unit of work it attempted failed (e.g.
+            # pipeline.ai_scoring.score_unscored_tenders: a non-empty
+            # backlog existed and rows were fetched, but every per-row
+            # try/except caught an exception). Recorded as a distinct
+            # status -- not "success" -- so this is never silently green.
+            status = "partial_failure"
     except Exception as exc:
         status = "failed"
         error = str(exc)

@@ -30,6 +30,30 @@ def test_enqueue_step_returns_int_pipeline_run_id():
     assert payload["poll_url"] == "/internal/steps/123"
 
 
+def test_get_pipeline_step_status_marks_partial_failure_as_done():
+    """A "partial_failure" run is a terminal state (the worker finished,
+    it just didn't succeed) -- pollers must see done=True, not hang
+    forever waiting for a status value they don't recognize."""
+    record = MagicMock()
+    record.id = 55
+    record.run_id = "run-partial"
+    record.step = "ai-scoring"
+    record.status = "partial_failure"
+    record.started_at = None
+    record.finished_at = None
+    record.error = ""
+    record.counts_json = '{"partial_failure": true}'
+
+    session = MagicMock()
+
+    with patch("api.internal.get_session", return_value=session):
+        with patch("api.internal.get_pipeline_run", return_value=record):
+            payload = internal_api.get_pipeline_step_status(55)
+
+    assert payload["status"] == "partial_failure"
+    assert payload["done"] is True
+
+
 def test_background_internal_routes_allow_non_string_response_fields():
     """FastAPI validates route return types; int fields must not use dict[str, str]."""
     for name, func in inspect.getmembers(internal_api, inspect.isfunction):

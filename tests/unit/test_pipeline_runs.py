@@ -61,6 +61,42 @@ def test_execute_tracked_step_marks_failed_runs():
     assert result["error"] == "boom"
 
 
+def test_execute_tracked_step_marks_partial_failure_runs():
+    """A worker that completes without raising, but reports
+    partial_failure=True (e.g. pipeline.ai_scoring.score_unscored_tenders
+    when every fetched row's scoring attempt failed), must be recorded as
+    status="partial_failure" -- not "success" -- so it's never silently
+    green."""
+    record = MagicMock()
+    record.id = 8
+    record.run_id = "run-partial"
+    record.step = "ai-scoring"
+    record.status = "partial_failure"
+    record.started_at = None
+    record.finished_at = None
+    record.error = ""
+    record.counts_json = '{"total_tenders_scored": 0, "total_tenders_attempted": 5, "partial_failure": true}'
+
+    session = MagicMock()
+    session.get.return_value = record
+
+    with patch("pipeline.runs.get_session", return_value=session):
+        with patch("pipeline.runs.start_run", return_value=record):
+            with patch("pipeline.runs.finish_run", return_value=record) as finish_run:
+                result = execute_tracked_step(
+                    "ai-scoring",
+                    lambda: {
+                        "total_tenders_scored": 0,
+                        "total_tenders_attempted": 5,
+                        "partial_failure": True,
+                    },
+                    run_id="run-partial",
+                )
+
+    assert finish_run.call_args.args[2] == "partial_failure"
+    assert result["status"] == "partial_failure"
+
+
 def test_run_tracked_step_uses_existing_record_id():
     existing = MagicMock()
     existing.id = 99
