@@ -34,10 +34,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config.env import get_env
 from db.connection import check_db_connection, get_session
+from pipeline.ops_jobs_read_model import (
+    LIST_DEFAULT_LIMIT,
+    LIST_MAX_LIMIT,
+    VALID_JOB_STATUS_FILTERS,
+    get_job_type_summary,
+    get_ops_job_run_detail,
+    list_ops_job_runs,
+    ops_job_run_schema_available,
+    surrey_identity_scheduler_telemetry_capability,
+)
 from pipeline.ops_read_model import (
     AI_PIPELINE_TELEMETRY,
     FRESHNESS_SOURCES,
-    SURREY_IDENTITY_SCHEDULER_TELEMETRY,
     compute_all_source_freshness,
     get_container_lock_status,
     get_coordinator_active_run_ids,
@@ -45,7 +54,11 @@ from pipeline.ops_read_model import (
     get_run_detail,
     list_pipeline_runs,
 )
-from pipeline.scheduler import scheduler_status
+from pipeline.scheduler import (
+    SURREY_JOB_RUN_JOB_TYPE,
+    scheduler_status,
+    surrey_job_run_telemetry_enabled,
+)
 
 _VALID_COORDINATOR_BACKENDS = ("legacy", "postgres")
 
@@ -116,6 +129,26 @@ _EMPTY_COORDINATOR = {
 }
 
 
+_EMPTY_JOB_TYPE_SUMMARY = {"last_run_at": None, "last_status": None, "counts": None}
+
+
+def _load_ops_job_run_read_model(session: Any) -> dict[str, Any]:
+    """Backs BOTH the `job_types` block and the dynamic Surrey telemetry
+    capability below (M3E-A) with a single ops_job_run_schema_available()
+    check per request, rather than doing it twice. Never fabricates a
+    "healthy" reading: no schema, no row for this job_type yet, or a
+    query failure all report the same all-null job_type summary -- see
+    get_job_type_summary()'s docstring -- and schema_available=False,
+    which surrey_identity_scheduler_telemetry_capability() below treats
+    the same as "couldn't confirm the schema exists"."""
+    schema_available = ops_job_run_schema_available(session)
+    if schema_available:
+        job_type_summary = get_job_type_summary(session, SURREY_JOB_RUN_JOB_TYPE)
+    else:
+        job_type_summary = dict(_EMPTY_JOB_TYPE_SUMMARY)
+    return {"schema_available": schema_available, "job_type_summary": job_type_summary}
+
+
 @ops_router.get("/summary")
 def ops_summary() -> dict[str, Any]:
     db_ok = check_db_connection()
@@ -123,12 +156,34 @@ def ops_summary() -> dict[str, Any]:
     backend = _resolve_coordinator_backend()
 
     coordinator = {**_EMPTY_COORDINATOR, "backend": backend}
+    job_types: dict[str, Any] = {SURREY_JOB_RUN_JOB_TYPE: dict(_EMPTY_JOB_TYPE_SUMMARY)}
+    # Conservative default: until proven otherwise (a real schema check
+    # against a real session below), treat the ops_job_run schema as
+    # unavailable -- this is what makes the Surrey capability below
+    # degrade to schema_unavailable, never a false available=True, when
+    # the database itself is down.
+    ops_job_run_schema_ready = False
     if db_ok:
         ok, result = _call_with_session(
             lambda session: get_coordinator_summary(session, backend=backend)
         )
         if ok:
             coordinator = result
+
+        ok, result = _call_with_session(_load_ops_job_run_read_model)
+        if ok:
+            ops_job_run_schema_ready = result["schema_available"]
+            job_types = {SURREY_JOB_RUN_JOB_TYPE: result["job_type_summary"]}
+
+    # (M3E-A) Dynamic, honest replacement for the old M2B static
+    # available=False constant -- Surrey has been instrumented since M3C.
+    # surrey_job_run_telemetry_enabled() is the one existing, non-secret,
+    # already-audited helper for this flag; no other environment variable
+    # is read here.
+    surrey_telemetry_capability = surrey_identity_scheduler_telemetry_capability(
+        telemetry_enabled=surrey_job_run_telemetry_enabled(),
+        schema_available=ops_job_run_schema_ready,
+    )
 
     return {
         "generated_at": _utc_now_iso(),
@@ -162,12 +217,23 @@ def ops_summary() -> dict[str, Any]:
             "incidents_persisted": False,
             "scraper_heartbeats": False,
             "ai_chat_telemetry": False,
-            # (M2B) Honest "this run history physically does not exist"
-            # flags -- not a health check, not an env-var "configured"
-            # check. See pipeline/ops_read_model.py's module docstring.
-            "surrey_identity_scheduler_telemetry": SURREY_IDENTITY_SCHEDULER_TELEMETRY,
+            # (M3E-A) Dynamic: reflects the real ENABLE_SURREY_JOB_RUN_TELEMETRY
+            # flag + a real ops_job_run schema check -- see
+            # surrey_identity_scheduler_telemetry_capability()'s docstring.
+            "surrey_identity_scheduler_telemetry": surrey_telemetry_capability,
+            # (M2B) AI-scoring / company-intelligence run history still has
+            # no writer at all -- a fixed, honest "this run history
+            # physically does not exist" flag, not a health check. See
+            # pipeline/ops_read_model.py's module docstring.
             "ai_pipeline_telemetry": AI_PIPELINE_TELEMETRY,
         },
+        # (M3E-A) Generic by construction, keyed by job_type -- only
+        # SURREY_JOB_RUN_JOB_TYPE is populated today because it is the
+        # only real ops_job_runs writer wired up so far (M3C). All-null
+        # (never "healthy") when no row for this job_type exists yet, the
+        # schema isn't applied on this environment, or the DB is down --
+        # see _load_ops_job_run_read_model()/get_job_type_summary().
+        "job_types": job_types,
     }
 
 
@@ -229,6 +295,112 @@ def ops_run_detail(run_id: str) -> dict[str, Any]:
     if detail is None:
         raise HTTPException(
             status_code=404, detail=f"No run found for run_id={run_id!r}"
+        )
+
+    return {"generated_at": _utc_now_iso(), **detail}
+
+
+# ---------------------------------------------------------------------
+# M3E-A -- ops_job_runs / ops_job_run_events (migration 033, M3B schema)
+#
+# Contract for schema/DB unavailability (documented, deliberate, mirrors
+# the existing /api/ops/runs vs /api/ops/runs/{run_id} split above rather
+# than inventing a new rule):
+#   - GET /api/ops/jobs (a list endpoint, like /api/ops/runs): degrades to
+#     an honest 200 with jobs=[], count=0, and schema_available/
+#     database_connected flags describing why -- never a 503, never a 500.
+#     A list is allowed to legitimately be empty; a caller polling this on
+#     a fresh environment where migration 033 hasn't been applied yet
+#     should see "no data yet", not an error.
+#   - GET /api/ops/jobs/{run_id} (a detail endpoint, like
+#     /api/ops/runs/{run_id}): a single resource lookup can only honestly
+#     return 404 once it has actually been able to check for run_id and
+#     found nothing. If the schema is missing or the DB call fails, this
+#     function was never able to check, so it returns 503 (Database
+#     unavailable) instead of a 404 that would falsely claim "checked, not
+#     found". This is the same 503-vs-404 split /api/ops/runs/{run_id}
+#     already uses for pipeline_runs.
+# ---------------------------------------------------------------------
+
+_EMPTY_JOBS_LIST_RESPONSE = {"jobs": [], "count": 0}
+
+
+@ops_router.get("/jobs")
+def ops_jobs(
+    job_type: str | None = None,
+    status: str | None = None,
+    limit: int = LIST_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    if status is not None and status not in VALID_JOB_STATUS_FILTERS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"status must be one of {sorted(VALID_JOB_STATUS_FILTERS)}, "
+                f"got {status!r}"
+            ),
+        )
+    bounded_limit = max(1, min(limit, LIST_MAX_LIMIT))
+
+    if not check_db_connection():
+        return {
+            "generated_at": _utc_now_iso(),
+            **_EMPTY_JOBS_LIST_RESPONSE,
+            "database_connected": False,
+            "schema_available": False,
+        }
+
+    def _load(session):
+        if not ops_job_run_schema_available(session):
+            return None
+        return list_ops_job_runs(
+            session, job_type=job_type, status=status, limit=bounded_limit
+        )
+
+    ok, jobs = _call_with_session(_load)
+    if not ok:
+        return {
+            "generated_at": _utc_now_iso(),
+            **_EMPTY_JOBS_LIST_RESPONSE,
+            "database_connected": False,
+            "schema_available": False,
+        }
+    if jobs is None:
+        return {
+            "generated_at": _utc_now_iso(),
+            **_EMPTY_JOBS_LIST_RESPONSE,
+            "database_connected": True,
+            "schema_available": False,
+        }
+
+    return {
+        "generated_at": _utc_now_iso(),
+        "jobs": jobs,
+        "count": len(jobs),
+        "database_connected": True,
+        "schema_available": True,
+    }
+
+
+@ops_router.get("/jobs/{run_id}")
+def ops_job_detail(run_id: str) -> dict[str, Any]:
+    if not check_db_connection():
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    def _load(session):
+        # False (never a valid detail payload -- only None/dict are) means
+        # "schema not applied here", distinct from None ("checked, no such
+        # run_id"). Both still map to the same 503 below -- see the
+        # module-level contract comment above this endpoint.
+        if not ops_job_run_schema_available(session):
+            return False
+        return get_ops_job_run_detail(session, run_id)
+
+    ok, detail = _call_with_session(_load)
+    if not ok or detail is False:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    if detail is None:
+        raise HTTPException(
+            status_code=404, detail=f"No job run found for run_id={run_id!r}"
         )
 
     return {"generated_at": _utc_now_iso(), **detail}
