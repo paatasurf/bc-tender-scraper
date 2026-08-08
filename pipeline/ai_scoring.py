@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 from sqlalchemy import func, or_, select
@@ -97,7 +97,9 @@ def _tender_value(tender: ScoredTender) -> str:
 
 
 def _tender_deadline(tender: ScoredTender) -> str:
-    deadline = getattr(tender, "deadline", None) or getattr(tender, "closing_date", None)
+    deadline = getattr(tender, "deadline", None) or getattr(
+        tender, "closing_date", None
+    )
     return str(deadline or "").strip()
 
 
@@ -150,7 +152,9 @@ def _build_scoring_prompt(tender: ScoredTender) -> str:
 
     location_line = ""
     if _is_federal(tender) or _is_merx_tender(tender):
-        location_line = f"Location: {getattr(tender, 'location', None) or 'Not stated'}\n"
+        location_line = (
+            f"Location: {getattr(tender, 'location', None) or 'Not stated'}\n"
+        )
 
     return f"""{audience}
 
@@ -240,7 +244,9 @@ def _estimate_budget(client: anthropic.Anthropic, tender: ScoredTender) -> str:
 
 
 def _count_unscored(session: Session, model: ScoredModel, *, extra_filter=None) -> int:
-    query = select(func.count()).select_from(model).where(_needs_ai_scoring_filter(model))
+    query = (
+        select(func.count()).select_from(model).where(_needs_ai_scoring_filter(model))
+    )
     if extra_filter is not None:
         query = query.where(extra_filter)
     return int(session.scalar(query) or 0)
@@ -271,7 +277,13 @@ def _score_table(
     scored = 0
 
     for index, tender in enumerate(rows, start=1):
-        logger.info("[AI Scoring] %s %s/%s: %s", table_label, index, len(rows), tender.title[:70])
+        logger.info(
+            "[AI Scoring] %s %s/%s: %s",
+            table_label,
+            index,
+            len(rows),
+            tender.title[:70],
+        )
         try:
             score, summary, budget_estimate = _score_tender(client, tender)
             tender.ai_score = score
@@ -286,7 +298,9 @@ def _score_table(
 
         time.sleep(SCORING_DELAY_SECONDS)
 
-    logger.info("[AI Scoring] %s scored=%s attempted=%s", table_label, scored, len(rows))
+    logger.info(
+        "[AI Scoring] %s scored=%s attempted=%s", table_label, scored, len(rows)
+    )
     return scored
 
 
@@ -347,7 +361,35 @@ def _estimate_budgets_table(
     return estimated
 
 
-def score_unscored_tenders(session: Session) -> dict[str, int]:
+def _safe_call_on_phase(on_phase: Callable[[str], None], phase: str) -> None:
+    """(M3D-A) Invoke an optional progress callback without ever letting it
+    affect the caller -- mirrors
+    pipeline.surrey_identity_scheduler._safe_call_on_phase() exactly (kept
+    as a separate, small, local copy rather than a shared import so this
+    module's own scoring logic stays untouched by anything outside it).
+    Never logs the callback's exception text -- only a fixed, phase-named
+    warning."""
+    try:
+        on_phase(phase)
+    except Exception:
+        logger.warning("[AI Scoring] on_phase callback failed for phase=%s", phase)
+
+
+def score_unscored_tenders(
+    session: Session, *, on_phase: Callable[[str], None] | None = None
+) -> dict[str, int]:
+    """Score and budget-estimate unscored tenders across all 4 tables.
+
+    ``on_phase``, if given, is called after each of the 8 named boundaries
+    below (score_federal_gov/score_merx/score_arch/score_bidcentral,
+    budget_federal_gov/budget_merx/budget_arch/budget_bidcentral) --
+    purely observational (M3D-A ops_job_run telemetry, see
+    pipeline/run.py), never able to affect this function's own scoring
+    logic, batch limits, model, prompts, or return value (see
+    _safe_call_on_phase()). Defaults to None, a complete no-op -- existing
+    callers (and the early-return path below, when ANTHROPIC_API_KEY is
+    missing) are unaffected either way.
+    """
     batch_limit = _ai_batch_limit()
     api_key = get_anthropic_api_key()
     if not api_key:
@@ -381,7 +423,9 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
     merx_filter = _source_filter(Tender, MERX_SOURCE)
 
     backlog = {
-        "federal_gov": _count_unscored(session, Tender, extra_filter=federal_gov_filter),
+        "federal_gov": _count_unscored(
+            session, Tender, extra_filter=federal_gov_filter
+        ),
         "merx_provincial": _count_unscored(session, Tender, extra_filter=merx_filter),
         "commercial_tenders": _count_unscored(session, CommercialTender),
         "arch_tenders": _count_unscored(session, ArchTender),
@@ -399,6 +443,8 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         extra_filter=federal_gov_filter,
         label="federal_gov",
     )
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "score_federal_gov")
     merx_scored = _score_table(
         session,
         client,
@@ -406,26 +452,44 @@ def score_unscored_tenders(session: Session) -> dict[str, int]:
         extra_filter=merx_filter,
         label="merx_provincial",
     )
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "score_merx")
     arch_scored = _score_table(session, client, ArchTender)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "score_arch")
     bidcentral_scored = _score_table(
         session,
         client,
         CommercialTender,
         label="commercial_tenders",
     )
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "score_bidcentral")
 
     logger.info("[AI Budget] Estimating budgets for tenders with missing values...")
     federal_gov_budgeted = _estimate_budgets_table(
         session, client, Tender, extra_filter=federal_gov_filter
     )
-    merx_budgeted = _estimate_budgets_table(session, client, Tender, extra_filter=merx_filter)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "budget_federal_gov")
+    merx_budgeted = _estimate_budgets_table(
+        session, client, Tender, extra_filter=merx_filter
+    )
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "budget_merx")
     arch_budgeted = _estimate_budgets_table(session, client, ArchTender)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "budget_arch")
     bidcentral_budgeted = _estimate_budgets_table(session, client, CommercialTender)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "budget_bidcentral")
 
     tenders_scored = federal_gov_scored + merx_scored
     commercial_tenders_scored = bidcentral_scored + merx_scored
     total_scored = tenders_scored + arch_scored + bidcentral_scored
-    total_budgeted = federal_gov_budgeted + merx_budgeted + arch_budgeted + bidcentral_budgeted
+    total_budgeted = (
+        federal_gov_budgeted + merx_budgeted + arch_budgeted + bidcentral_budgeted
+    )
     logger.info(
         "[AI Scoring] Run complete total_scored=%s "
         "(federal_gov=%s merx=%s bidcentral=%s arch=%s) budgeted=%s",

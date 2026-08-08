@@ -14,6 +14,7 @@ from pipeline.job_run import (
     record_job_step,
     start_job_run,
 )
+from pipeline.job_run_telemetry import call_with_telemetry_session
 from pipeline.lock import is_pipeline_running
 from pipeline.surrey_identity_scheduler import (
     SURREY_SCHEDULER_FLAG,
@@ -45,60 +46,47 @@ def surrey_job_run_telemetry_enabled() -> bool:
     return env_flag(SURREY_JOB_RUN_TELEMETRY_FLAG, default=False)
 
 
-def _close_telemetry_session(session: object | None) -> None:
-    """Close a telemetry session if (and only if) one was actually
-    acquired -- never raises itself, so a close() failure can't mask
-    whatever the caller already decided to do."""
-    if session is not None:
-        try:
-            session.close()
-        except Exception:
-            pass
+_SURREY_TELEMETRY_LOG_LABEL = "Surrey identity scheduler telemetry"
 
 
 def _surrey_job_run_telemetry_start() -> str | None:
     """Best-effort start_job_run() call on its OWN session (never the
-    Surrey import's own session/transaction). Returns None -- never
-    raises -- on ANY failure, including get_session() itself raising,
-    which every other telemetry helper below treats as "telemetry
-    unavailable for this run", not an error."""
-    from db.connection import get_session
+    Surrey import's own session/transaction), via the shared fail-open
+    wrapper (pipeline/job_run_telemetry.py, M3D-A) -- returns None on ANY
+    failure, including get_session() itself raising, which every other
+    telemetry helper below treats as "telemetry unavailable for this
+    run", not an error. Behavior and log text are unchanged from before
+    this helper delegated to the shared wrapper (M3C)."""
 
-    session = None
-    try:
-        session = get_session()
+    def _do(session: object) -> str:
         return start_job_run(
             session,
             job_type=SURREY_JOB_RUN_JOB_TYPE,
             trigger="scheduler",
             source="surrey",
         )
-    except Exception:
-        logger.warning(
-            "Surrey identity scheduler telemetry: failed to start job run tracking"
-        )
-        return None
-    finally:
-        _close_telemetry_session(session)
+
+    return call_with_telemetry_session(
+        _do,
+        log_label=_SURREY_TELEMETRY_LOG_LABEL,
+        failure_message="failed to start job run tracking",
+    )
 
 
 def _surrey_job_run_telemetry_phase(run_id: str, phase: str) -> None:
     """Best-effort milestone event + heartbeat for one plan/validate/apply
     boundary, on its own session. Never raises -- including if
     get_session() itself raises."""
-    from db.connection import get_session
 
-    session = None
-    try:
-        session = get_session()
+    def _do(session: object) -> None:
         record_job_step(session, run_id, event_type="step_completed", step=phase)
         heartbeat_job_run(session, run_id)
-    except Exception:
-        logger.warning(
-            "Surrey identity scheduler telemetry: failed to record phase=%s", phase
-        )
-    finally:
-        _close_telemetry_session(session)
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_SURREY_TELEMETRY_LOG_LABEL,
+        failure_message=f"failed to record phase={phase}",
+    )
 
 
 def _surrey_job_run_telemetry_finish(
@@ -113,20 +101,17 @@ def _surrey_job_run_telemetry_finish(
     only ever handed to finish_job_run()'s own safe classifier
     (pipeline.error_classification.classify_run_error) -- never logged or
     stored verbatim here or anywhere else in this function."""
-    from db.connection import get_session
 
-    session = None
-    try:
-        session = get_session()
+    def _do(session: object) -> None:
         finish_job_run(
             session, run_id, status=status, counts=counts, raw_error=raw_error
         )
-    except Exception:
-        logger.warning(
-            "Surrey identity scheduler telemetry: failed to finish job run tracking"
-        )
-    finally:
-        _close_telemetry_session(session)
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_SURREY_TELEMETRY_LOG_LABEL,
+        failure_message="failed to finish job run tracking",
+    )
 
 
 def _scheduled_pipeline_run() -> None:
