@@ -1,11 +1,12 @@
-"""Tests for pipeline/run.py's M3D-A ai_scoring ops_job_run telemetry
-wiring -- the scheduled path only (pipeline.run.run_pipeline()). Manual/
-n8n endpoints (/internal/ai-scoring, /api/pipeline/run-ai-scoring) are out
-of scope for M3D-A and are not touched by this module.
+"""Tests for pipeline/run.py's M3D-A ai_scoring and M3D-B
+company_intelligence ops_job_run telemetry wiring -- the scheduled path
+only (pipeline.run.run_pipeline()). Manual/n8n endpoints (/internal/
+ai-scoring, /api/pipeline/run-ai-scoring) are out of scope for both and
+are not touched by this module.
 
 Every test here mocks run_tender_data_pipeline/run_company_intelligence/
-run_arch_company_intelligence so only the ai_scoring block under test
-actually executes real code.
+run_arch_company_intelligence (or score_unscored_tenders, for the M3D-B
+section) so only the block under test actually executes real code.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import pipeline.run as run_module
+from pipeline.company_intelligence import run_company_intelligence
 
 
 def _patch_other_steps():
@@ -388,3 +390,478 @@ def test_finish_get_session_failure_still_runs_scoring_once(monkeypatch, caplog)
     assert exit_code == 0
     assert "db down" not in caplog.text
     assert "AI scoring telemetry: failed to finish job run tracking" in caplog.text
+
+
+# =======================================================================
+# M3D-B: company_intelligence ops_job_run telemetry
+# =======================================================================
+
+
+def _patch_other_steps_for_company_intelligence():
+    """Mirrors _patch_other_steps(), but leaves run_company_intelligence
+    unpatched by default (each test below patches/exercises it directly)
+    and instead patches score_unscored_tenders, since AI scoring's own
+    flag defaults off and would otherwise attempt real work."""
+    return (
+        patch(
+            "pipeline.run.run_tender_data_pipeline",
+            return_value={"status": "success"},
+        ),
+        patch("pipeline.run.score_unscored_tenders", return_value={}),
+        patch("pipeline.run.run_arch_company_intelligence", return_value={}),
+        patch("pipeline.run.init_db"),
+    )
+
+
+# ---------------------------------------------------------------------
+# flag=false -- byte-equivalent call path, no telemetry writer touched
+# ---------------------------------------------------------------------
+
+
+def test_company_intelligence_flag_false_calls_with_no_on_phase_kwarg(monkeypatch):
+    monkeypatch.delenv(
+        run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, raising=False
+    )
+    session = MagicMock()
+    captured_kwargs = {}
+
+    def fake_run_company_intelligence(_session, **kwargs):
+        captured_kwargs.update(kwargs)
+        return {"companies_populated": 0}
+
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(
+        patch("pipeline.run.run_company_intelligence", fake_run_company_intelligence)
+    )
+    with _Ctx(patches):
+        exit_code = run_module.run_pipeline()
+
+    assert exit_code == 0
+    assert captured_kwargs == {}  # no on_phase kwarg passed at all
+
+
+def test_company_intelligence_flag_false_calls_no_telemetry_writer_function_at_all(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, raising=False
+    )
+    session = MagicMock()
+    start_mock = MagicMock()
+    finish_mock = MagicMock()
+
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_start", start_mock)
+    )
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_finish", finish_mock)
+    )
+    patches.append(
+        patch(
+            "pipeline.run.run_company_intelligence",
+            return_value={"companies_populated": 3},
+        )
+    )
+    with _Ctx(patches):
+        run_module.run_pipeline()
+
+    start_mock.assert_not_called()
+    finish_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------
+# flag=true -- success: one start, 5 step events/heartbeats, one finish
+# ---------------------------------------------------------------------
+
+
+def test_company_intelligence_flag_true_success_records_start_5_phases_and_finish_success(
+    monkeypatch,
+):
+    monkeypatch.setenv(run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, "true")
+    session = MagicMock()
+
+    phases_recorded: list[str] = []
+
+    def fake_phase(run_id, phase):
+        assert run_id == "run-ci-123"
+        phases_recorded.append(phase)
+
+    def fake_run_company_intelligence(_session, *, on_phase=None):
+        assert on_phase is not None
+        for phase in (
+            "populate",
+            "google_enrich",
+            "ai_analyze",
+            "classify",
+            "construction_tiers",
+        ):
+            on_phase(phase)
+        return {
+            "companies_populated": 10,
+            "companies_google_enriched": 4,
+            "companies_ai_analyzed": 4,
+            "companies_classified": 10,
+            "construction_tiers_updated": 10,
+        }
+
+    finish_mock = MagicMock()
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(
+        patch(
+            "pipeline.run._company_intelligence_telemetry_start",
+            return_value="run-ci-123",
+        )
+    )
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_phase", fake_phase)
+    )
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_finish", finish_mock)
+    )
+    patches.append(
+        patch("pipeline.run.run_company_intelligence", fake_run_company_intelligence)
+    )
+    with _Ctx(patches):
+        exit_code = run_module.run_pipeline()
+
+    assert exit_code == 0
+    assert phases_recorded == [
+        "populate",
+        "google_enrich",
+        "ai_analyze",
+        "classify",
+        "construction_tiers",
+    ]
+    finish_mock.assert_called_once_with(
+        "run-ci-123",
+        status="success",
+        counts={
+            "companies_populated": 10,
+            "companies_google_enriched": 4,
+            "companies_ai_analyzed": 4,
+            "companies_classified": 10,
+            "construction_tiers_updated": 10,
+        },
+    )
+
+
+def test_company_intelligence_counts_are_safe_flat_ints_no_raw_data(monkeypatch):
+    """A return dict with extra/unexpected fields (which
+    run_company_intelligence() does not currently produce, but might in
+    the future) must never reach finish_job_run's counts -- only the
+    five allowlisted keys."""
+    monkeypatch.setenv(run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, "true")
+    session = MagicMock()
+
+    def fake_run_company_intelligence(_session, *, on_phase=None):
+        return {
+            "companies_populated": 1,
+            "companies_google_enriched": 1,
+            "companies_ai_analyzed": 1,
+            "companies_classified": 1,
+            "construction_tiers_updated": 1,
+            "tier_counts": {"A": 1},  # nested -- must never leak into counts
+            "reference_date": "2026-08-11",  # not in the allowlist
+        }
+
+    finish_mock = MagicMock()
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(
+        patch(
+            "pipeline.run._company_intelligence_telemetry_start",
+            return_value="run-ci-safe",
+        )
+    )
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_phase", MagicMock())
+    )
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_finish", finish_mock)
+    )
+    patches.append(
+        patch("pipeline.run.run_company_intelligence", fake_run_company_intelligence)
+    )
+    with _Ctx(patches):
+        run_module.run_pipeline()
+
+    finish_mock.assert_called_once_with(
+        "run-ci-safe",
+        status="success",
+        counts={
+            "companies_populated": 1,
+            "companies_google_enriched": 1,
+            "companies_ai_analyzed": 1,
+            "companies_classified": 1,
+            "construction_tiers_updated": 1,
+        },
+    )
+
+
+# ---------------------------------------------------------------------
+# flag=true -- failed: finish failed, but (unlike M3D-A) the exception is
+# swallowed and the pipeline continues to the next step -- company
+# intelligence's pre-existing fail-and-continue behavior is unchanged.
+# ---------------------------------------------------------------------
+
+
+def test_company_intelligence_flag_true_exception_maps_to_failed_and_is_swallowed(
+    monkeypatch,
+):
+    monkeypatch.setenv(run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, "true")
+    session = MagicMock()
+
+    def raising_run_company_intelligence(_session, *, on_phase=None):
+        raise RuntimeError("boom: sk_live_should_never_leak")
+
+    finish_mock = MagicMock()
+    arch_mock = MagicMock(return_value={})
+    patches = [
+        patch(
+            "pipeline.run.run_tender_data_pipeline",
+            return_value={"status": "success"},
+        ),
+        patch("pipeline.run.score_unscored_tenders", return_value={}),
+        patch("pipeline.run.run_arch_company_intelligence", arch_mock),
+        patch("pipeline.run.init_db"),
+        patch("pipeline.run.get_session", return_value=session),
+        patch(
+            "pipeline.run._company_intelligence_telemetry_start",
+            return_value="run-ci-456",
+        ),
+        patch("pipeline.run._company_intelligence_telemetry_phase", MagicMock()),
+        patch("pipeline.run._company_intelligence_telemetry_finish", finish_mock),
+        patch(
+            "pipeline.run.run_company_intelligence", raising_run_company_intelligence
+        ),
+    ]
+    with _Ctx(patches):
+        exit_code = run_module.run_pipeline()  # must NOT raise
+
+    assert exit_code == 0
+    finish_mock.assert_called_once_with(
+        "run-ci-456", status="failed", raw_error="boom: sk_live_should_never_leak"
+    )
+    # Pre-existing fail-and-continue behavior preserved: arch company
+    # intelligence still ran after company intelligence failed (unlike
+    # M3D-A's ai_scoring, whose exception re-raises and aborts run_pipeline()
+    # before reaching this step at all).
+    arch_mock.assert_called_once()
+    # get_session() is patched to return the same session for all three
+    # post-import steps (ai_scoring, company_intelligence, arch) here, so
+    # session.close() legitimately fires once per step -- 3 total --
+    # rather than once, since (unlike the M3D-A propagating-exception
+    # test) execution reaches all three.
+    assert session.close.call_count == 3
+
+
+def test_company_intelligence_flag_true_but_start_failed_still_calls_without_on_phase(
+    monkeypatch,
+):
+    """Fail-open: if _company_intelligence_telemetry_start() itself
+    returns None, the real work must still run, with the exact
+    pre-M3D-B call signature (no on_phase), and no finish call is
+    attempted (there is no run_id to finish)."""
+    monkeypatch.setenv(run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, "true")
+    session = MagicMock()
+    captured_kwargs = {}
+
+    def fake_run_company_intelligence(_session, **kwargs):
+        captured_kwargs.update(kwargs)
+        return {"companies_populated": 0}
+
+    finish_mock = MagicMock()
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_start", return_value=None)
+    )
+    patches.append(
+        patch("pipeline.run._company_intelligence_telemetry_finish", finish_mock)
+    )
+    patches.append(
+        patch("pipeline.run.run_company_intelligence", fake_run_company_intelligence)
+    )
+    with _Ctx(patches):
+        exit_code = run_module.run_pipeline()
+
+    assert exit_code == 0
+    assert captured_kwargs == {}
+    finish_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------
+# fail-open at every telemetry boundary, including get_session() itself
+# ---------------------------------------------------------------------
+
+
+def test_company_intelligence_phase_get_session_failure_still_completes_once(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv(run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, "true")
+    session = MagicMock()
+
+    call_count = {"n": 0}
+    real_get_session = MagicMock()
+
+    def flaky_get_session():
+        call_count["n"] += 1
+        # First call: _company_intelligence_telemetry_start's own session -- succeeds.
+        if call_count["n"] == 1:
+            return real_get_session
+        # Every phase call's own session -- raises.
+        raise RuntimeError("db down")
+
+    def fake_run_company_intelligence(_session, *, on_phase=None):
+        on_phase("populate")
+        on_phase("google_enrich")
+        return {"companies_populated": 1}
+
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(patch("pipeline.run.start_job_run", return_value="run-ci-789"))
+    finish_mock = MagicMock()
+    patches.append(patch("pipeline.run.finish_job_run", finish_mock))
+    patches.append(patch("db.connection.get_session", flaky_get_session))
+    patches.append(
+        patch("pipeline.run.run_company_intelligence", fake_run_company_intelligence)
+    )
+    with _Ctx(patches):
+        with caplog.at_level("WARNING"):
+            exit_code = run_module.run_pipeline()
+
+    assert exit_code == 0
+    assert "db down" not in caplog.text
+    assert (
+        "Company intelligence telemetry: failed to record phase=populate" in caplog.text
+    )
+    assert (
+        "Company intelligence telemetry: failed to record phase=google_enrich"
+        in caplog.text
+    )
+    finish_mock.assert_not_called()
+
+
+def test_company_intelligence_finish_get_session_failure_still_completes_once(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv(run_module.COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, "true")
+    session = MagicMock()
+
+    def fake_run_company_intelligence(_session, *, on_phase=None):
+        return {"companies_populated": 1}
+
+    patches = list(_patch_other_steps_for_company_intelligence())
+    patches.append(patch("pipeline.run.get_session", return_value=session))
+    patches.append(
+        patch(
+            "pipeline.run._company_intelligence_telemetry_start",
+            return_value="run-ci-999",
+        )
+    )
+    patches.append(
+        patch(
+            "db.connection.get_session", MagicMock(side_effect=RuntimeError("db down"))
+        )
+    )
+    patches.append(
+        patch("pipeline.run.run_company_intelligence", fake_run_company_intelligence)
+    )
+    with _Ctx(patches):
+        with caplog.at_level("WARNING"):
+            exit_code = run_module.run_pipeline()
+
+    assert exit_code == 0
+    assert "db down" not in caplog.text
+    assert (
+        "Company intelligence telemetry: failed to finish job run tracking"
+        in caplog.text
+    )
+
+
+# ---------------------------------------------------------------------
+# on_phase fail-open INSIDE run_company_intelligence() itself (not just
+# the telemetry wiring in pipeline/run.py) -- a raising callback must
+# never stop or change the 5 business steps, their order, or the
+# returned counts.
+# ---------------------------------------------------------------------
+
+
+def test_run_company_intelligence_on_phase_exception_does_not_stop_steps(caplog):
+    call_order: list[str] = []
+
+    def raising_on_phase(phase: str) -> None:
+        call_order.append(phase)
+        raise RuntimeError("callback exploded: sk_live_should_never_leak")
+
+    patches = (
+        patch(
+            "pipeline.company_intelligence.populate_companies_from_permits",
+            return_value=1,
+        ),
+        patch("pipeline.company_intelligence.enrich_companies_google", return_value=2),
+        patch("pipeline.company_intelligence.analyze_companies_ai", return_value=3),
+        patch("pipeline.company_intelligence.classify_companies", return_value=4),
+        patch(
+            "pipeline.company_intelligence.compute_construction_tiers",
+            return_value={"companies_updated": 5},
+        ),
+    )
+    with _Ctx(list(patches)):
+        with caplog.at_level("WARNING"):
+            result = run_company_intelligence(MagicMock(), on_phase=raising_on_phase)
+
+    assert result == {
+        "companies_populated": 1,
+        "companies_google_enriched": 2,
+        "companies_ai_analyzed": 3,
+        "companies_classified": 4,
+        "construction_tiers_updated": 5,
+    }
+    assert call_order == [
+        "populate",
+        "google_enrich",
+        "ai_analyze",
+        "classify",
+        "construction_tiers",
+    ]
+    assert "callback exploded" not in caplog.text
+    assert "sk_live_should_never_leak" not in caplog.text
+    for phase in call_order:
+        assert (
+            f"[Company Intelligence] on_phase callback failed for phase={phase}"
+            in caplog.text
+        )
+
+
+def test_run_company_intelligence_flag_off_byte_equivalent_default_none(monkeypatch):
+    """Calling run_company_intelligence(session) with no on_phase at all
+    (the flag-off call shape from pipeline/run.py) must behave exactly
+    as before this change -- no _safe_call_on_phase invocation."""
+    patches = (
+        patch(
+            "pipeline.company_intelligence.populate_companies_from_permits",
+            return_value=1,
+        ),
+        patch("pipeline.company_intelligence.enrich_companies_google", return_value=2),
+        patch("pipeline.company_intelligence.analyze_companies_ai", return_value=3),
+        patch("pipeline.company_intelligence.classify_companies", return_value=4),
+        patch(
+            "pipeline.company_intelligence.compute_construction_tiers",
+            return_value={"companies_updated": 5},
+        ),
+    )
+    with _Ctx(list(patches)):
+        result = run_company_intelligence(MagicMock())
+
+    assert result == {
+        "companies_populated": 1,
+        "companies_google_enriched": 2,
+        "companies_ai_analyzed": 3,
+        "companies_classified": 4,
+        "construction_tiers_updated": 5,
+    }

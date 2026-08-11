@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 import requests
@@ -22,6 +23,8 @@ from pipeline.company_classification import (
 )
 from pipeline.construction_tier import compute_construction_tiers
 from pipeline.company_resolution import CompanyResolver, RESOLUTION_STATUS_REVIEW
+
+logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-5"
 REQUEST_DELAY_SECONDS = 0.5
@@ -472,12 +475,51 @@ Return JSON only:
 # ---------------------------------------------------------------------------
 
 
-def run_company_intelligence(session: Session) -> dict[str, int]:
+def _safe_call_on_phase(on_phase: Callable[[str], None], phase: str) -> None:
+    """(M3D-B) Invoke an optional progress callback without ever letting it
+    affect the caller -- mirrors pipeline.ai_scoring._safe_call_on_phase()
+    and pipeline.surrey_identity_scheduler._safe_call_on_phase() exactly
+    (kept as a separate, small, local copy rather than a shared import so
+    this module's own company-intelligence logic stays untouched by
+    anything outside it). Never logs the callback's exception text --
+    only a fixed, phase-named warning."""
+    try:
+        on_phase(phase)
+    except Exception:
+        logger.warning(
+            "[Company Intelligence] on_phase callback failed for phase=%s", phase
+        )
+
+
+def run_company_intelligence(
+    session: Session, *, on_phase: Callable[[str], None] | None = None
+) -> dict[str, int]:
+    """``on_phase``, if given, is called after each of the 5 named steps
+    below (populate, google_enrich, ai_analyze, classify,
+    construction_tiers) via _safe_call_on_phase() -- a failing callback is
+    swallowed and logged as a fixed warning, never raised, so telemetry
+    can never change this function's own steps, order, or return value.
+    Defaults to None, a complete no-op -- existing callers are unaffected."""
     populated = populate_companies_from_permits(session)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "populate")
+
     google_enriched = enrich_companies_google(session)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "google_enrich")
+
     ai_analyzed = analyze_companies_ai(session)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "ai_analyze")
+
     classified = classify_companies(session)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "classify")
+
     tier_results = compute_construction_tiers(session)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "construction_tiers")
+
     return {
         "companies_populated": populated,
         "companies_google_enriched": google_enriched,
