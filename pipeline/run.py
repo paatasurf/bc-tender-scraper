@@ -21,6 +21,19 @@ no ops_job_run* write of any kind. This does not (yet) apply to steps 3-4,
 or to the manual/n8n endpoints (/internal/ai-scoring,
 /api/pipeline/run-ai-scoring) -- see the M3D audit for the planned
 follow-up phases.
+
+(M3D-B) Step 3 optionally persists the same way, gated by
+ENABLE_COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY (default false), with the
+flag off calling run_company_intelligence(session) with the exact same
+signature as before this change. One deliberate divergence from M3D-A's
+shape: company intelligence's pre-existing behavior is to catch its own
+exception, print a message, and continue to step 4 (arch company
+intelligence) rather than let it propagate -- M3D-A's `raise` after
+finishing a failed AI-scoring run is not repeated here, since doing so
+would change company intelligence's existing fail-and-continue behavior,
+which is explicitly out of scope for this instrumentation-only change.
+This does not (yet) apply to step 4, or to the manual/n8n endpoints --
+see the M3D audit for the planned follow-up phases.
 """
 
 from config.env import env_flag
@@ -144,6 +157,93 @@ def _ai_scoring_telemetry_finish(
     )
 
 
+COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG = (
+    "ENABLE_COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY"
+)
+COMPANY_INTELLIGENCE_JOB_RUN_JOB_TYPE = "company_intelligence"
+_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL = "Company intelligence telemetry"
+
+# Flat int fields already present, unchanged, in run_company_intelligence()'s
+# own return dict -- see pipeline/company_intelligence.py. Deliberately an
+# explicit allowlist, not a blanket pass-through, same reasoning as
+# _AI_SCORING_COUNT_KEYS above. Notably does NOT include the nested
+# `tier_counts` dict or `reference_date` string that
+# compute_construction_tiers() itself returns internally -- those never
+# leave pipeline/company_intelligence.py; run_company_intelligence() only
+# surfaces the flat `construction_tiers_updated` int from that dict.
+_COMPANY_INTELLIGENCE_COUNT_KEYS = (
+    "companies_populated",
+    "companies_google_enriched",
+    "companies_ai_analyzed",
+    "companies_classified",
+    "construction_tiers_updated",
+)
+
+
+def company_intelligence_job_run_telemetry_enabled() -> bool:
+    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
+    every other flag in this repo. False by default."""
+    return env_flag(COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, default=False)
+
+
+def _safe_company_intelligence_counts(result: dict) -> dict[str, int]:
+    """Allowlisted counts only -- never a prompt, an AI response, or a
+    company/tender record. None of those exist in
+    run_company_intelligence()'s return value in the first place; this
+    function only narrows further, and protects against the return dict
+    growing an unexpected field in the future."""
+    return {
+        key: result[key] for key in _COMPANY_INTELLIGENCE_COUNT_KEYS if key in result
+    }
+
+
+def _company_intelligence_telemetry_start() -> str | None:
+    def _do(session: object) -> str:
+        return start_job_run(
+            session,
+            job_type=COMPANY_INTELLIGENCE_JOB_RUN_JOB_TYPE,
+            trigger="scheduler",
+            source="permits",
+        )
+
+    return call_with_telemetry_session(
+        _do,
+        log_label=_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL,
+        failure_message="failed to start job run tracking",
+    )
+
+
+def _company_intelligence_telemetry_phase(run_id: str, phase: str) -> None:
+    def _do(session: object) -> None:
+        record_job_step(session, run_id, event_type="step_completed", step=phase)
+        heartbeat_job_run(session, run_id)
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL,
+        failure_message=f"failed to record phase={phase}",
+    )
+
+
+def _company_intelligence_telemetry_finish(
+    run_id: str,
+    *,
+    status: str,
+    counts: dict[str, int] | None = None,
+    raw_error: str | None = None,
+) -> None:
+    def _do(session: object) -> None:
+        finish_job_run(
+            session, run_id, status=status, counts=counts, raw_error=raw_error
+        )
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL,
+        failure_message="failed to finish job run tracking",
+    )
+
+
 def run_pipeline() -> int:
     print("[Pipeline] Starting deterministic tender data pipeline...")
     try:
@@ -199,7 +299,43 @@ def run_pipeline() -> int:
     print("[Pipeline] Running company intelligence...")
     session = get_session()
     try:
-        run_company_intelligence(session)
+        if company_intelligence_job_run_telemetry_enabled():
+            telemetry_run_id = _company_intelligence_telemetry_start()
+            try:
+                if telemetry_run_id is not None:
+
+                    def on_phase(phase: str) -> None:
+                        _company_intelligence_telemetry_phase(telemetry_run_id, phase)
+
+                    result = run_company_intelligence(session, on_phase=on_phase)
+                else:
+                    # Telemetry start failed (fail-open): call with the
+                    # exact pre-M3D-B signature -- no on_phase kwarg at
+                    # all -- so this path is byte-for-byte the same call
+                    # as when the flag is off.
+                    result = run_company_intelligence(session)
+            except Exception as exc:
+                # Deliberately NOT re-raised (unlike M3D-A's AI scoring
+                # block) -- company intelligence's pre-existing behavior
+                # is to catch, print, and continue to the next pipeline
+                # step, and this instrumentation must not change that.
+                if telemetry_run_id is not None:
+                    _company_intelligence_telemetry_finish(
+                        telemetry_run_id, status="failed", raw_error=str(exc)
+                    )
+                print(f"[Pipeline] Company intelligence failed: {exc}")
+            else:
+                if telemetry_run_id is not None:
+                    _company_intelligence_telemetry_finish(
+                        telemetry_run_id,
+                        status="success",
+                        counts=_safe_company_intelligence_counts(result),
+                    )
+        else:
+            # Flag off: byte-for-byte the same call as before M3D-B -- no
+            # on_phase kwarg, no extra get_session() call, no ops_job_run*
+            # write of any kind.
+            run_company_intelligence(session)
     except Exception as exc:
         print(f"[Pipeline] Company intelligence failed: {exc}")
     finally:
