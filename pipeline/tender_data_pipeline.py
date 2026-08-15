@@ -46,6 +46,16 @@ AUXILIARY_SCRAPER_RUNNERS: tuple[tuple[str, Any], ...] = (
     ("LinkedIn signals", run_linkedin_scraper),
 )
 
+# (M3F foundation) The only two trigger values run_tender_data_pipeline()
+# has real, honest production callers for today: the scheduled daily cron
+# (pipeline/run.py, unchanged by this constant -- its bare call inherits
+# the default below) and the manual full-pipeline admin endpoint
+# (api/internal.py's POST /internal/pipeline/tender-data, which n8n also
+# calls -- there is no distinct n8n-specific trigger path here, so "n8n"
+# is deliberately not in this allowlist even though it's a valid value in
+# the broader pipeline.job_run trigger schema used elsewhere).
+_VALID_TENDER_DATA_PIPELINE_TRIGGERS = frozenset({"scheduler", "manual"})
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -55,7 +65,10 @@ def run_tender_scrapers(run_id: str) -> dict[str, Any]:
     """Run all tender scrapers sequentially and mark coordinator steps."""
     begin_tender_scrape(run_id)
     scrape_started_at = _utc_now()
-    results: dict[str, Any] = {"scrape_started_at": scrape_started_at.isoformat(), "steps": {}}
+    results: dict[str, Any] = {
+        "scrape_started_at": scrape_started_at.isoformat(),
+        "steps": {},
+    }
     errors: list[str] = []
 
     print("[Pipeline] Phase 1/4: Tender scrapers (sequential)")
@@ -82,8 +95,19 @@ def run_tender_scrapers(run_id: str) -> dict[str, Any]:
     return results
 
 
-def run_auxiliary_scrapers() -> dict[str, Any]:
-    """Run non-tender scrapers after tender CSVs are written (best-effort)."""
+def run_auxiliary_scrapers(*, trigger: str = "scheduler") -> dict[str, Any]:
+    """Run non-tender scrapers after tender CSVs are written (best-effort).
+
+    (M3F foundation) ``trigger`` is a plain pass-through, not re-validated
+    here -- run_tender_data_pipeline() is this function's only production
+    caller and already validates it against
+    _VALID_TENDER_DATA_PIPELINE_TRIGGERS before calling in. Currently
+    unused inside this function body -- no telemetry is added by this
+    change; this parameter exists purely so a future per-source telemetry
+    change (Building Permits / Vancouver Early Signal Events / News
+    Signals) can read an honest trigger value instead of assuming
+    "scheduler" unconditionally.
+    """
     print("[Pipeline] Running auxiliary scrapers (permits, signals)...")
     results: dict[str, Any] = {"errors": []}
 
@@ -108,7 +132,9 @@ def run_auxiliary_scrapers() -> dict[str, Any]:
     return results
 
 
-def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
+def run_tender_data_pipeline(
+    *, run_id: str | None = None, trigger: str = "scheduler"
+) -> dict[str, Any]:
     """
     Deterministic tender data path:
       1. Tender scrapers (sequential)
@@ -116,7 +142,26 @@ def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
       3. CSV verification
       4. Import all CSVs + contract awards
       5. Database count verification
+
+    (M3F foundation) ``trigger`` defaults to "scheduler" -- the honest
+    default for the overwhelming majority real caller, the daily
+    APScheduler cron (pipeline/run.py, unchanged by this parameter: its
+    existing bare call inherits this default). The manual full-pipeline
+    admin endpoint (api/internal.py's POST /internal/pipeline/tender-data,
+    which n8n also calls) passes trigger="manual" explicitly. Validated
+    against _VALID_TENDER_DATA_PIPELINE_TRIGGERS before any coordinator
+    state is touched -- an invalid value raises ValueError immediately,
+    before begin_run()/begin_full_scrape() ever run. Threaded straight
+    into run_auxiliary_scrapers(trigger=trigger) -- no telemetry is added
+    by this change; trigger is pure plumbing for a later per-source
+    telemetry change to read.
     """
+    if trigger not in _VALID_TENDER_DATA_PIPELINE_TRIGGERS:
+        raise ValueError(
+            f"trigger must be one of {sorted(_VALID_TENDER_DATA_PIPELINE_TRIGGERS)}, "
+            f"got {trigger!r}"
+        )
+
     actual_run_id = run_id or new_run_id()
     begin_run(actual_run_id)
     begin_full_scrape(actual_run_id)
@@ -127,7 +172,7 @@ def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
         tender_scrape = run_tender_scrapers(actual_run_id)
         summary["phases"]["tender_scrape"] = tender_scrape
 
-        auxiliary = run_auxiliary_scrapers()
+        auxiliary = run_auxiliary_scrapers(trigger=trigger)
         summary["phases"]["auxiliary_scrape"] = auxiliary
         complete_full_scrape(actual_run_id)
 

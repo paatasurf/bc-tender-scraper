@@ -35,7 +35,9 @@ def main() -> int:
     }
 
     print("[Audit] Pre-run gate: import must be blocked before scrapes")
-    state_path = Path(__file__).resolve().parent.parent / ".pipeline" / "run_coordinator.json"
+    state_path = (
+        Path(__file__).resolve().parent.parent / ".pipeline" / "run_coordinator.json"
+    )
     if state_path.exists():
         state_path.unlink()
     try:
@@ -48,7 +50,7 @@ def main() -> int:
 
     print("[Audit] Running full tender-data pipeline...")
     try:
-        summary = run_tender_data_pipeline()
+        summary = run_tender_data_pipeline(trigger="manual")
         audit["pipeline_summary"] = {
             "status": summary.get("status"),
             "run_id": summary.get("run_id"),
@@ -105,7 +107,11 @@ def main() -> int:
 
 
 def _write_audit(audit: dict) -> None:
-    out_path = Path(__file__).resolve().parent.parent / ".pipeline" / "p1-01-ordering-audit.json"
+    out_path = (
+        Path(__file__).resolve().parent.parent
+        / ".pipeline"
+        / "p1-01-ordering-audit.json"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     print(f"[Audit] Wrote {out_path}")
