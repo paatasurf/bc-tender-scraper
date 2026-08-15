@@ -519,7 +519,7 @@ def run_tender_data_pipeline_route(
             detail="Only sync=true is supported for /internal/pipeline/tender-data",
         )
     try:
-        summary = run_tender_data_pipeline(run_id=run_id)
+        summary = run_tender_data_pipeline(run_id=run_id, trigger="manual")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     from pipeline.run_coordinator import assert_import_not_before_scrape
