@@ -21,7 +21,10 @@ import pytest
 from pipeline import run_coordinator as coordinator
 from pipeline import run_coordinator_legacy
 from pipeline.run_coordinator import PipelineOrderError, assert_import_not_before_scrape
-from pipeline.tender_data_pipeline import run_tender_data_pipeline
+from pipeline.tender_data_pipeline import (
+    run_auxiliary_scrapers,
+    run_tender_data_pipeline,
+)
 
 
 @pytest.fixture
@@ -362,3 +365,285 @@ def test_manual_full_pipeline_endpoint_passes_trigger_manual(
 
     assert response["status"] == "success"
     run_tender_data_pipeline_mock.assert_called_once_with(run_id=None, trigger="manual")
+
+
+# =======================================================================
+# M3F-1: Building Permits ops_job_run telemetry (inside
+# run_auxiliary_scrapers(), NOT pipeline/run.py -- see the M3F audit for
+# why this lives here rather than mirroring M3D-A/B/C's location).
+# =======================================================================
+
+_BUILDING_PERMITS_SUCCESS_RESULT = {
+    "source": "vancouver",
+    "city": "Vancouver",
+    "mode": "incremental",
+    "days": 30,
+    "permits_scraped": 12,
+    "csv_path": "/tmp/permits.csv",
+    "permits_persisted": 10,
+}
+
+
+def _other_auxiliary_runner(**_kwargs) -> dict:
+    return {}
+
+
+def _patch_auxiliary_runners(building_permits_runner):
+    """Replaces AUXILIARY_SCRAPER_RUNNERS with a tuple where "Building
+    permits" maps to `building_permits_runner` and every other of the 4
+    entries maps to a trivial no-op fake -- so no real scraper/network/DB
+    code from any other auxiliary source ever executes in these tests."""
+    from pipeline.tender_data_pipeline import AUXILIARY_SCRAPER_RUNNERS as _real
+
+    fake_runners = tuple(
+        (
+            label,
+            (
+                building_permits_runner
+                if label == "Building permits"
+                else _other_auxiliary_runner
+            ),
+        )
+        for label, _runner in _real
+    )
+    return patch(
+        "pipeline.tender_data_pipeline.AUXILIARY_SCRAPER_RUNNERS", fake_runners
+    )
+
+
+def test_building_permits_flag_false_calls_with_zero_kwargs(monkeypatch) -> None:
+    monkeypatch.delenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", raising=False)
+    captured_kwargs = {}
+
+    def fake_runner(**kwargs):
+        captured_kwargs.update(kwargs)
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    with _patch_auxiliary_runners(fake_runner):
+        results = run_auxiliary_scrapers()
+
+    assert captured_kwargs == {}  # no kwargs at all -- byte-equivalent call
+    assert results["Building permits"] == _BUILDING_PERMITS_SUCCESS_RESULT
+    assert results["errors"] == []
+
+
+def test_building_permits_flag_false_calls_no_telemetry_writer(monkeypatch) -> None:
+    monkeypatch.delenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", raising=False)
+    start_mock = MagicMock()
+    finish_mock = MagicMock()
+
+    def fake_runner(**_kwargs):
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    with patch(
+        "pipeline.tender_data_pipeline._building_permits_telemetry_start", start_mock
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._building_permits_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners(fake_runner):
+                run_auxiliary_scrapers()
+
+    start_mock.assert_not_called()
+    finish_mock.assert_not_called()
+
+
+def test_building_permits_flag_true_success_records_start_and_finish(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner():
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._building_permits_telemetry_start",
+        return_value="run-bp-123",
+    ) as start_mock:
+        with patch(
+            "pipeline.tender_data_pipeline._building_permits_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners(fake_runner):
+                results = run_auxiliary_scrapers(trigger="scheduler")
+
+    start_mock.assert_called_once_with(trigger="scheduler")
+    finish_mock.assert_called_once_with(
+        "run-bp-123",
+        status="success",
+        counts={"permits_scraped": 12, "permits_persisted": 10, "days": 30},
+    )
+    assert results["Building permits"] == _BUILDING_PERMITS_SUCCESS_RESULT
+    assert results["errors"] == []
+
+
+def test_building_permits_counts_exclude_mode_csv_path_source_city(
+    monkeypatch,
+) -> None:
+    """mode, csv_path, source, and city must never reach counts -- only
+    the three allowlisted flat ints."""
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner():
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._building_permits_telemetry_start",
+        return_value="run-bp-safe",
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._building_permits_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners(fake_runner):
+                run_auxiliary_scrapers()
+
+    counts = finish_mock.call_args.kwargs["counts"]
+    assert counts == {"permits_scraped": 12, "permits_persisted": 10, "days": 30}
+    assert "mode" not in counts
+    assert "csv_path" not in counts
+    assert "source" not in counts
+    assert "city" not in counts
+
+
+def test_building_permits_trigger_is_not_hardcoded(monkeypatch) -> None:
+    """The trigger passed to run_auxiliary_scrapers() must flow straight
+    into start_job_run() -- never a hardcoded "scheduler", honoring
+    whatever run_tender_data_pipeline() actually validated (scheduler or
+    manual)."""
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner():
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    session = MagicMock()
+    start_job_run_mock = MagicMock(return_value="run-bp-manual")
+    with patch("db.connection.get_session", return_value=session):
+        with patch("pipeline.tender_data_pipeline.start_job_run", start_job_run_mock):
+            with patch("pipeline.tender_data_pipeline.finish_job_run"):
+                with _patch_auxiliary_runners(fake_runner):
+                    run_auxiliary_scrapers(trigger="manual")
+
+    start_job_run_mock.assert_called_once_with(
+        session,
+        job_type="building_permits",
+        trigger="manual",
+        source="permits",
+    )
+
+
+def test_building_permits_flag_true_exception_recorded_failed_and_reraised_to_loop(
+    monkeypatch,
+) -> None:
+    """The runner's real exception must still land in the existing
+    per-runner try/except in run_auxiliary_scrapers() (results["errors"],
+    loop continues) -- unchanged by telemetry. finish(status="failed")
+    fires first."""
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+
+    def raising_runner():
+        raise RuntimeError("boom: sk_live_should_never_leak")
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._building_permits_telemetry_start",
+        return_value="run-bp-456",
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._building_permits_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners(raising_runner):
+                results = run_auxiliary_scrapers()
+
+    finish_mock.assert_called_once_with(
+        "run-bp-456", status="failed", raw_error="boom: sk_live_should_never_leak"
+    )
+    assert len(results["errors"]) == 1
+    assert "Building permits" in results["errors"][0]
+    assert "boom: sk_live_should_never_leak" in results["errors"][0]
+    # The loop kept going -- every other auxiliary source still ran and
+    # produced its own (fake, empty) result.
+    assert results["Vancouver early signal events"] == {}
+    assert results["Reddit signals"] == {}
+    assert results["News signals"] == {}
+    assert results["LinkedIn signals"] == {}
+
+
+def test_building_permits_flag_true_but_start_failed_still_calls_zero_kwargs(
+    monkeypatch,
+) -> None:
+    """Fail-open: if _building_permits_telemetry_start() itself returns
+    None (its own get_session()/start_job_run() failed), the real work
+    must still run with the exact pre-M3F-1 zero-kwarg call, and no
+    finish call is attempted (there is no run_id to finish)."""
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+    captured_kwargs = {}
+
+    def fake_runner(**kwargs):
+        captured_kwargs.update(kwargs)
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._building_permits_telemetry_start",
+        return_value=None,
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._building_permits_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners(fake_runner):
+                results = run_auxiliary_scrapers()
+
+    assert captured_kwargs == {}
+    finish_mock.assert_not_called()
+    assert results["errors"] == []
+
+
+def test_building_permits_start_get_session_failure_still_runs_once(
+    monkeypatch, caplog
+) -> None:
+    def fake_runner(**kwargs):
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+    with patch(
+        "db.connection.get_session", MagicMock(side_effect=RuntimeError("db down"))
+    ):
+        with _patch_auxiliary_runners(fake_runner):
+            with caplog.at_level("WARNING"):
+                results = run_auxiliary_scrapers()
+
+    assert results["Building permits"] == _BUILDING_PERMITS_SUCCESS_RESULT
+    assert "db down" not in caplog.text
+    assert "Building permits telemetry: failed to start job run tracking" in caplog.text
+
+
+def test_building_permits_finish_get_session_failure_still_runs_once(
+    monkeypatch, caplog
+) -> None:
+    def fake_runner():
+        return dict(_BUILDING_PERMITS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY", "true")
+    with patch(
+        "pipeline.tender_data_pipeline._building_permits_telemetry_start",
+        return_value="run-bp-999",
+    ):
+        with patch(
+            "db.connection.get_session",
+            MagicMock(side_effect=RuntimeError("db down")),
+        ):
+            with _patch_auxiliary_runners(fake_runner):
+                with caplog.at_level("WARNING"):
+                    results = run_auxiliary_scrapers()
+
+    assert results["Building permits"] == _BUILDING_PERMITS_SUCCESS_RESULT
+    assert "db down" not in caplog.text
+    assert (
+        "Building permits telemetry: failed to finish job run tracking" in caplog.text
+    )
