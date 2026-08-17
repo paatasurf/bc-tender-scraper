@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from config.env import env_flag
 from db.import_contract_awards import import_contract_awards
-from scraper.building_permits import DEFAULT_DAILY_LOOKBACK_DAYS, scrape_vancouver_permits
+from scraper.building_permits import (
+    DEFAULT_DAILY_LOOKBACK_DAYS,
+    scrape_vancouver_permits,
+)
 from scraper.commercial import scrape_commercial_tenders
 from scraper.config import OUTPUT_CSV, OUTPUT_JSON
 from scraper.federal import scrape_federal_tenders
@@ -14,7 +17,11 @@ from scraper.merx_architecture import scrape_merx_architecture_tenders
 from scraper.merx_open import scrape_merx_open_tenders
 from scraper.news_signals import scrape_news_signals
 from scraper.reddit_signals import scrape_reddit_signals
-from scraper.tender_merge import load_tenders_from_csv, merge_tenders_by_url, split_tenders_by_source
+from scraper.tender_merge import (
+    load_tenders_from_csv,
+    merge_tenders_by_url,
+    split_tenders_by_source,
+)
 from scraper.utils import create_session, save_tenders
 
 
@@ -106,15 +113,21 @@ def run_building_permits_scraper() -> dict[str, Any]:
 
 
 def run_vancouver_early_signal_events_scraper() -> dict[str, Any]:
-    from scraper.vancouver_early_signal_events import scrape_vancouver_early_signal_events
+    from scraper.vancouver_early_signal_events import (
+        scrape_vancouver_early_signal_events,
+    )
 
     return scrape_vancouver_early_signal_events(persist=True)
 
 
-def run_vancouver_early_signal_enrichment_scraper(*, limit: int | None = None) -> dict[str, Any]:
+def run_vancouver_early_signal_enrichment_scraper(
+    *, limit: int | None = None
+) -> dict[str, Any]:
     from scraper.vancouver_early_signal_enrichment import run_early_signal_enrichment
 
-    return run_early_signal_enrichment(limit=limit, force=False, fetch_details=True, persist=True)
+    return run_early_signal_enrichment(
+        limit=limit, force=False, fetch_details=True, persist=True
+    )
 
 
 def run_reddit_scraper() -> dict[str, Any]:
@@ -122,8 +135,14 @@ def run_reddit_scraper() -> dict[str, Any]:
     return {"signals_saved": len(signals)}
 
 
-def run_news_scraper() -> dict[str, Any]:
-    signals = scrape_news_signals()
+def run_news_scraper(
+    *, on_phase: Callable[[str], None] | None = None
+) -> dict[str, Any]:
+    """(M3F-3) ``on_phase``, if given, is passed straight through to
+    scrape_news_signals() -- see that function's docstring. Defaults to
+    None, a complete no-op -- the manual/n8n /internal/scrape/news
+    endpoint's existing zero-kwarg call is unaffected."""
+    signals = scrape_news_signals(on_phase=on_phase)
     return {"signals_saved": len(signals)}
 
 

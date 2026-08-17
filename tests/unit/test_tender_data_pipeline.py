@@ -952,3 +952,386 @@ def test_early_signal_events_finish_get_session_failure_still_runs_once(
         "Vancouver early signal events telemetry: failed to finish job run tracking"
         in caplog.text
     )
+
+
+# =======================================================================
+# M3F-3: News Signals ops_job_run telemetry (inside run_auxiliary_scrapers(),
+# same location as M3F-1/M3F-2 -- see the M3F audit). Unlike M3F-1/M3F-2,
+# this one supports status="partial_failure" -- News Signals already has
+# real per-feed fault isolation (structurally like arch_company_intelligence),
+# so on_phase genuinely distinguishes a single feed's failure from success.
+# =======================================================================
+
+_NEWS_SIGNALS_SUCCESS_RESULT = {"signals_saved": 12}
+
+_NEWS_SIGNALS_ALL_PHASES = (
+    "business_in_vancouver",
+    "daily_hive_vancouver",
+    "vancouver_sun_business",
+    "cbc_british_columbia",
+)
+
+
+def _patch_auxiliary_runners_for_news_signals(news_signals_runner):
+    """Replaces AUXILIARY_SCRAPER_RUNNERS with a tuple where "News
+    signals" maps to `news_signals_runner` and every other of the 4
+    entries maps to a trivial no-op fake -- so no real scraper/network/DB
+    code from any other auxiliary source ever executes in these tests."""
+    from pipeline.tender_data_pipeline import AUXILIARY_SCRAPER_RUNNERS as _real
+
+    fake_runners = tuple(
+        (
+            label,
+            news_signals_runner if label == "News signals" else _other_auxiliary_runner,
+        )
+        for label, _runner in _real
+    )
+    return patch(
+        "pipeline.tender_data_pipeline.AUXILIARY_SCRAPER_RUNNERS", fake_runners
+    )
+
+
+def test_news_signals_flag_false_calls_with_zero_kwargs(monkeypatch) -> None:
+    monkeypatch.delenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", raising=False)
+    captured_kwargs = {}
+
+    def fake_runner(**kwargs):
+        captured_kwargs.update(kwargs)
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    with _patch_auxiliary_runners_for_news_signals(fake_runner):
+        results = run_auxiliary_scrapers()
+
+    assert captured_kwargs == {}  # no kwargs at all -- byte-equivalent call
+    assert results["News signals"] == _NEWS_SIGNALS_SUCCESS_RESULT
+    assert results["errors"] == []
+
+
+def test_news_signals_flag_false_calls_no_telemetry_writer(monkeypatch) -> None:
+    monkeypatch.delenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", raising=False)
+    start_mock = MagicMock()
+    finish_mock = MagicMock()
+
+    def fake_runner(**_kwargs):
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start", start_mock
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._news_signals_telemetry_finish", finish_mock
+        ):
+            with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                run_auxiliary_scrapers()
+
+    start_mock.assert_not_called()
+    finish_mock.assert_not_called()
+
+
+def test_news_signals_flag_true_success_records_start_4_phases_and_finish_success(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+
+    phases_recorded: list[str] = []
+
+    def fake_phase(run_id, phase):
+        assert run_id == "run-news-123"
+        phases_recorded.append(phase)
+
+    def fake_runner(*, on_phase=None):
+        assert on_phase is not None
+        for phase in _NEWS_SIGNALS_ALL_PHASES:
+            on_phase(phase)
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value="run-news-123",
+    ) as start_mock:
+        with patch(
+            "pipeline.tender_data_pipeline._news_signals_telemetry_phase", fake_phase
+        ):
+            with patch(
+                "pipeline.tender_data_pipeline._news_signals_telemetry_finish",
+                finish_mock,
+            ):
+                with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                    results = run_auxiliary_scrapers(trigger="scheduler")
+
+    start_mock.assert_called_once_with(trigger="scheduler")
+    assert phases_recorded == list(_NEWS_SIGNALS_ALL_PHASES)
+    finish_mock.assert_called_once_with(
+        "run-news-123", status="success", counts={"signals_saved": 12}
+    )
+    assert results["News signals"] == _NEWS_SIGNALS_SUCCESS_RESULT
+    assert results["errors"] == []
+
+
+def test_news_signals_counts_are_only_signals_saved(monkeypatch) -> None:
+    """Per the accepted M3F-3 design, counts must be exactly
+    {"signals_saved": int} -- no per-publisher breakdown, and any
+    unexpected extra key in a future return-dict change must still be
+    dropped."""
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner(*, on_phase=None):
+        result = dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+        result["unexpected_future_field"] = "not-allowlisted"
+        return result
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value="run-news-safe",
+    ):
+        with patch("pipeline.tender_data_pipeline._news_signals_telemetry_phase"):
+            with patch(
+                "pipeline.tender_data_pipeline._news_signals_telemetry_finish",
+                finish_mock,
+            ):
+                with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                    run_auxiliary_scrapers()
+
+    counts = finish_mock.call_args.kwargs["counts"]
+    assert counts == {"signals_saved": 12}
+    assert "unexpected_future_field" not in counts
+
+
+def test_news_signals_trigger_is_not_hardcoded(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner(*, on_phase=None):
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    session = MagicMock()
+    start_job_run_mock = MagicMock(return_value="run-news-manual")
+    with patch("db.connection.get_session", return_value=session):
+        with patch("pipeline.tender_data_pipeline.start_job_run", start_job_run_mock):
+            with patch("pipeline.tender_data_pipeline.finish_job_run"):
+                with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                    run_auxiliary_scrapers(trigger="manual")
+
+    start_job_run_mock.assert_called_once_with(
+        session,
+        job_type="news_signals",
+        trigger="manual",
+        source=None,
+    )
+
+
+def test_news_signals_one_feed_failed_maps_to_partial_failure(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+
+    phases_recorded: list[str] = []
+
+    def fake_phase(run_id, phase):
+        assert run_id == "run-news-partial"
+        phases_recorded.append(phase)
+
+    def fake_runner(*, on_phase=None):
+        on_phase("business_in_vancouver")
+        on_phase("daily_hive_vancouver_failed")  # one feed failed internally
+        on_phase("vancouver_sun_business")
+        on_phase("cbc_british_columbia")
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value="run-news-partial",
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._news_signals_telemetry_phase", fake_phase
+        ):
+            with patch(
+                "pipeline.tender_data_pipeline._news_signals_telemetry_finish",
+                finish_mock,
+            ):
+                with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                    results = run_auxiliary_scrapers()
+
+    assert "daily_hive_vancouver_failed" in phases_recorded
+    finish_call = finish_mock.call_args
+    assert finish_call.args == ("run-news-partial",)
+    assert finish_call.kwargs["status"] == "partial_failure"
+    assert results["errors"] == []  # runner() itself never raised
+
+
+def test_news_signals_multiple_feeds_failed_still_one_partial_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner(*, on_phase=None):
+        on_phase("business_in_vancouver_failed")
+        on_phase("daily_hive_vancouver")
+        on_phase("vancouver_sun_business_failed")
+        on_phase("cbc_british_columbia")
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value="run-news-multi",
+    ):
+        with patch("pipeline.tender_data_pipeline._news_signals_telemetry_phase"):
+            with patch(
+                "pipeline.tender_data_pipeline._news_signals_telemetry_finish",
+                finish_mock,
+            ):
+                with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                    run_auxiliary_scrapers()
+
+    finish_mock.assert_called_once()
+    assert finish_mock.call_args.kwargs["status"] == "partial_failure"
+
+
+def test_news_signals_flag_true_exception_recorded_failed_and_reraised_to_loop(
+    monkeypatch,
+) -> None:
+    """An exception OUTSIDE the per-feed try/except (e.g. a CSV write
+    failure) must still land in the existing per-runner try/except in
+    run_auxiliary_scrapers() (results["errors"], loop continues) --
+    unchanged by telemetry. finish(status="failed") fires first."""
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+
+    def raising_runner(*, on_phase=None):
+        raise RuntimeError("boom: sk_live_should_never_leak")
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value="run-news-456",
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._news_signals_telemetry_finish", finish_mock
+        ):
+            with _patch_auxiliary_runners_for_news_signals(raising_runner):
+                results = run_auxiliary_scrapers()
+
+    finish_mock.assert_called_once_with(
+        "run-news-456", status="failed", raw_error="boom: sk_live_should_never_leak"
+    )
+    assert len(results["errors"]) == 1
+    assert "News signals" in results["errors"][0]
+    assert "boom: sk_live_should_never_leak" in results["errors"][0]
+    assert results["Building permits"] == {}
+    assert results["Vancouver early signal events"] == {}
+    assert results["Reddit signals"] == {}
+    assert results["LinkedIn signals"] == {}
+
+
+def test_news_signals_flag_true_but_start_failed_still_calls_zero_kwargs(
+    monkeypatch,
+) -> None:
+    """Fail-open: if _news_signals_telemetry_start() itself returns None
+    (its own get_session()/start_job_run() failed), the real work must
+    still run with the exact pre-M3F-3 zero-kwarg call, and no finish
+    call is attempted (there is no run_id to finish)."""
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+    captured_kwargs = {}
+
+    def fake_runner(**kwargs):
+        captured_kwargs.update(kwargs)
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value=None,
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._news_signals_telemetry_finish", finish_mock
+        ):
+            with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                results = run_auxiliary_scrapers()
+
+    assert captured_kwargs == {}
+    finish_mock.assert_not_called()
+    assert results["errors"] == []
+
+
+def test_news_signals_start_get_session_failure_still_runs_once(
+    monkeypatch, caplog
+) -> None:
+    def fake_runner(**kwargs):
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+    with patch(
+        "db.connection.get_session", MagicMock(side_effect=RuntimeError("db down"))
+    ):
+        with _patch_auxiliary_runners_for_news_signals(fake_runner):
+            with caplog.at_level("WARNING"):
+                results = run_auxiliary_scrapers()
+
+    assert results["News signals"] == _NEWS_SIGNALS_SUCCESS_RESULT
+    assert "db down" not in caplog.text
+    assert "News signals telemetry: failed to start job run tracking" in caplog.text
+
+
+def test_news_signals_phase_get_session_failure_still_completes_once(
+    monkeypatch, caplog
+) -> None:
+    call_count = {"n": 0}
+    real_get_session = MagicMock()
+
+    def flaky_get_session():
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return real_get_session
+        raise RuntimeError("db down")
+
+    def fake_runner(*, on_phase=None):
+        on_phase("business_in_vancouver")
+        on_phase("daily_hive_vancouver")
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline.start_job_run", return_value="run-news-789"
+    ):
+        with patch("pipeline.tender_data_pipeline.finish_job_run", finish_mock):
+            with patch("db.connection.get_session", flaky_get_session):
+                with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                    with caplog.at_level("WARNING"):
+                        results = run_auxiliary_scrapers()
+
+    assert results["News signals"] == _NEWS_SIGNALS_SUCCESS_RESULT
+    assert "db down" not in caplog.text
+    assert (
+        "News signals telemetry: failed to record phase=business_in_vancouver"
+        in caplog.text
+    )
+    assert (
+        "News signals telemetry: failed to record phase=daily_hive_vancouver"
+        in caplog.text
+    )
+    finish_mock.assert_not_called()
+
+
+def test_news_signals_finish_get_session_failure_still_runs_once(
+    monkeypatch, caplog
+) -> None:
+    def fake_runner(*, on_phase=None):
+        return dict(_NEWS_SIGNALS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY", "true")
+    with patch(
+        "pipeline.tender_data_pipeline._news_signals_telemetry_start",
+        return_value="run-news-999",
+    ):
+        with patch(
+            "db.connection.get_session",
+            MagicMock(side_effect=RuntimeError("db down")),
+        ):
+            with _patch_auxiliary_runners_for_news_signals(fake_runner):
+                with caplog.at_level("WARNING"):
+                    results = run_auxiliary_scrapers()
+
+    assert results["News signals"] == _NEWS_SIGNALS_SUCCESS_RESULT
+    assert "db down" not in caplog.text
+    assert "News signals telemetry: failed to finish job run tracking" in caplog.text
