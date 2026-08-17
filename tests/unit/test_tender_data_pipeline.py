@@ -647,3 +647,308 @@ def test_building_permits_finish_get_session_failure_still_runs_once(
     assert (
         "Building permits telemetry: failed to finish job run tracking" in caplog.text
     )
+
+
+# =======================================================================
+# M3F-2: Vancouver Early Signal Events ops_job_run telemetry (inside
+# run_auxiliary_scrapers(), same location as M3F-1 -- see the M3F audit).
+# =======================================================================
+
+_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT = {
+    "source": "vancouver_open_data",
+    "dataset": "city-projects-package-site",
+    "municipality": "Vancouver",
+    "events_scraped": 40,
+    "rezoning_applications": 15,
+    "development_permit_applications": 25,
+    "events_persisted": 38,
+}
+
+
+def _patch_auxiliary_runners_for_early_signal_events(early_signal_events_runner):
+    """Replaces AUXILIARY_SCRAPER_RUNNERS with a tuple where "Vancouver
+    early signal events" maps to `early_signal_events_runner` and every
+    other of the 4 entries (including "Building permits") maps to a
+    trivial no-op fake -- so no real scraper/network/DB code from any
+    other auxiliary source ever executes in these tests."""
+    from pipeline.tender_data_pipeline import AUXILIARY_SCRAPER_RUNNERS as _real
+
+    fake_runners = tuple(
+        (
+            label,
+            (
+                early_signal_events_runner
+                if label == "Vancouver early signal events"
+                else _other_auxiliary_runner
+            ),
+        )
+        for label, _runner in _real
+    )
+    return patch(
+        "pipeline.tender_data_pipeline.AUXILIARY_SCRAPER_RUNNERS", fake_runners
+    )
+
+
+def test_early_signal_events_flag_false_calls_with_zero_kwargs(monkeypatch) -> None:
+    monkeypatch.delenv(
+        "ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", raising=False
+    )
+    captured_kwargs = {}
+
+    def fake_runner(**kwargs):
+        captured_kwargs.update(kwargs)
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+        results = run_auxiliary_scrapers()
+
+    assert captured_kwargs == {}  # no kwargs at all -- byte-equivalent call
+    assert (
+        results["Vancouver early signal events"] == _EARLY_SIGNAL_EVENTS_SUCCESS_RESULT
+    )
+    assert results["errors"] == []
+
+
+def test_early_signal_events_flag_false_calls_no_telemetry_writer(monkeypatch) -> None:
+    monkeypatch.delenv(
+        "ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", raising=False
+    )
+    start_mock = MagicMock()
+    finish_mock = MagicMock()
+
+    def fake_runner(**_kwargs):
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    with patch(
+        "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_start",
+        start_mock,
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+                run_auxiliary_scrapers()
+
+    start_mock.assert_not_called()
+    finish_mock.assert_not_called()
+
+
+def test_early_signal_events_flag_true_success_records_start_and_finish(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner():
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_start",
+        return_value="run-ese-123",
+    ) as start_mock:
+        with patch(
+            "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+                results = run_auxiliary_scrapers(trigger="scheduler")
+
+    start_mock.assert_called_once_with(trigger="scheduler")
+    finish_mock.assert_called_once_with(
+        "run-ese-123",
+        status="success",
+        counts={
+            "events_scraped": 40,
+            "rezoning_applications": 15,
+            "development_permit_applications": 25,
+            "events_persisted": 38,
+        },
+    )
+    assert (
+        results["Vancouver early signal events"] == _EARLY_SIGNAL_EVENTS_SUCCESS_RESULT
+    )
+    assert results["errors"] == []
+
+
+def test_early_signal_events_counts_exclude_source_dataset_municipality(
+    monkeypatch,
+) -> None:
+    """source, dataset, and municipality must never reach counts -- only
+    the four allowlisted flat ints."""
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner():
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_start",
+        return_value="run-ese-safe",
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+                run_auxiliary_scrapers()
+
+    counts = finish_mock.call_args.kwargs["counts"]
+    assert counts == {
+        "events_scraped": 40,
+        "rezoning_applications": 15,
+        "development_permit_applications": 25,
+        "events_persisted": 38,
+    }
+    assert "source" not in counts
+    assert "dataset" not in counts
+    assert "municipality" not in counts
+
+
+def test_early_signal_events_trigger_is_not_hardcoded(monkeypatch) -> None:
+    """The trigger passed to run_auxiliary_scrapers() must flow straight
+    into start_job_run() -- never a hardcoded "scheduler", honoring
+    whatever run_tender_data_pipeline() actually validated (scheduler or
+    manual)."""
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+
+    def fake_runner():
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    session = MagicMock()
+    start_job_run_mock = MagicMock(return_value="run-ese-manual")
+    with patch("db.connection.get_session", return_value=session):
+        with patch("pipeline.tender_data_pipeline.start_job_run", start_job_run_mock):
+            with patch("pipeline.tender_data_pipeline.finish_job_run"):
+                with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+                    run_auxiliary_scrapers(trigger="manual")
+
+    start_job_run_mock.assert_called_once_with(
+        session,
+        job_type="vancouver_early_signal_events",
+        trigger="manual",
+        source="vancouver_open_data",
+    )
+
+
+def test_early_signal_events_flag_true_exception_recorded_failed_and_reraised_to_loop(
+    monkeypatch,
+) -> None:
+    """The runner's real exception must still land in the existing
+    per-runner try/except in run_auxiliary_scrapers() (results["errors"],
+    loop continues) -- unchanged by telemetry. finish(status="failed")
+    fires first."""
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+
+    def raising_runner():
+        raise RuntimeError("boom: sk_live_should_never_leak")
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_start",
+        return_value="run-ese-456",
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners_for_early_signal_events(raising_runner):
+                results = run_auxiliary_scrapers()
+
+    finish_mock.assert_called_once_with(
+        "run-ese-456", status="failed", raw_error="boom: sk_live_should_never_leak"
+    )
+    assert len(results["errors"]) == 1
+    assert "Vancouver early signal events" in results["errors"][0]
+    assert "boom: sk_live_should_never_leak" in results["errors"][0]
+    # The loop kept going -- every other auxiliary source still ran and
+    # produced its own (fake, empty) result.
+    assert results["Building permits"] == {}
+    assert results["Reddit signals"] == {}
+    assert results["News signals"] == {}
+    assert results["LinkedIn signals"] == {}
+
+
+def test_early_signal_events_flag_true_but_start_failed_still_calls_zero_kwargs(
+    monkeypatch,
+) -> None:
+    """Fail-open: if _vancouver_early_signal_events_telemetry_start()
+    itself returns None (its own get_session()/start_job_run() failed),
+    the real work must still run with the exact pre-M3F-2 zero-kwarg
+    call, and no finish call is attempted (there is no run_id to
+    finish)."""
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+    captured_kwargs = {}
+
+    def fake_runner(**kwargs):
+        captured_kwargs.update(kwargs)
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    finish_mock = MagicMock()
+    with patch(
+        "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_start",
+        return_value=None,
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_finish",
+            finish_mock,
+        ):
+            with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+                results = run_auxiliary_scrapers()
+
+    assert captured_kwargs == {}
+    finish_mock.assert_not_called()
+    assert results["errors"] == []
+
+
+def test_early_signal_events_start_get_session_failure_still_runs_once(
+    monkeypatch, caplog
+) -> None:
+    def fake_runner(**kwargs):
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+    with patch(
+        "db.connection.get_session", MagicMock(side_effect=RuntimeError("db down"))
+    ):
+        with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+            with caplog.at_level("WARNING"):
+                results = run_auxiliary_scrapers()
+
+    assert (
+        results["Vancouver early signal events"] == _EARLY_SIGNAL_EVENTS_SUCCESS_RESULT
+    )
+    assert "db down" not in caplog.text
+    assert (
+        "Vancouver early signal events telemetry: failed to start job run tracking"
+        in caplog.text
+    )
+
+
+def test_early_signal_events_finish_get_session_failure_still_runs_once(
+    monkeypatch, caplog
+) -> None:
+    def fake_runner():
+        return dict(_EARLY_SIGNAL_EVENTS_SUCCESS_RESULT)
+
+    monkeypatch.setenv("ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY", "true")
+    with patch(
+        "pipeline.tender_data_pipeline._vancouver_early_signal_events_telemetry_start",
+        return_value="run-ese-999",
+    ):
+        with patch(
+            "db.connection.get_session",
+            MagicMock(side_effect=RuntimeError("db down")),
+        ):
+            with _patch_auxiliary_runners_for_early_signal_events(fake_runner):
+                with caplog.at_level("WARNING"):
+                    results = run_auxiliary_scrapers()
+
+    assert (
+        results["Vancouver early signal events"] == _EARLY_SIGNAL_EVENTS_SUCCESS_RESULT
+    )
+    assert "db down" not in caplog.text
+    assert (
+        "Vancouver early signal events telemetry: failed to finish job run tracking"
+        in caplog.text
+    )
