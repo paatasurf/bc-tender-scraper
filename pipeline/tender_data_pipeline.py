@@ -9,7 +9,12 @@ from db.import_contract_awards import import_contract_awards
 from db.import_csv import import_all_csvs
 from pipeline.csv_verify import verify_tender_csvs
 from pipeline.db_verify import count_table_rows, verify_database_counts
-from pipeline.job_run import finish_job_run, start_job_run
+from pipeline.job_run import (
+    finish_job_run,
+    heartbeat_job_run,
+    record_job_step,
+    start_job_run,
+)
 from pipeline.job_run_telemetry import call_with_telemetry_session
 from pipeline.run_coordinator import (
     begin_full_scrape,
@@ -280,6 +285,140 @@ def _run_vancouver_early_signal_events_with_telemetry(
         return counts
 
 
+NEWS_SIGNALS_JOB_RUN_TELEMETRY_FLAG = "ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY"
+NEWS_SIGNALS_JOB_RUN_JOB_TYPE = "news_signals"
+_NEWS_SIGNALS_TELEMETRY_LOG_LABEL = "News signals telemetry"
+
+# The one flat int field already present, unchanged, in
+# run_news_scraper()'s own return dict -- see scraper/news_signals.py::
+# scrape_news_signals(). Deliberately kept at exactly this shape per the
+# accepted M3F-3 design: the return shape of scrape_news_signals()/
+# run_news_scraper() is NOT changed by this telemetry work -- no
+# per-publisher counts are added, only the pre-existing signals_saved.
+_NEWS_SIGNALS_COUNT_KEYS = ("signals_saved",)
+
+
+def news_signals_job_run_telemetry_enabled() -> bool:
+    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
+    every other flag in this repo. False by default."""
+    return env_flag(NEWS_SIGNALS_JOB_RUN_TELEMETRY_FLAG, default=False)
+
+
+def _safe_news_signals_counts(result: dict) -> dict[str, int]:
+    """Allowlisted counts only -- exactly signals_saved, nothing else.
+    Protects against the return dict growing an unexpected field in the
+    future."""
+    return {key: result[key] for key in _NEWS_SIGNALS_COUNT_KEYS if key in result}
+
+
+def _news_signals_telemetry_start(*, trigger: str) -> str | None:
+    def _do(session: object) -> str:
+        return start_job_run(
+            session,
+            job_type=NEWS_SIGNALS_JOB_RUN_JOB_TYPE,
+            trigger=trigger,
+            source=None,
+        )
+
+    return call_with_telemetry_session(
+        _do,
+        log_label=_NEWS_SIGNALS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to start job run tracking",
+    )
+
+
+def _news_signals_telemetry_phase(run_id: str, phase: str) -> None:
+    """Records step_completed for a successful feed, or step_failed for a
+    phase name ending in "_failed" (the convention
+    scrape_news_signals()'s own on_phase calls use for its per-feed
+    except-block -- see scraper/news_signals.py). Both event types
+    heartbeat the run the same way."""
+
+    def _do(session: object) -> None:
+        event_type = "step_failed" if phase.endswith("_failed") else "step_completed"
+        record_job_step(session, run_id, event_type=event_type, step=phase)
+        heartbeat_job_run(session, run_id)
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_NEWS_SIGNALS_TELEMETRY_LOG_LABEL,
+        failure_message=f"failed to record phase={phase}",
+    )
+
+
+def _news_signals_telemetry_finish(
+    run_id: str,
+    *,
+    status: str,
+    counts: dict[str, int] | None = None,
+    raw_error: str | None = None,
+) -> None:
+    def _do(session: object) -> None:
+        finish_job_run(
+            session, run_id, status=status, counts=counts, raw_error=raw_error
+        )
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_NEWS_SIGNALS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to finish job run tracking",
+    )
+
+
+def _run_news_signals_with_telemetry(runner, *, trigger: str) -> dict[str, Any]:
+    """(M3F-3) Wraps run_news_scraper() with optional ops_job_run
+    telemetry. Unlike M3F-1/M3F-2, scrape_news_signals() already has real
+    per-feed fault isolation (the existing per-source try/except around
+    each of the 4 NEWS_SOURCES, unchanged by this wrapper) -- structurally
+    the same shape as arch_company_intelligence's steps. This wrapper
+    threads an on_phase callback through run_news_scraper() so a single
+    feed's failure is honestly reported as step_failed, and the overall
+    status becomes "partial_failure" (not "success") whenever any feed
+    failed but the run still completed -- never guessed.
+
+    Fail-open: a telemetry failure at any boundary never affects the
+    scraper's own call or its exception propagation. On a raised
+    exception (outside the per-feed try/except -- e.g. a CSV write
+    failure), status="failed" is recorded and the exception is re-raised
+    UNCHANGED, so the existing per-runner try/except in
+    run_auxiliary_scrapers() below still performs its normal
+    fail-and-continue handling -- this wrapper never swallows or alters
+    what that loop already does.
+    """
+    telemetry_run_id = _news_signals_telemetry_start(trigger=trigger)
+    try:
+        if telemetry_run_id is not None:
+            any_step_failed = False
+
+            def on_phase(phase: str) -> None:
+                nonlocal any_step_failed
+                if phase.endswith("_failed"):
+                    any_step_failed = True
+                _news_signals_telemetry_phase(telemetry_run_id, phase)
+
+            counts = runner(on_phase=on_phase)
+        else:
+            # Telemetry start failed (fail-open): call with the exact
+            # pre-M3F-3 signature -- no on_phase kwarg at all -- so this
+            # path is byte-for-byte the same call as when the flag is off.
+            counts = runner()
+    except Exception as exc:
+        if telemetry_run_id is not None:
+            _news_signals_telemetry_finish(
+                telemetry_run_id, status="failed", raw_error=str(exc)
+            )
+        raise
+    else:
+        if telemetry_run_id is not None:
+            status = "partial_failure" if any_step_failed else "success"
+            _news_signals_telemetry_finish(
+                telemetry_run_id,
+                status=status,
+                counts=_safe_news_signals_counts(counts),
+            )
+        return counts
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -342,9 +481,15 @@ def run_auxiliary_scrapers(*, trigger: str = "scheduler") -> dict[str, Any]:
     only the base scrape (this auxiliary-scraper entry) -- the separate
     manual/n8n-only enrichment step is untouched.
 
-    The remaining three auxiliary scrapers (Reddit signals, News signals,
-    LinkedIn signals) are untouched by this change and remain plain
-    ``runner()`` calls.
+    (M3F-3) The "News signals" runner optionally persists run history the
+    same way, gated by ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY (default
+    false), with the same flag-off byte-equivalence guarantee. Unlike
+    M3F-1/M3F-2, this one can report status="partial_failure" -- see
+    _run_news_signals_with_telemetry()'s own docstring for why.
+
+    The remaining two auxiliary scrapers (Reddit signals, LinkedIn
+    signals) are untouched by this change and remain plain ``runner()``
+    calls.
     """
     print("[Pipeline] Running auxiliary scrapers (permits, signals)...")
     results: dict[str, Any] = {"errors": []}
@@ -363,6 +508,8 @@ def run_auxiliary_scrapers(*, trigger: str = "scheduler") -> dict[str, Any]:
                 counts = _run_vancouver_early_signal_events_with_telemetry(
                     runner, trigger=trigger
                 )
+            elif label == "News signals" and news_signals_job_run_telemetry_enabled():
+                counts = _run_news_signals_with_telemetry(runner, trigger=trigger)
             else:
                 counts = runner()
             if counts.get("skipped"):
