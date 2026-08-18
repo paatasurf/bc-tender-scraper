@@ -390,7 +390,18 @@ class FreshnessSource:
 FRESHNESS_SOURCES: tuple[FreshnessSource, ...] = (
     FreshnessSource("Federal", Tender, "scraped_at", "source", "buyandsell.gc.ca"),
     FreshnessSource("MERX Open", Tender, "scraped_at", "source", "merx.com"),
-    FreshnessSource("MERX Architecture", ArchTender, "scraped_at"),
+    # (M3G) last_seen_at, not scraped_at -- db/tender_presence.py's
+    # upsert_with_presence() unconditionally skips scraped_at on
+    # ON CONFLICT DO UPDATE (it is insert-time only), while last_seen_at
+    # is refreshed on every successful upsert, insert or update. MERX
+    # Architecture is a small, mostly-static "Open & Ongoing" listing --
+    # most days every row already exists and only hits the UPDATE
+    # branch, so scraped_at stops advancing even though the scraper ran
+    # and re-confirmed every row. last_seen_at is the correct "scraper
+    # confirmed this row today" signal; scraped_at's semantics and
+    # db/tender_presence.py itself are unchanged by this fix. See
+    # tests/unit/test_merx_architecture_freshness.py.
+    FreshnessSource("MERX Architecture", ArchTender, "last_seen_at"),
     FreshnessSource("Commercial", CommercialTender, "scraped_at"),
     FreshnessSource("Surrey Permits", Permit, "scraped_at", "source", "surrey"),
     FreshnessSource("Burnaby Permits", Permit, "scraped_at", "source", "burnaby"),
