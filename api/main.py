@@ -601,32 +601,90 @@ def contract_awards_summary() -> dict[str, Any]:
 def contract_awards_top_vendors(
     limit: int = Query(20, ge=1, le=100),
 ) -> dict[str, Any]:
+    """Leaderboard of contract-award vendors.
+
+    Read-side aggregation only -- does not resolve unmatched vendors or
+    person/company ambiguity, and does not alter canonical company
+    records, matching decisions, or historical award data (see
+    ContractAward.company_id / match_method / match_confidence, written
+    elsewhere by db/import_contract_awards.py).
+
+    Matched awards (company_id IS NOT NULL) are grouped by company_id and
+    joined to Company so the same real company is one row regardless of
+    how many raw winner_company spellings it has in the source data.
+    Unmatched awards (company_id IS NULL) remain their own rows, grouped
+    by the raw winner_company string, with matched=false -- never
+    blended into a matched company's totals. Every item still carries
+    vendor/award_count/total_value/company_id/matched (the pre-existing
+    contract); company_name is added only for matched rows.
+    """
     session = get_session()
     try:
-        rows = session.execute(
+        matched_rows = session.execute(
+            select(
+                ContractAward.company_id,
+                func.min(ContractAward.winner_company).label("vendor"),
+                func.count(ContractAward.id).label("award_count"),
+                func.coalesce(func.sum(ContractAward.award_value), 0.0).label(
+                    "total_value"
+                ),
+                Company.name,
+                Company.display_name,
+            )
+            .join(Company, Company.id == ContractAward.company_id)
+            .where(ContractAward.company_id.isnot(None))
+            .group_by(ContractAward.company_id, Company.name, Company.display_name)
+        ).all()
+
+        unmatched_rows = session.execute(
             select(
                 ContractAward.winner_company,
                 func.count(ContractAward.id).label("award_count"),
                 func.coalesce(func.sum(ContractAward.award_value), 0.0).label(
                     "total_value"
                 ),
-                func.max(ContractAward.company_id).label("company_id"),
             )
+            .where(ContractAward.company_id.is_(None))
             .group_by(ContractAward.winner_company)
-            .order_by(func.coalesce(func.sum(ContractAward.award_value), 0.0).desc())
-            .limit(limit)
         ).all()
 
-        data = [
-            {
-                "vendor": row.winner_company,
-                "award_count": row.award_count,
-                "total_value": float(row.total_value or 0),
-                "company_id": row.company_id,
-                "matched": row.company_id is not None,
-            }
-            for row in rows
-        ]
+        data: list[dict[str, Any]] = []
+        for row in matched_rows:
+            clean_name = (row.display_name or "").strip()
+            company_name = clean_name if clean_name else (row.name or "")
+            data.append(
+                {
+                    "vendor": row.vendor,
+                    "award_count": row.award_count,
+                    "total_value": float(row.total_value or 0),
+                    "company_id": row.company_id,
+                    "matched": True,
+                    "company_name": company_name,
+                }
+            )
+        for row in unmatched_rows:
+            data.append(
+                {
+                    "vendor": row.winner_company,
+                    "award_count": row.award_count,
+                    "total_value": float(row.total_value or 0),
+                    "company_id": None,
+                    "matched": False,
+                }
+            )
+
+        # Deterministic ordering: total_value desc, award_count desc, then
+        # a stable name/id tie-breaker -- never dependent on DB row order.
+        data.sort(
+            key=lambda item: (
+                -item["total_value"],
+                -item["award_count"],
+                item.get("company_name") or item.get("vendor") or "",
+                item.get("company_id") or 0,
+            )
+        )
+        data = data[:limit]
+
         return {"total": len(data), "limit": limit, "data": data}
     finally:
         session.close()
