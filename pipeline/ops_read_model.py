@@ -388,21 +388,36 @@ class FreshnessSource:
 
 
 FRESHNESS_SOURCES: tuple[FreshnessSource, ...] = (
-    FreshnessSource("Federal", Tender, "scraped_at", "source", "buyandsell.gc.ca"),
-    FreshnessSource("MERX Open", Tender, "scraped_at", "source", "merx.com"),
-    # (M3G) last_seen_at, not scraped_at -- db/tender_presence.py's
-    # upsert_with_presence() unconditionally skips scraped_at on
-    # ON CONFLICT DO UPDATE (it is insert-time only), while last_seen_at
-    # is refreshed on every successful upsert, insert or update. MERX
-    # Architecture is a small, mostly-static "Open & Ongoing" listing --
-    # most days every row already exists and only hits the UPDATE
-    # branch, so scraped_at stops advancing even though the scraper ran
-    # and re-confirmed every row. last_seen_at is the correct "scraper
-    # confirmed this row today" signal; scraped_at's semantics and
-    # db/tender_presence.py itself are unchanged by this fix. See
-    # tests/unit/test_merx_architecture_freshness.py.
+    # (M3G/M3H) last_seen_at, not scraped_at, for every source backed by
+    # db/tender_presence.py::upsert_with_presence() (Tender -- both
+    # Federal and MERX Open share this table via db/import_csv.py's
+    # import_tenders() -- CommercialTender, and ArchTender). That
+    # function unconditionally skips scraped_at on ON CONFLICT DO
+    # UPDATE (it is insert-time only), while last_seen_at is refreshed
+    # on every successful upsert, insert or update. A source whose scrape
+    # mostly re-confirms already-known rows on a given day (few or zero
+    # brand-new URLs) will have its MAX(scraped_at) stop advancing even
+    # though the scraper ran and every row was re-confirmed -- this was
+    # first caught for MERX Architecture (a small, mostly-static
+    # "Open & Ongoing" listing) and fixed there in PR #135; the same
+    # code path and the same latent risk apply identically to Federal,
+    # MERX Open, and Commercial, so they get the same fix here.
+    # last_seen_at is the correct "scraper confirmed this row today"
+    # signal; scraped_at's value, its insert-time semantics, and
+    # db/tender_presence.py itself are all unchanged by this fix -- this
+    # is a read-model-only change. See
+    # tests/unit/test_merx_architecture_freshness.py and
+    # tests/unit/test_federal_merx_open_commercial_freshness.py.
+    #
+    # pipeline/data_coverage_audit.py computes its own, separate
+    # scraped_at-based freshness reading for these same tables and is
+    # NOT updated by this change -- a deliberate, explicit follow-up,
+    # not an oversight (see that module for its own MAX(scraped_at)
+    # queries, untouched here).
+    FreshnessSource("Federal", Tender, "last_seen_at", "source", "buyandsell.gc.ca"),
+    FreshnessSource("MERX Open", Tender, "last_seen_at", "source", "merx.com"),
     FreshnessSource("MERX Architecture", ArchTender, "last_seen_at"),
-    FreshnessSource("Commercial", CommercialTender, "scraped_at"),
+    FreshnessSource("Commercial", CommercialTender, "last_seen_at"),
     FreshnessSource("Surrey Permits", Permit, "scraped_at", "source", "surrey"),
     FreshnessSource("Burnaby Permits", Permit, "scraped_at", "source", "burnaby"),
     FreshnessSource("Vancouver Permits", Permit, "scraped_at", "source", "vancouver"),
