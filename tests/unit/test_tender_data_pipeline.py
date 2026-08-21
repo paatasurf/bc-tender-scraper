@@ -20,10 +20,12 @@ import pytest
 
 from pipeline import run_coordinator as coordinator
 from pipeline import run_coordinator_legacy
+from pipeline import tender_data_pipeline as tender_data_pipeline_module
 from pipeline.run_coordinator import PipelineOrderError, assert_import_not_before_scrape
 from pipeline.tender_data_pipeline import (
     run_auxiliary_scrapers,
     run_tender_data_pipeline,
+    run_tender_scrapers,
 )
 
 
@@ -70,6 +72,265 @@ def test_mark_last_scrape_step_sets_finished_timestamp(coordinator_state: Path) 
     state = coordinator.get_run_state()
     assert state is not None
     assert state.tender_scrape_finished_at is not None
+
+
+# --- Stage 1: run_tender_scrapers() structured per-source result ----------
+#
+# (Resilience design, Stage 1 only) run_tender_scrapers() no longer raises
+# on a scraper-level failure -- it returns a structured per-source result
+# instead. Stage 1 does not change what run_tender_data_pipeline() does
+# with that result: any scraper error is still fatal to the whole run
+# (see test_tender_data_pipeline_fail_fast_preserved_on_scraper_error
+# below). Stage 2/3/4 of the resilience design (partial import, changing
+# which downstream steps run, telemetry) are NOT implemented here.
+
+
+def _fake_runner(counts: dict):
+    def _runner():
+        return dict(counts)
+
+    return _runner
+
+
+def _failing_runner(message: str):
+    def _runner():
+        raise RuntimeError(message)
+
+    return _runner
+
+
+def test_run_tender_scrapers_one_fails_others_succeed(
+    coordinator_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        tender_data_pipeline_module,
+        "TENDER_SCRAPER_RUNNERS",
+        (
+            (
+                "scrape-federal",
+                "Federal + MERX BC tenders",
+                _fake_runner({"tenders_saved": 5}),
+            ),
+            (
+                "scrape-merx-arch",
+                "MERX architecture tenders",
+                _failing_runner("arch boom"),
+            ),
+            (
+                "scrape-commercial",
+                "Commercial tenders",
+                _fake_runner({"tenders_saved": 3}),
+            ),
+        ),
+    )
+    coordinator.begin_run("run-stage1-a")
+
+    result = run_tender_scrapers("run-stage1-a")
+
+    assert result["status"] == "partial_failure"
+    assert result["steps"]["scrape-federal"]["status"] == "success"
+    assert result["steps"]["scrape-federal"]["counts"] == {"tenders_saved": 5}
+    assert result["steps"]["scrape-federal"]["error"] is None
+    assert result["steps"]["scrape-merx-arch"]["status"] == "failed"
+    assert result["steps"]["scrape-merx-arch"]["counts"] is None
+    assert "arch boom" in result["steps"]["scrape-merx-arch"]["error"]
+    assert result["steps"]["scrape-commercial"]["status"] == "success"
+    assert result["errors"] == ["MERX architecture tenders: arch boom"]
+    # Federal itself succeeded (no merx_error key in its counts) -- MERX
+    # Open was attempted and succeeded.
+    assert result["merx_open_status"] == "success"
+
+
+def test_run_tender_scrapers_all_fail(
+    coordinator_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        tender_data_pipeline_module,
+        "TENDER_SCRAPER_RUNNERS",
+        (
+            (
+                "scrape-federal",
+                "Federal + MERX BC tenders",
+                _failing_runner("federal boom"),
+            ),
+            (
+                "scrape-merx-arch",
+                "MERX architecture tenders",
+                _failing_runner("arch boom"),
+            ),
+            (
+                "scrape-commercial",
+                "Commercial tenders",
+                _failing_runner("commercial boom"),
+            ),
+        ),
+    )
+    coordinator.begin_run("run-stage1-b")
+
+    result = run_tender_scrapers("run-stage1-b")
+
+    assert result["status"] == "failed"
+    assert all(s["status"] == "failed" for s in result["steps"].values())
+    assert len(result["errors"]) == 3
+    # Federal itself failed -- MERX Open's own call was never reached.
+    assert result["merx_open_status"] == "not_attempted"
+
+
+def test_merx_open_not_attempted_when_federal_scrape_itself_fails(
+    coordinator_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proof: MERX Open is "not_attempted", not "failed", when Federal's
+    own scrape raises before ever reaching the MERX Open call inside
+    run_federal_scraper() (scraper/runners.py)."""
+    monkeypatch.setattr(
+        tender_data_pipeline_module,
+        "TENDER_SCRAPER_RUNNERS",
+        (
+            (
+                "scrape-federal",
+                "Federal + MERX BC tenders",
+                _failing_runner("federal boom"),
+            ),
+            (
+                "scrape-merx-arch",
+                "MERX architecture tenders",
+                _fake_runner({"tenders_saved": 1}),
+            ),
+            (
+                "scrape-commercial",
+                "Commercial tenders",
+                _fake_runner({"tenders_saved": 1}),
+            ),
+        ),
+    )
+    coordinator.begin_run("run-stage1-c")
+
+    result = run_tender_scrapers("run-stage1-c")
+
+    assert result["steps"]["scrape-federal"]["status"] == "failed"
+    assert result["merx_open_status"] == "not_attempted"
+
+
+def test_merx_open_failed_distinct_from_not_attempted(
+    coordinator_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proof: MERX Open is "failed", not "not_attempted", when Federal's
+    own scrape succeeds but scraper.runners._scrape_merx_open_or_empty()
+    caught its own error and returned merx_error -- run_federal_scraper()
+    does not raise in that case (pre-existing, unchanged behavior), so
+    the "scrape-federal" step itself is still "success"."""
+    monkeypatch.setattr(
+        tender_data_pipeline_module,
+        "TENDER_SCRAPER_RUNNERS",
+        (
+            (
+                "scrape-federal",
+                "Federal + MERX BC tenders",
+                _fake_runner(
+                    {
+                        "tenders_saved": 9,
+                        "federal_saved": 9,
+                        "merx_saved": 0,
+                        "merx_error": "500 Server Error",
+                    }
+                ),
+            ),
+            (
+                "scrape-merx-arch",
+                "MERX architecture tenders",
+                _fake_runner({"tenders_saved": 1}),
+            ),
+            (
+                "scrape-commercial",
+                "Commercial tenders",
+                _fake_runner({"tenders_saved": 1}),
+            ),
+        ),
+    )
+    coordinator.begin_run("run-stage1-d")
+
+    result = run_tender_scrapers("run-stage1-d")
+
+    assert result["steps"]["scrape-federal"]["status"] == "success"
+    assert result["merx_open_status"] == "failed"
+    # merx_error embedded in Federal's own counts does not count as a
+    # runner-level error -- this is pre-existing behavior, unchanged by
+    # Stage 1.
+    assert result["status"] == "success"
+    assert result["errors"] == []
+
+
+def test_tender_data_pipeline_fail_fast_preserved_on_scraper_error(
+    coordinator_state: Path,
+) -> None:
+    """Stage 1 requirement: even though run_tender_scrapers() no longer
+    raises, run_tender_data_pipeline() must still treat any scraper error
+    as fatal -- abort before auxiliary scrapers/CSV verification/import,
+    exactly as the pre-Stage-1 behavior. Stage 2 (letting the
+    independently-successful MERX Architecture/Commercial steps still
+    get imported) is explicitly not implemented here."""
+    phase_log: list[str] = []
+
+    def _fake_tender_scrapers(run_id: str) -> dict:
+        phase_log.append("tender_scrape")
+        return {
+            "scrape_started_at": "2026-07-01T10:00:00+00:00",
+            "scrape_finished_at": "2026-07-01T10:05:00+00:00",
+            "status": "partial_failure",
+            "steps": {
+                "scrape-federal": {
+                    "status": "failed",
+                    "counts": None,
+                    "error": "boom",
+                },
+                "scrape-merx-arch": {
+                    "status": "success",
+                    "counts": {"tenders_saved": 1},
+                    "error": None,
+                },
+                "scrape-commercial": {
+                    "status": "success",
+                    "counts": {"tenders_saved": 1},
+                    "error": None,
+                },
+            },
+            "merx_open_status": "not_attempted",
+            "errors": ["Federal + MERX BC tenders: boom"],
+        }
+
+    def _fake_auxiliary(*, trigger: str) -> dict:
+        phase_log.append("auxiliary_scrape")
+        return {}
+
+    def _fake_csv_verify(**kwargs) -> dict:
+        phase_log.append("csv_verify")
+        return {}
+
+    with patch(
+        "pipeline.tender_data_pipeline.run_tender_scrapers",
+        side_effect=_fake_tender_scrapers,
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline.run_auxiliary_scrapers",
+            side_effect=_fake_auxiliary,
+        ) as auxiliary_mock:
+            with patch(
+                "pipeline.tender_data_pipeline.verify_tender_csvs",
+                side_effect=_fake_csv_verify,
+            ) as verify_mock:
+                with patch(
+                    "pipeline.tender_data_pipeline.import_all_csvs"
+                ) as import_mock:
+                    with pytest.raises(
+                        RuntimeError,
+                        match=r"Tender scrape phase failed: Federal \+ MERX BC tenders: boom",
+                    ):
+                        run_tender_data_pipeline(run_id="stage1-fail-fast")
+
+    assert phase_log == ["tender_scrape"]
+    auxiliary_mock.assert_not_called()
+    verify_mock.assert_not_called()
+    import_mock.assert_not_called()
 
 
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:
