@@ -424,14 +424,39 @@ def _utc_now() -> datetime:
 
 
 def run_tender_scrapers(run_id: str) -> dict[str, Any]:
-    """Run all tender scrapers sequentially and mark coordinator steps."""
+    """Run all tender scrapers sequentially and mark coordinator steps.
+
+    (Stage 1 of the partial-failure resilience design -- observability
+    only.) Returns a structured per-source result instead of raising
+    when a scraper fails. This function itself never raises on a
+    scraper-level failure; run_tender_data_pipeline() (its only
+    production caller) decides what to do with the result, and for now
+    still treats ANY scraper error as fatal to the whole run -- external
+    pipeline behavior (fail-fast, no partial import) is unchanged by
+    this refactor. Stage 2 (letting independently-successful scrapers,
+    e.g. MERX Architecture or Commercial, still get imported the same
+    day despite a Federal failure) is explicitly NOT implemented here --
+    see the resilience design proposal for the full staged plan.
+
+    The loop's order and each scraper's own try/except are unchanged
+    from before this refactor.
+
+    Return shape:
+        {
+            "scrape_started_at": iso str,
+            "scrape_finished_at": iso str,
+            "status": "success" | "partial_failure" | "failed",
+            "steps": {step: {"status": "success"|"failed",
+                              "counts": dict | None, "error": str | None}},
+            "merx_open_status": "success" | "failed" | "not_attempted",
+            "errors": [str, ...],
+        }
+    """
     begin_tender_scrape(run_id)
     scrape_started_at = _utc_now()
-    results: dict[str, Any] = {
-        "scrape_started_at": scrape_started_at.isoformat(),
-        "steps": {},
-    }
+    steps: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
+    merx_open_status = "not_attempted"
 
     print("[Pipeline] Phase 1/4: Tender scrapers (sequential)")
     for step, label, runner in TENDER_SCRAPER_RUNNERS:
@@ -443,18 +468,40 @@ def run_tender_scrapers(run_id: str) -> dict[str, Any]:
             else:
                 print(f"[Pipeline] {label} complete: {counts}")
             mark_tender_scrape_step(run_id, step)
-            results["steps"][step] = counts
+            steps[step] = {"status": "success", "counts": counts, "error": None}
+            if step == "scrape-federal":
+                # run_federal_scraper() (scraper/runners.py) only reaches
+                # its MERX Open call after its own Federal scrape
+                # succeeds -- if we get here, MERX Open was at least
+                # attempted. "merx_error" in counts (set by
+                # _scrape_merx_open_or_empty()) means MERX Open was
+                # attempted and failed, not that it was skipped.
+                merx_open_status = "failed" if counts.get("merx_error") else "success"
         except Exception as exc:
             errors.append(f"{label}: {exc}")
             print(f"[Pipeline] {label} failed: {exc}")
+            steps[step] = {"status": "failed", "counts": None, "error": str(exc)}
+            # run_federal_scraper() raises here only if its own Federal
+            # scrape failed, before ever reaching the MERX Open call --
+            # MERX Open was never attempted this run (merx_open_status
+            # keeps its "not_attempted" default from above).
 
-    if errors:
-        finish_run(run_id, success=False, error="; ".join(errors))
-        raise RuntimeError("Tender scrape phase failed: " + "; ".join(errors))
+    if not errors:
+        complete_tender_scrape(run_id)
+        status = "success"
+    elif len(errors) == len(TENDER_SCRAPER_RUNNERS):
+        status = "failed"
+    else:
+        status = "partial_failure"
 
-    complete_tender_scrape(run_id)
-    results["scrape_finished_at"] = _utc_now().isoformat()
-    return results
+    return {
+        "scrape_started_at": scrape_started_at.isoformat(),
+        "scrape_finished_at": _utc_now().isoformat(),
+        "status": status,
+        "steps": steps,
+        "merx_open_status": merx_open_status,
+        "errors": errors,
+    }
 
 
 def run_auxiliary_scrapers(*, trigger: str = "scheduler") -> dict[str, Any]:
@@ -569,6 +616,21 @@ def run_tender_data_pipeline(
     try:
         tender_scrape = run_tender_scrapers(actual_run_id)
         summary["phases"]["tender_scrape"] = tender_scrape
+
+        # (Stage 1) run_tender_scrapers() no longer raises on a scraper
+        # failure -- it returns a structured per-source result instead.
+        # External pipeline behavior is unchanged for now: any scraper
+        # error still aborts the whole run before auxiliary scrapers,
+        # CSV verification, and import, exactly as before this refactor
+        # (same RuntimeError message format, caught by this function's
+        # own except block below). Letting independently-successful
+        # scrapers still get imported despite another one's failure is
+        # Stage 2 of the resilience design, not implemented here.
+        scrape_errors = tender_scrape.get("errors", [])
+        if scrape_errors:
+            raise RuntimeError(
+                "Tender scrape phase failed: " + "; ".join(scrape_errors)
+            )
 
         auxiliary = run_auxiliary_scrapers(trigger=trigger)
         summary["phases"]["auxiliary_scrape"] = auxiliary
