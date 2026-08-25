@@ -46,6 +46,26 @@ TENDER_SCRAPER_RUNNERS: tuple[tuple[str, str, Any], ...] = (
     ("scrape-commercial", "Commercial tenders", run_commercial_scraper),
 )
 
+# (Stage 2) Maps each TENDER_SCRAPER_RUNNERS step key to the artifact
+# name pipeline.csv_verify.TENDER_CSV_ARTIFACTS uses, and to the import
+# key db.import_csv.import_all_csvs()/pipeline.db_verify.verify_database_counts()
+# use for the same source. One mapping, defined once, reused everywhere
+# a step needs to be translated to "which CSV/import does this source
+# own" -- a wrong entry here would silently verify/import the wrong
+# artifact, so lookups use plain [] (never .get()): an unmapped step
+# must fail loudly, not skip silently. Covered by its own trivial
+# dict-equality test.
+TENDER_SCRAPE_STEP_TO_ARTIFACT: dict[str, str] = {
+    "scrape-federal": "federal_merx_tenders",
+    "scrape-merx-arch": "architecture_tenders",
+    "scrape-commercial": "commercial_tenders",
+}
+TENDER_SCRAPE_STEP_TO_IMPORT_KEY: dict[str, str] = {
+    "scrape-federal": "tenders",
+    "scrape-merx-arch": "arch_tenders",
+    "scrape-commercial": "commercial_tenders",
+}
+
 AUXILIARY_SCRAPER_RUNNERS: tuple[tuple[str, Any], ...] = (
     ("Building permits", run_building_permits_scraper),
     ("Vancouver early signal events", run_vancouver_early_signal_events_scraper),
@@ -426,17 +446,17 @@ def _utc_now() -> datetime:
 def run_tender_scrapers(run_id: str) -> dict[str, Any]:
     """Run all tender scrapers sequentially and mark coordinator steps.
 
-    (Stage 1 of the partial-failure resilience design -- observability
-    only.) Returns a structured per-source result instead of raising
-    when a scraper fails. This function itself never raises on a
-    scraper-level failure; run_tender_data_pipeline() (its only
-    production caller) decides what to do with the result, and for now
-    still treats ANY scraper error as fatal to the whole run -- external
-    pipeline behavior (fail-fast, no partial import) is unchanged by
-    this refactor. Stage 2 (letting independently-successful scrapers,
-    e.g. MERX Architecture or Commercial, still get imported the same
-    day despite a Federal failure) is explicitly NOT implemented here --
-    see the resilience design proposal for the full staged plan.
+    (Stage 1 of the partial-failure resilience design.) Returns a
+    structured per-source result instead of raising when a scraper
+    fails. This function itself never raises on a scraper-level failure
+    -- run_tender_data_pipeline() (its only production caller) decides
+    what to do with the result. As of Stage 2, that caller lets an
+    independently-successful scraper's CSV still get imported the same
+    day despite another scraper's failure (see
+    TENDER_SCRAPE_STEP_TO_ARTIFACT/TENDER_SCRAPE_STEP_TO_IMPORT_KEY and
+    run_tender_data_pipeline()'s own docstring); this function's own
+    per-scraper try/except loop is unchanged by Stage 2 -- it already
+    produced everything the caller needs.
 
     The loop's order and each scraper's own try/except are unchanged
     from before this refactor.
@@ -617,20 +637,37 @@ def run_tender_data_pipeline(
         tender_scrape = run_tender_scrapers(actual_run_id)
         summary["phases"]["tender_scrape"] = tender_scrape
 
-        # (Stage 1) run_tender_scrapers() no longer raises on a scraper
-        # failure -- it returns a structured per-source result instead.
-        # External pipeline behavior is unchanged for now: any scraper
-        # error still aborts the whole run before auxiliary scrapers,
-        # CSV verification, and import, exactly as before this refactor
-        # (same RuntimeError message format, caught by this function's
-        # own except block below). Letting independently-successful
-        # scrapers still get imported despite another one's failure is
-        # Stage 2 of the resilience design, not implemented here.
+        # (Stage 2) Only a total scrape failure -- tender_scrape["status"]
+        # == "failed", meaning every TENDER_SCRAPER_RUNNERS step failed --
+        # still aborts the whole run before auxiliary scrapers/CSV
+        # verification/import, exactly as Stage 1's fail-fast behavior
+        # (same RuntimeError type and message text). A "partial_failure"
+        # (some but not all steps succeeded) now proceeds: only the
+        # failed/not_attempted source's own CSV/import is skipped, every
+        # independently-successful source is verified and imported
+        # normally, and auxiliary scrapers still run. This function no
+        # longer raising on partial_failure is also what lets
+        # pipeline/run.py's ai_scoring/company_intelligence/
+        # arch_company_intelligence steps continue afterward -- that
+        # file's own try/except around this function only triggers on a
+        # raise, so it needs no change of its own.
         scrape_errors = tender_scrape.get("errors", [])
-        if scrape_errors:
+        if tender_scrape.get("status") == "failed":
             raise RuntimeError(
                 "Tender scrape phase failed: " + "; ".join(scrape_errors)
             )
+
+        # Per-source skip sets, derived only from this run's own recorded
+        # step status -- never a blanket "skip everything because
+        # something failed". A step key missing from the mapping raises
+        # KeyError immediately (fail loud), never silently skips the
+        # wrong artifact.
+        skip_artifacts: set[str] = set()
+        skip_import_keys: set[str] = set()
+        for step, step_result in tender_scrape.get("steps", {}).items():
+            if step_result.get("status") != "success":
+                skip_artifacts.add(TENDER_SCRAPE_STEP_TO_ARTIFACT[step])
+                skip_import_keys.add(TENDER_SCRAPE_STEP_TO_IMPORT_KEY[step])
 
         auxiliary = run_auxiliary_scrapers(trigger=trigger)
         summary["phases"]["auxiliary_scrape"] = auxiliary
@@ -638,7 +675,9 @@ def run_tender_data_pipeline(
 
         scrape_started = datetime.fromisoformat(tender_scrape["scrape_started_at"])
         print("[Pipeline] Phase 2/4: Verify tender CSV artifacts")
-        csv_results = verify_tender_csvs(not_before=scrape_started)
+        csv_results = verify_tender_csvs(
+            not_before=scrape_started, skip=frozenset(skip_artifacts)
+        )
         summary["phases"]["csv_verification"] = csv_results
 
         print("[Pipeline] Phase 3/4: Import all CSVs into PostgreSQL")
@@ -647,7 +686,7 @@ def run_tender_data_pipeline(
         try:
             previous_counts = count_table_rows(session)
             begin_import(actual_run_id)
-            import_counts = import_all_csvs(session)
+            import_counts = import_all_csvs(session, skip=frozenset(skip_import_keys))
             awards_imported = import_contract_awards(session)
             import_counts["contract_awards"] = awards_imported
             refresh_company_award_stats(session)
@@ -659,14 +698,27 @@ def run_tender_data_pipeline(
                 session,
                 import_counts,
                 previous_counts=previous_counts,
+                skip_import_check=frozenset(skip_import_keys),
             )
             summary["phases"]["db_verification"] = db_results
         finally:
             session.close()
 
+        # (Stage 2) finish_run()'s own success flag stays a plain boolean
+        # at the coordinator level -- the coordinator itself has no
+        # partial-state concept and is explicitly out of scope. True
+        # whenever this run produced usable, imported data, whether every
+        # source succeeded or only some did; the fine-grained signal
+        # lives in summary["status"] below, not in the coordinator.
         finish_run(actual_run_id, success=True)
-        summary["status"] = "success"
-        print("[Pipeline] Tender data pipeline finished successfully")
+        summary["status"] = tender_scrape.get("status", "success")
+        if summary["status"] == "partial_failure":
+            print(
+                "[Pipeline] Tender data pipeline finished with partial_failure: "
+                + "; ".join(scrape_errors)
+            )
+        else:
+            print("[Pipeline] Tender data pipeline finished successfully")
         return summary
     except Exception as exc:
         finish_run(actual_run_id, success=False, error=str(exc))

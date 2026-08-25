@@ -13,8 +13,12 @@ class DbVerificationError(RuntimeError):
 def count_table_rows(session: Session) -> dict[str, int]:
     return {
         "tenders": session.scalar(select(func.count()).select_from(Tender)) or 0,
-        "commercial_tenders": session.scalar(select(func.count()).select_from(CommercialTender)) or 0,
-        "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender)) or 0,
+        "commercial_tenders": session.scalar(
+            select(func.count()).select_from(CommercialTender)
+        )
+        or 0,
+        "arch_tenders": session.scalar(select(func.count()).select_from(ArchTender))
+        or 0,
     }
 
 
@@ -23,15 +27,30 @@ def verify_database_counts(
     import_counts: dict[str, int],
     *,
     previous_counts: dict[str, int] | None = None,
+    skip_import_check: frozenset[str] = frozenset(),
 ) -> dict[str, int | str]:
-    """Verify DB row counts after import; import batch must be > 0 for tender tables."""
+    """Verify DB row counts after import; import batch must be > 0 for
+    tender tables, UNLESS that table's key is in skip_import_check.
+
+    (Stage 2) skip_import_check names keys ("tenders", "arch_tenders",
+    "commercial_tenders") whose owning scraper step did not succeed this
+    run, so import_all_csvs() deliberately imported 0 rows for it -- that
+    is expected and correct, not a failure. The database-total (>0) and
+    count-never-decreased checks below are NEVER exempted for any key,
+    regardless of skip_import_check -- those are table-integrity
+    invariants independent of whether this run touched that table, and
+    must still catch a genuinely broken/empty/shrinking table even on a
+    partial-failure day. Defaults to an empty set, reproducing today's
+    exact "every table must have gotten new rows this run" behavior for
+    any caller that doesn't pass it.
+    """
     db_counts = count_table_rows(session)
     errors: list[str] = []
 
     for key in ("tenders", "commercial_tenders", "arch_tenders"):
         imported = import_counts.get(key, 0)
         total = db_counts.get(key, 0)
-        if imported <= 0:
+        if key not in skip_import_check and imported <= 0:
             errors.append(f"{key}: import batch reported {imported} rows")
         if total <= 0:
             errors.append(f"{key}: database total is {total}")

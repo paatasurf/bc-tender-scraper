@@ -8,7 +8,15 @@ from sqlalchemy.orm import Session
 
 from db.constants import BATCH_SIZE, COMMERCIAL_BATCH_SIZE
 from db.closing_at_sync import sync_closing_at_from_deadline
-from db.models import ArchTender, CommercialTender, Job, LinkedInSignal, NewsSignal, RedditSignal, Tender
+from db.models import (
+    ArchTender,
+    CommercialTender,
+    Job,
+    LinkedInSignal,
+    NewsSignal,
+    RedditSignal,
+    Tender,
+)
 from db.permit_import import upsert_city_permits
 from db.tender_presence import (
     ARCH_CONTENT_COLUMNS,
@@ -28,6 +36,7 @@ from scraper.config import (
     OUTPUT_CSV,
     REDDIT_SIGNALS_CSV,
 )
+
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
@@ -64,7 +73,9 @@ def _upsert_batch(
             for col in table.columns
             if col.name not in skip_on_update
         }
-        stmt = stmt.on_conflict_do_update(index_elements=[conflict_column], set_=update_cols)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[conflict_column], set_=update_cols
+        )
         session.execute(stmt)
         session.commit()
         imported += len(batch)
@@ -147,7 +158,9 @@ def import_permits(session: Session, path: Path | None = None) -> int:
                 }
             )
 
-    imported = upsert_city_permits(session, rows, source="vancouver", full_refresh=False)
+    imported = upsert_city_permits(
+        session, rows, source="vancouver", full_refresh=False
+    )
     print(f"[Import] Permits: {imported} rows (upsert)")
     return imported
 
@@ -327,15 +340,50 @@ def import_arch_tenders(session: Session, path: Path | None = None) -> int:
     return count
 
 
-def import_all_csvs(session: Session) -> dict[str, int]:
+def import_all_csvs(
+    session: Session, *, skip: frozenset[str] = frozenset()
+) -> dict[str, int | bool]:
+    """
+    (Stage 2) ``skip`` names import keys (matching this function's own
+    return-dict keys: "tenders", "arch_tenders", "commercial_tenders")
+    whose owning scraper step did not succeed this run. A skipped
+    source's import_X() function is never called at all -- its CSV is
+    never read, its table's ON CONFLICT upsert never runs, and its rows'
+    missing_from_source_count/last_seen_at are left completely
+    untouched. The skip is recorded explicitly
+    (result[f"{key}_skipped"] = True) rather than silently omitted.
+    Defaults to an empty set, which reproduces today's exact
+    "import everything" behavior for any caller that doesn't pass it.
+
+    import_tenders()/import_arch_tenders()/import_commercial_tenders()
+    themselves are untouched by this change -- the skip decision is made
+    entirely at this call site.
+    """
     print("[Import] Starting CSV import into PostgreSQL")
-    return {
-        "tenders": import_tenders(session),
-        "permits": import_permits(session),
-        "reddit": import_reddit(session),
-        "news": import_news(session),
-        "linkedin": import_linkedin(session),
-        "jobs": import_jobs(session),
-        "arch_tenders": import_arch_tenders(session),
-        "commercial_tenders": import_commercial_tenders(session),
-    }
+    result: dict[str, int | bool] = {}
+
+    if "tenders" in skip:
+        result["tenders"] = 0
+        result["tenders_skipped"] = True
+    else:
+        result["tenders"] = import_tenders(session)
+
+    result["permits"] = import_permits(session)
+    result["reddit"] = import_reddit(session)
+    result["news"] = import_news(session)
+    result["linkedin"] = import_linkedin(session)
+    result["jobs"] = import_jobs(session)
+
+    if "arch_tenders" in skip:
+        result["arch_tenders"] = 0
+        result["arch_tenders_skipped"] = True
+    else:
+        result["arch_tenders"] = import_arch_tenders(session)
+
+    if "commercial_tenders" in skip:
+        result["commercial_tenders"] = 0
+        result["commercial_tenders_skipped"] = True
+    else:
+        result["commercial_tenders"] = import_commercial_tenders(session)
+
+    return result
