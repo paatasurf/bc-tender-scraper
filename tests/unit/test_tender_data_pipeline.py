@@ -260,15 +260,15 @@ def test_merx_open_failed_distinct_from_not_attempted(
     assert result["errors"] == []
 
 
-def test_tender_data_pipeline_fail_fast_preserved_on_scraper_error(
+def test_tender_data_pipeline_hard_failure_preserved_when_all_scrapers_fail(
     coordinator_state: Path,
 ) -> None:
-    """Stage 1 requirement: even though run_tender_scrapers() no longer
-    raises, run_tender_data_pipeline() must still treat any scraper error
-    as fatal -- abort before auxiliary scrapers/CSV verification/import,
-    exactly as the pre-Stage-1 behavior. Stage 2 (letting the
-    independently-successful MERX Architecture/Commercial steps still
-    get imported) is explicitly not implemented here."""
+    """Stage 2 requirement: when every tender scraper fails
+    (tender_scrape["status"] == "failed"), run_tender_data_pipeline()
+    still raises the same RuntimeError and aborts before auxiliary
+    scrapers/CSV verification/import -- exactly the pre-Stage-1/2
+    fail-fast behavior. Only a TOTAL failure still hard-fails; see the
+    partial_failure tests below for the case Stage 2 changes."""
     phase_log: list[str] = []
 
     def _fake_tender_scrapers(run_id: str) -> dict:
@@ -276,26 +276,30 @@ def test_tender_data_pipeline_fail_fast_preserved_on_scraper_error(
         return {
             "scrape_started_at": "2026-07-01T10:00:00+00:00",
             "scrape_finished_at": "2026-07-01T10:05:00+00:00",
-            "status": "partial_failure",
+            "status": "failed",
             "steps": {
                 "scrape-federal": {
                     "status": "failed",
                     "counts": None,
-                    "error": "boom",
+                    "error": "federal boom",
                 },
                 "scrape-merx-arch": {
-                    "status": "success",
-                    "counts": {"tenders_saved": 1},
-                    "error": None,
+                    "status": "failed",
+                    "counts": None,
+                    "error": "arch boom",
                 },
                 "scrape-commercial": {
-                    "status": "success",
-                    "counts": {"tenders_saved": 1},
-                    "error": None,
+                    "status": "failed",
+                    "counts": None,
+                    "error": "commercial boom",
                 },
             },
             "merx_open_status": "not_attempted",
-            "errors": ["Federal + MERX BC tenders: boom"],
+            "errors": [
+                "Federal + MERX BC tenders: federal boom",
+                "MERX architecture tenders: arch boom",
+                "Commercial tenders: commercial boom",
+            ],
         }
 
     def _fake_auxiliary(*, trigger: str) -> dict:
@@ -323,14 +327,201 @@ def test_tender_data_pipeline_fail_fast_preserved_on_scraper_error(
                 ) as import_mock:
                     with pytest.raises(
                         RuntimeError,
-                        match=r"Tender scrape phase failed: Federal \+ MERX BC tenders: boom",
+                        match=r"Tender scrape phase failed: Federal \+ MERX BC tenders: federal boom",
                     ):
-                        run_tender_data_pipeline(run_id="stage1-fail-fast")
+                        run_tender_data_pipeline(run_id="stage2-all-fail")
 
     assert phase_log == ["tender_scrape"]
     auxiliary_mock.assert_not_called()
     verify_mock.assert_not_called()
     import_mock.assert_not_called()
+
+
+# --- Stage 2: partial_failure imports independently-successful sources ----
+
+_STAGE2_STEP_LABELS = {
+    "scrape-federal": "Federal + MERX BC tenders",
+    "scrape-merx-arch": "MERX architecture tenders",
+    "scrape-commercial": "Commercial tenders",
+}
+
+
+def _partial_failure_tender_scrape_result(failed_step: str) -> dict:
+    steps: dict[str, dict] = {}
+    errors: list[str] = []
+    for step in ("scrape-federal", "scrape-merx-arch", "scrape-commercial"):
+        if step == failed_step:
+            steps[step] = {"status": "failed", "counts": None, "error": "boom"}
+            errors.append(f"{_STAGE2_STEP_LABELS[step]}: boom")
+        else:
+            steps[step] = {
+                "status": "success",
+                "counts": {"tenders_saved": 1},
+                "error": None,
+            }
+    return {
+        "scrape_started_at": "2026-07-01T10:00:00+00:00",
+        "scrape_finished_at": "2026-07-01T10:05:00+00:00",
+        "status": "partial_failure",
+        "steps": steps,
+        "merx_open_status": (
+            "not_attempted" if failed_step == "scrape-federal" else "success"
+        ),
+        "errors": errors,
+    }
+
+
+def _run_partial_failure_scenario(
+    coordinator_state: Path, *, failed_step: str, run_id: str
+):
+    """Run run_tender_data_pipeline() with exactly one tender-scraper
+    step failed and the other two succeeding (Stage 2's partial-failure
+    path). Returns (summary, verify_mock, import_mock, auxiliary_mock)
+    so callers can assert exactly which artifacts/import keys were
+    skipped."""
+    result = _partial_failure_tender_scrape_result(failed_step)
+    session = MagicMock()
+
+    with patch(
+        "pipeline.tender_data_pipeline.run_tender_scrapers",
+        return_value=result,
+    ):
+        with patch(
+            "pipeline.tender_data_pipeline.run_auxiliary_scrapers",
+            return_value={},
+        ) as auxiliary_mock:
+            with patch(
+                "pipeline.tender_data_pipeline.verify_tender_csvs",
+                return_value={"federal_merx_tenders": 1},
+            ) as verify_mock:
+                with patch("pipeline.tender_data_pipeline.init_db"):
+                    with patch(
+                        "pipeline.tender_data_pipeline.get_session",
+                        return_value=session,
+                    ):
+                        with patch(
+                            "pipeline.tender_data_pipeline.count_table_rows",
+                            return_value={
+                                "tenders": 5,
+                                "commercial_tenders": 2,
+                                "arch_tenders": 1,
+                            },
+                        ):
+                            with patch(
+                                "pipeline.tender_data_pipeline.import_all_csvs",
+                                return_value={
+                                    "tenders": 1,
+                                    "arch_tenders": 1,
+                                    "commercial_tenders": 1,
+                                },
+                            ) as import_mock:
+                                with patch(
+                                    "pipeline.tender_data_pipeline.import_contract_awards",
+                                    return_value=0,
+                                ):
+                                    with patch(
+                                        "pipeline.tender_data_pipeline.refresh_company_award_stats"
+                                    ):
+                                        with patch(
+                                            "pipeline.tender_data_pipeline.verify_database_counts",
+                                            return_value={"tenders": 1},
+                                        ):
+                                            summary = run_tender_data_pipeline(
+                                                run_id=run_id
+                                            )
+
+    return summary, verify_mock, import_mock, auxiliary_mock
+
+
+def test_tender_data_pipeline_partial_failure_federal_fails_imports_arch_and_commercial(
+    coordinator_state: Path,
+) -> None:
+    """Exact 2026-08-19 incident shape: Federal fails, MERX Architecture
+    and Commercial succeed. Proves the core Stage 2 behavior: the run no
+    longer aborts, auxiliary scrapers still run, only Federal's own
+    CSV/import is skipped, the pipeline finishes as partial_failure
+    rather than raising, and the coordinator still records success=True
+    (usable data was imported)."""
+    summary, verify_mock, import_mock, auxiliary_mock = _run_partial_failure_scenario(
+        coordinator_state, failed_step="scrape-federal", run_id="stage2-federal-fails"
+    )
+
+    auxiliary_mock.assert_called_once()
+    verify_mock.assert_called_once()
+    assert verify_mock.call_args.kwargs["skip"] == frozenset({"federal_merx_tenders"})
+    import_mock.assert_called_once()
+    assert import_mock.call_args.kwargs["skip"] == frozenset({"tenders"})
+    assert summary["status"] == "partial_failure"
+
+    state = coordinator.get_run_state()
+    assert state is not None
+    assert state.success is True
+
+
+def test_tender_data_pipeline_partial_failure_arch_fails_symmetric(
+    coordinator_state: Path,
+) -> None:
+    """Symmetric case: MERX Architecture fails alone -- only its own
+    artifact/import key is skipped, Federal and Commercial import
+    normally."""
+    summary, verify_mock, import_mock, auxiliary_mock = _run_partial_failure_scenario(
+        coordinator_state, failed_step="scrape-merx-arch", run_id="stage2-arch-fails"
+    )
+
+    auxiliary_mock.assert_called_once()
+    assert verify_mock.call_args.kwargs["skip"] == frozenset({"architecture_tenders"})
+    assert import_mock.call_args.kwargs["skip"] == frozenset({"arch_tenders"})
+    assert summary["status"] == "partial_failure"
+
+
+def test_tender_data_pipeline_partial_failure_commercial_fails_symmetric(
+    coordinator_state: Path,
+) -> None:
+    """Symmetric case: Commercial fails alone -- only its own artifact/
+    import key is skipped, Federal and MERX Architecture import
+    normally."""
+    summary, verify_mock, import_mock, auxiliary_mock = _run_partial_failure_scenario(
+        coordinator_state,
+        failed_step="scrape-commercial",
+        run_id="stage2-commercial-fails",
+    )
+
+    auxiliary_mock.assert_called_once()
+    assert verify_mock.call_args.kwargs["skip"] == frozenset({"commercial_tenders"})
+    assert import_mock.call_args.kwargs["skip"] == frozenset({"commercial_tenders"})
+    assert summary["status"] == "partial_failure"
+
+
+def test_tender_scrape_step_to_artifact_and_import_key_mappings_cover_all_runners() -> (
+    None
+):
+    """Cheap insurance against the riskiest bug this design allows: a
+    missing or wrong mapping entry silently skipping/verifying the wrong
+    artifact. Every TENDER_SCRAPER_RUNNERS step must appear in both
+    mapping constants, with no extras and no typos."""
+    runner_steps = {
+        step
+        for step, _label, _runner in tender_data_pipeline_module.TENDER_SCRAPER_RUNNERS
+    }
+
+    assert (
+        set(tender_data_pipeline_module.TENDER_SCRAPE_STEP_TO_ARTIFACT.keys())
+        == runner_steps
+    )
+    assert (
+        set(tender_data_pipeline_module.TENDER_SCRAPE_STEP_TO_IMPORT_KEY.keys())
+        == runner_steps
+    )
+    assert tender_data_pipeline_module.TENDER_SCRAPE_STEP_TO_ARTIFACT == {
+        "scrape-federal": "federal_merx_tenders",
+        "scrape-merx-arch": "architecture_tenders",
+        "scrape-commercial": "commercial_tenders",
+    }
+    assert tender_data_pipeline_module.TENDER_SCRAPE_STEP_TO_IMPORT_KEY == {
+        "scrape-federal": "tenders",
+        "scrape-merx-arch": "arch_tenders",
+        "scrape-commercial": "commercial_tenders",
+    }
 
 
 def test_tender_data_pipeline_runs_phases_in_order(coordinator_state: Path) -> None:

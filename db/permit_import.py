@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from db.constants import BATCH_SIZE
 from db.models import Permit
 from db.permit_lifecycle_constants import PERMIT_LIFECYCLE_IMPORT_SKIP_COLUMNS
+from pipeline.company_resolution import CompanyResolver
 from pipeline.permit_company_resolution import resolve_permit_company_from_row
 
 PERMIT_VARCHAR_LIMITS: dict[str, int] = {
@@ -84,6 +85,12 @@ def _dedupe_permit_rows(
 
 def _importable_row_values(row: dict[str, str], *, source: str) -> dict[str, object]:
     values = {key: row.get(key) for key in _IMPORTABLE_COLUMNS}
+    for key, value in values.items():
+        # A row dict missing a key (rather than holding an explicit value) must
+        # not surface as NULL on a NOT NULL text column -- Core-level insert()
+        # bypasses the ORM's Python-side "" default, so fill it in here.
+        if value is None and not _PERMIT_TABLE.columns[key].nullable:
+            values[key] = ""
     values.setdefault("source", source)
     return values
 
@@ -207,12 +214,17 @@ def _attach_company_ids(
     *,
     source: str,
 ) -> None:
+    # Shared across the whole batch: CompanyResolver caches the full companies
+    # table on first use, so building a fresh one per row makes resolution
+    # O(rows x companies) instead of O(rows + companies).
+    resolver = CompanyResolver(session)
     for row in rows:
         result = resolve_permit_company_from_row(
             session,
             _resolution_row_for_source(row, source=source),
             source=source,
             create_if_missing=source != "surrey",
+            resolver=resolver,
         )
         if result.company_id is None:
             continue

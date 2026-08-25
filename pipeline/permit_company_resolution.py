@@ -8,7 +8,11 @@ from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
 from db.company_canonical_constants import MERGE_METHOD_CONTRACTOR
-from pipeline.company_discovery import CompanyCandidate, DiscoveryResult, discover_companies
+from pipeline.company_discovery import (
+    CompanyCandidate,
+    DiscoveryResult,
+    discover_companies,
+)
 from pipeline.company_resolution import (
     RESOLUTION_STATUS_PERSON_SKIP,
     RESOLUTION_STATUS_REVIEW,
@@ -30,7 +34,12 @@ class PermitCompanyResolution:
 
 
 def _merge_method_for_candidate(candidate: CompanyCandidate) -> str:
-    if candidate.source in {"contractor", "buildingcontractor", "builder", "general_contractor"}:
+    if candidate.source in {
+        "contractor",
+        "buildingcontractor",
+        "builder",
+        "general_contractor",
+    }:
         return MERGE_METHOD_CONTRACTOR
     if candidate.source.startswith("description:"):
         return candidate.source.replace("description:", "desc_")
@@ -46,10 +55,17 @@ def resolve_permit_company(
     source: str,
     city: str = "",
     create_if_missing: bool = True,
+    resolver: CompanyResolver | None = None,
 ) -> PermitCompanyResolution:
-    """Run discovery then resolve the first valid company candidate."""
+    """Run discovery then resolve the first valid company candidate.
+
+    Pass a shared `resolver` when resolving many rows in one batch (e.g. a CSV
+    import) -- CompanyResolver caches the full companies table on first use, so
+    building a fresh one per row makes batch resolution O(rows x companies).
+    """
     discovery = discover_companies(record)
-    resolver = CompanyResolver(session)
+    if resolver is None:
+        resolver = CompanyResolver(session)
     permit_source = f"permits:{source}"
 
     for candidate in discovery.ordered_candidates():
@@ -92,6 +108,7 @@ def resolve_permit_company_from_row(
     *,
     source: str,
     create_if_missing: bool = True,
+    resolver: CompanyResolver | None = None,
 ) -> PermitCompanyResolution:
     """Convenience wrapper for import dict rows."""
     return resolve_permit_company(
@@ -100,4 +117,5 @@ def resolve_permit_company_from_row(
         source=source,
         city=row.get("city") or "",
         create_if_missing=create_if_missing,
+        resolver=resolver,
     )
