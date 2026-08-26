@@ -47,6 +47,15 @@ _VALUE_FIELDS = {
     "permits": "project_value",
     "contract_awards": "award_value",
 }
+# Domains with a real province-level column. permits/tenders/early_signals
+# have no province column at all -- a "BC"/"British Columbia" request
+# against those domains must fail closed as an explicit capability gap
+# (below), never silently drop the filter and return an unscoped total.
+_PROVINCE_FIELDS = {
+    "contract_awards": "winner_province",
+    "companies": "primary_province",
+}
+_PROVINCE_VALUES = ("BC", "BRITISH COLUMBIA")
 _TABLES = {
     "permits": "permits",
     "contract_awards": "contract_awards",
@@ -127,6 +136,11 @@ class AnalyticsQuerySpec(BaseModel):
     fields: list[str] = Field(default_factory=list, max_length=10)
     filters: dict[str, str | int | float | bool] = Field(default_factory=dict)
     geography: str | None = Field(default=None, max_length=120)
+    province: str | None = Field(
+        default=None,
+        max_length=40,
+        description="Province-level scope (currently only 'BC' is meaningful).",
+    )
     date_field: str | None = None
     lookback_days: int | None = Field(default=None, ge=1, le=3650)
     group_by: list[str] = Field(default_factory=list, max_length=3)
@@ -148,6 +162,13 @@ class AnalyticsQuerySpec(BaseModel):
             raise ValueError("invalid event-time field for domain")
         if self.lookback_days is not None and self.date_field is None:
             raise ValueError("date_field is required with lookback_days")
+        if self.province is not None and self.domain not in _PROVINCE_FIELDS:
+            # Explicit capability gap -- never silently drop province scope
+            # and answer with an unscoped total for a domain with no real
+            # province column (permits, tenders, early_signals).
+            raise ValueError(
+                f"province-wide geography is not supported for domain '{self.domain}'"
+            )
         allowed_filters = set(_GROUPS[self.domain])
         if self.domain != "companies":
             allowed_filters.add("source")
@@ -250,6 +271,12 @@ def _where_clauses(
             clauses.append("t.location ILIKE :geography_pattern")
             params["geography_pattern"] = f"%{spec.geography.strip()}%"
         params["geography"] = spec.geography.strip()
+    if spec.province:
+        # Validated at the model level: province is only ever set for a
+        # domain present in _PROVINCE_FIELDS.
+        field = _PROVINCE_FIELDS[spec.domain]
+        clauses.append(f"UPPER({alias}.{field}) = ANY(:province_values)")
+        params["province_values"] = list(_PROVINCE_VALUES)
     for key, value in spec.filters.items():
         # Filter identifiers have already been validated; values remain bound.
         if spec.domain == "contract_awards" and key == "city":
@@ -281,26 +308,50 @@ def _build_aggregate_query(
     # error, caught only by the endpoint's generic except-block.
     dimensions: list[str] = []
     group_exprs: list[str] = []
+    ranks_by_company = False
+    needs_canonical_join = False
     for group in spec.group_by:
         if group == "canonical_company_id":
-            expr = "COALESCE(c.canonical_company_id, c.id)"
-            dimensions.append(f"{expr} AS canonical_company_id")
-            group_exprs.append(expr)
+            # Ranking must aggregate by the CANONICAL company, not the raw
+            # row: two alias rows of the same real company (e.g. a DBA
+            # standalone row and its canonical parent) must collapse into
+            # one ranking position, not occupy two. canonical_company_name
+            # is resolved alongside it -- the caller should never have to
+            # make a second lookup just to know whose count this is.
+            id_expr = "COALESCE(c.canonical_company_id, c.id)"
+            name_expr = (
+                "COALESCE(canonical.display_name, canonical.name, "
+                "c.display_name, c.name)"
+            )
+            dimensions.append(f"{id_expr} AS canonical_company_id")
+            dimensions.append(f"{name_expr} AS canonical_company_name")
+            group_exprs.append(id_expr)
+            group_exprs.append(name_expr)
+            ranks_by_company = True
+            needs_canonical_join = True
         elif group == "company_id":
             expr = f"{alias}.company_id"
             dimensions.append(f"{expr} AS company_id")
             group_exprs.append(expr)
+            ranks_by_company = True
         else:
             dimensions.append(group)
             group_exprs.append(group)
     metrics = [_metric_sql(metric, table, spec) for metric in spec.metrics]
+    extra_selects: list[str] = []
     join = ""
-    if "company_id" in spec.group_by or "canonical_company_id" in spec.group_by:
+    if ranks_by_company:
         if spec.domain not in {"permits", "contract_awards"}:
             raise ValueError("company joins are not approved for this domain")
+        # Real contributing row ids per ranking position -- evidence for a
+        # ranking row must point at the actual permits/awards behind the
+        # count, not just repeat the aggregate.
+        extra_selects.append(f"ARRAY_AGG({alias}.id) AS contributing_ids")
         join = f" JOIN companies c ON c.id = {alias}.company_id"
+        if needs_canonical_join:
+            join += " LEFT JOIN companies canonical ON canonical.id = c.canonical_company_id"
     clauses, params = _where_clauses(spec, alias)
-    sql = f"SELECT {', '.join(dimensions + metrics)} FROM {table} {alias}{join}"
+    sql = f"SELECT {', '.join(dimensions + metrics + extra_selects)} FROM {table} {alias}{join}"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     if group_exprs:
@@ -316,10 +367,31 @@ def _build_aggregate_query(
         "event_time_field": spec.date_field,
         "filters": spec.filters,
         "geography": spec.geography,
+        "province": spec.province,
         "lookback_days": spec.lookback_days,
         "read_only": True,
     }
     return sql, params, provenance
+
+
+def _unresolved_count_query(
+    spec: AnalyticsQuerySpec, alias: str
+) -> tuple[str, dict[str, Any]] | None:
+    """Ranking by company_id/canonical_company_id joins through an
+    INNER JOIN on companies -- rows with no company attribution at all
+    (company_id IS NULL) are silently excluded from every ranking position.
+    Count them separately, under the exact same filters, so the response
+    can disclose "N permits/awards had no company attribution" instead of
+    quietly under-reporting."""
+    if not ({"company_id", "canonical_company_id"} & set(spec.group_by)):
+        return None
+    table = _TABLES[spec.domain]
+    clauses, params = _where_clauses(spec, alias)
+    clauses.append(f"{alias}.company_id IS NULL")
+    sql = f"SELECT COUNT(*) AS unresolved_count FROM {table} {alias} WHERE " + (
+        " AND ".join(clauses)
+    )
+    return sql, params
 
 
 def _build_records_query(
@@ -348,6 +420,7 @@ def _build_records_query(
         "event_time_field": spec.date_field,
         "filters": spec.filters,
         "geography": spec.geography,
+        "province": spec.province,
         "lookback_days": spec.lookback_days,
         "fields": fields,
         "read_only": True,
@@ -376,7 +449,39 @@ def analytics_query(spec: AnalyticsQuerySpec) -> dict[str, Any]:
         rows = [
             dict(row) for row in connection.execute(text(sql), params).mappings().all()
         ]
+
+        unresolved_count: int | None = None
+        if spec.operation == "aggregate":
+            unresolved = _unresolved_count_query(spec, _alias_for(spec.domain))
+            if unresolved is not None:
+                u_sql, u_params = unresolved
+                unresolved_count = connection.execute(
+                    text(u_sql), u_params
+                ).scalar_one()
+                provenance["unresolved_count"] = unresolved_count
+
         is_records = spec.operation == "records"
+        source_table = provenance["source_tables"][0]
+        evidence_refs: list[str] = []
+        for row in rows:
+            contributing = row.get("contributing_ids")
+            if contributing:
+                # Real contributing row ids, not a repeat of the aggregate --
+                # this is the evidence behind a canonical-company ranking row.
+                evidence_refs.extend(
+                    f"{source_table}:{cid}" for cid in contributing if cid is not None
+                )
+            else:
+                evidence_refs.append(f"{source_table}:{row.get('id', 'aggregate')}")
+
+        data_gaps = [] if rows else ["no matching records"]
+        if unresolved_count:
+            data_gaps = [
+                *data_gaps,
+                f"{unresolved_count} row(s) have no company attribution and "
+                "are excluded from this ranking",
+            ]
+
         return {
             "rows": rows,
             "aggregates": (
@@ -387,13 +492,10 @@ def analytics_query(spec: AnalyticsQuerySpec) -> dict[str, Any]:
                     for key, value in (rows[0].items() if len(rows) == 1 else [])
                 }
             ),
-            "evidence_refs": [
-                f"{provenance['source_tables'][0]}:{row.get('id', 'aggregate')}"
-                for row in rows
-            ],
+            "evidence_refs": evidence_refs,
             "provenance": provenance,
             "confidence": "medium" if rows else "low",
-            "data_gaps": ([] if rows else ["no matching records"]),
+            "data_gaps": data_gaps,
         }
     except Exception:
         session.rollback()

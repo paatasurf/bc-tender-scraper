@@ -222,3 +222,187 @@ def test_group_by_company_id_actually_executes_against_real_schema(
     for row in rows:
         assert "count" in row
         assert "company_id" in row
+
+
+def test_bc_province_query_against_unsupported_domain_is_a_capability_gap() -> None:
+    """Positive-data proof: a province-wide "BC" request against a domain
+    with no province column (permits has none) must fail as an explicit
+    validation error -- before any HTTP/DB call -- never silently drop the
+    scope and answer with an unfiltered total pretending to be BC-scoped."""
+    with pytest.raises(ValidationError, match="province-wide geography"):
+        AnalyticsQuerySpec(domain="permits", metrics=["count"], province="BC")
+    with pytest.raises(ValidationError, match="province-wide geography"):
+        AnalyticsQuerySpec(domain="tenders", metrics=["count"], province="BC")
+    with pytest.raises(ValidationError, match="province-wide geography"):
+        AnalyticsQuerySpec(domain="early_signals", metrics=["count"], province="BC")
+
+
+def test_canonical_company_ranking_collapses_aliases_into_one_row(
+    local_db_session: Session,
+) -> None:
+    """Positive-data proof: two ALIAS company rows pointing at the same
+    canonical parent must collapse into exactly one canonical_company_id
+    ranking row (not two), carrying the canonical company's real name, with
+    evidence (contributing_ids) pointing at the actual permit rows behind
+    the count -- not a repeat of the aggregate."""
+    import uuid
+
+    from db.models import Company, Permit
+
+    uid = uuid.uuid4().hex[:8]
+    city = f"CanonicalTestCity-{uid}"
+
+    canonical = Company(name=f"Canonical Co {uid}", display_name=f"Canonical Co {uid}")
+    local_db_session.add(canonical)
+    local_db_session.flush()
+
+    alias_a = Company(
+        name=f"Alias A {uid}",
+        display_name=f"Alias A {uid}",
+        canonical_company_id=canonical.id,
+    )
+    alias_b = Company(
+        name=f"Alias B {uid}",
+        display_name=f"Alias B {uid}",
+        canonical_company_id=canonical.id,
+    )
+    local_db_session.add_all([alias_a, alias_b])
+    local_db_session.flush()
+
+    permit_a = Permit(
+        address=f"1 Test St {uid}", city=city, source="unittest", company_id=alias_a.id
+    )
+    permit_b = Permit(
+        address=f"2 Test St {uid}", city=city, source="unittest", company_id=alias_b.id
+    )
+    local_db_session.add_all([permit_a, permit_b])
+    local_db_session.commit()
+
+    try:
+        spec = AnalyticsQuerySpec(
+            domain="permits",
+            metrics=["count"],
+            filters={"city": city},
+            group_by=["canonical_company_id"],
+        )
+        sql, params, _provenance = build_query(spec)
+        rows = local_db_session.execute(text(sql), params).mappings().all()
+
+        matching = [r for r in rows if r["canonical_company_id"] == canonical.id]
+        assert len(matching) == 1, (
+            "two aliases of one canonical company must collapse into one "
+            "ranking row, not two"
+        )
+        row = matching[0]
+        assert row["count"] == 2
+        assert row["canonical_company_name"] == canonical.display_name
+        assert set(row["contributing_ids"]) == {permit_a.id, permit_b.id}
+    finally:
+        local_db_session.execute(
+            text("DELETE FROM permits WHERE id = ANY(:ids)"),
+            {"ids": [permit_a.id, permit_b.id]},
+        )
+        local_db_session.execute(
+            text("DELETE FROM companies WHERE id = ANY(:ids)"),
+            {"ids": [alias_a.id, alias_b.id, canonical.id]},
+        )
+        local_db_session.commit()
+
+
+def test_ranking_discloses_unresolved_company_attribution(
+    local_db_session: Session,
+) -> None:
+    """Positive-data proof: a permit with no company attribution
+    (company_id IS NULL) is invisible to the INNER-JOIN ranking query --
+    _unresolved_count_query must surface it separately rather than let it
+    silently vanish from the total."""
+    import uuid
+
+    from api.analytics import _alias_for, _unresolved_count_query
+    from db.models import Company, Permit
+
+    uid = uuid.uuid4().hex[:8]
+    city = f"UnresolvedTestCity-{uid}"
+
+    company = Company(name=f"Ranked Co {uid}")
+    local_db_session.add(company)
+    local_db_session.flush()
+
+    attributed = Permit(
+        address=f"1 St {uid}", city=city, source="unittest", company_id=company.id
+    )
+    unattributed = Permit(
+        address=f"2 St {uid}", city=city, source="unittest", company_id=None
+    )
+    local_db_session.add_all([attributed, unattributed])
+    local_db_session.commit()
+
+    try:
+        spec = AnalyticsQuerySpec(
+            domain="permits",
+            metrics=["count"],
+            filters={"city": city},
+            group_by=["company_id"],
+        )
+        u_sql, u_params = _unresolved_count_query(spec, _alias_for(spec.domain))
+        unresolved = local_db_session.execute(text(u_sql), u_params).scalar_one()
+        assert unresolved == 1
+    finally:
+        local_db_session.execute(
+            text("DELETE FROM permits WHERE id = ANY(:ids)"),
+            {"ids": [attributed.id, unattributed.id]},
+        )
+        local_db_session.execute(
+            text("DELETE FROM companies WHERE id = :id"), {"id": company.id}
+        )
+        local_db_session.commit()
+
+
+def test_province_filter_actually_scopes_to_bc_against_real_schema(
+    local_db_session: Session,
+) -> None:
+    """Positive-data proof for a domain that DOES support province scope:
+    a BC-tagged award is counted, an ON-tagged award under the same source
+    is not -- proves the filter is real, not a silently-dropped no-op that
+    would otherwise return both as an unscoped total."""
+    import uuid
+
+    from db.models import ContractAward
+
+    uid = uuid.uuid4().hex[:8]
+    source = f"unittest-{uid}"
+
+    bc_award = ContractAward(
+        source=source,
+        external_id=f"bc-{uid}",
+        title="BC Award",
+        winner_company="BC Co",
+        winner_province="BC",
+    )
+    on_award = ContractAward(
+        source=source,
+        external_id=f"on-{uid}",
+        title="ON Award",
+        winner_company="ON Co",
+        winner_province="ON",
+    )
+    local_db_session.add_all([bc_award, on_award])
+    local_db_session.commit()
+
+    try:
+        spec = AnalyticsQuerySpec(
+            domain="contract_awards",
+            metrics=["count"],
+            filters={"source": source},
+            province="BC",
+        )
+        sql, params, provenance = build_query(spec)
+        assert provenance["province"] == "BC"
+        row = local_db_session.execute(text(sql), params).mappings().one()
+        assert row["count"] == 1
+    finally:
+        local_db_session.execute(
+            text("DELETE FROM contract_awards WHERE id = ANY(:ids)"),
+            {"ids": [bc_award.id, on_award.id]},
+        )
+        local_db_session.commit()
