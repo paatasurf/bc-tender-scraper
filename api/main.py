@@ -590,9 +590,26 @@ def market_company_ranking(
     """
     requested = (geography or city or region or province or "").strip()
     if not requested:
-        raise HTTPException(status_code=422, detail="geography, city, region, or province is required")
+        raise HTTPException(
+            status_code=422, detail="geography, city, region, or province is required"
+        )
     known_regions = {
-        "metro vancouver": {"Burnaby", "Vancouver", "Surrey", "Richmond", "Coquitlam", "New Westminster", "Delta", "Langley", "North Vancouver", "West Vancouver", "Maple Ridge", "Port Coquitlam", "Port Moody", "White Rock"},
+        "metro vancouver": {
+            "Burnaby",
+            "Vancouver",
+            "Surrey",
+            "Richmond",
+            "Coquitlam",
+            "New Westminster",
+            "Delta",
+            "Langley",
+            "North Vancouver",
+            "West Vancouver",
+            "Maple Ridge",
+            "Port Coquitlam",
+            "Port Moody",
+            "White Rock",
+        },
     }
     normalized = requested.casefold()
     if province or normalized in {"bc", "b.c.", "british columbia"}:
@@ -609,6 +626,7 @@ def market_company_ranking(
     cutoff = today - timedelta(days=lookback_days)
     session = get_session()
     try:
+
         def parse_event_date(value: Any) -> Any:
             if not value:
                 return None
@@ -628,7 +646,9 @@ def market_company_ranking(
         # Filter by event time in Python because these are legacy String date
         # columns; this avoids unsafe database casts on malformed source data.
         activities: list[dict[str, Any]] = []
-        permit_query = select(Permit).where(Permit.is_active.is_(True), Permit.company_id.isnot(None))
+        permit_query = select(Permit).where(
+            Permit.is_active.is_(True), Permit.company_id.isnot(None)
+        )
         award_query = select(ContractAward).where(ContractAward.company_id.isnot(None))
         if cities is not None:
             permit_query = permit_query.where(Permit.city.in_(cities))
@@ -642,15 +662,23 @@ def market_company_ranking(
         raw_awards = session.scalars(award_query).all()
         invalid_dates = 0
         for permit in raw_permits:
-            event_date = parse_event_date(permit.issue_date) or parse_event_date(permit.application_date)
+            event_date = parse_event_date(permit.issue_date) or parse_event_date(
+                permit.application_date
+            )
             if event_date is None:
                 invalid_dates += 1
                 continue
             if cutoff <= event_date <= today:
                 activities.append(
-                    {"kind": "permit", "id": permit.id, "raw_company_id": int(permit.company_id),
-                     "event_date": event_date, "value": parse_value(permit.project_value),
-                     "confidence": permit.canonical_merge_confidence, "city": permit.city}
+                    {
+                        "kind": "permit",
+                        "id": permit.id,
+                        "raw_company_id": int(permit.company_id),
+                        "event_date": event_date,
+                        "value": parse_value(permit.project_value),
+                        "confidence": permit.canonical_merge_confidence,
+                        "city": permit.city,
+                    }
                 )
         for award in raw_awards:
             event_date = parse_event_date(award.award_date)
@@ -659,20 +687,41 @@ def market_company_ranking(
                 continue
             if cutoff <= event_date <= today:
                 activities.append(
-                    {"kind": "award", "id": award.id, "raw_company_id": int(award.company_id),
-                     "event_date": event_date, "value": float(award.award_value or 0),
-                     "confidence": award.match_confidence, "city": award.winner_city}
+                    {
+                        "kind": "award",
+                        "id": award.id,
+                        "raw_company_id": int(award.company_id),
+                        "event_date": event_date,
+                        "value": float(award.award_value or 0),
+                        "confidence": award.match_confidence,
+                        "city": award.winner_city,
+                    }
                 )
 
         raw_ids = {item["raw_company_id"] for item in activities}
-        companies = {
-            row.id: row
-            for row in session.scalars(select(Company).where(Company.id.in_(list(raw_ids)))).all()
-        } if raw_ids else {}
-        alias_rows = session.scalars(
-            select(CompanyApplicantAlias).where(CompanyApplicantAlias.alias_company_id.in_(list(raw_ids)))
-        ).all() if raw_ids else []
-        alias_map = {int(row.alias_company_id): int(row.canonical_company_id) for row in alias_rows}
+        companies = (
+            {
+                row.id: row
+                for row in session.scalars(
+                    select(Company).where(Company.id.in_(list(raw_ids)))
+                ).all()
+            }
+            if raw_ids
+            else {}
+        )
+        alias_rows = (
+            session.scalars(
+                select(CompanyApplicantAlias).where(
+                    CompanyApplicantAlias.alias_company_id.in_(list(raw_ids))
+                )
+            ).all()
+            if raw_ids
+            else []
+        )
+        alias_map = {
+            int(row.alias_company_id): int(row.canonical_company_id)
+            for row in alias_rows
+        }
 
         def canonical_id(raw_id: int) -> int | None:
             current = raw_id
@@ -680,7 +729,11 @@ def market_company_ranking(
             while current not in seen:
                 seen.add(current)
                 row = companies.get(current)
-                next_id = alias_map.get(current) or (int(row.canonical_company_id) if row and row.canonical_company_id else None)
+                next_id = alias_map.get(current) or (
+                    int(row.canonical_company_id)
+                    if row and row.canonical_company_id
+                    else None
+                )
                 if next_id is None:
                     return current if row else None
                 current = next_id
@@ -693,7 +746,17 @@ def market_company_ranking(
             if cid is None:
                 unresolved += 1
                 continue
-            target = merged.setdefault(cid, {"permits": 0, "awards": 0, "value": 0.0, "events": [], "conf": [], "cities": {}})
+            target = merged.setdefault(
+                cid,
+                {
+                    "permits": 0,
+                    "awards": 0,
+                    "value": 0.0,
+                    "events": [],
+                    "conf": [],
+                    "cities": {},
+                },
+            )
             target["permits"] += item["kind"] == "permit"
             target["awards"] += item["kind"] == "award"
             target["value"] += item["value"]
@@ -721,7 +784,11 @@ def market_company_ranking(
             }
         max_events = max(len(item["events"]) for item in merged.values())
         values = sorted(item["value"] for item in merged.values())
-        p95 = values[min(len(values) - 1, math.ceil(len(values) * 0.95) - 1)] if values else 0.0
+        p95 = (
+            values[min(len(values) - 1, math.ceil(len(values) * 0.95) - 1)]
+            if values
+            else 0.0
+        )
         data: list[dict[str, Any]] = []
         for cid, item in merged.items():
             company = companies.get(cid) or session.get(Company, cid)
@@ -730,10 +797,20 @@ def market_company_ranking(
             events = item["events"]
             latest = max(event["event_date"] for event in events)
             recency = max(0.0, 1.0 - (today - latest).days / max(1, lookback_days)) * 20
-            volume = 35 * (math.log1p(len(events)) / math.log1p(max_events)) if max_events > 1 else 35
-            economy = 25 * (math.log1p(item["value"]) / math.log1p(p95)) if p95 > 0 else 0.0
+            volume = (
+                35 * (math.log1p(len(events)) / math.log1p(max_events))
+                if max_events > 1
+                else 35
+            )
+            economy = (
+                25 * (math.log1p(item["value"]) / math.log1p(p95)) if p95 > 0 else 0.0
+            )
             diversity = 20 if item["permits"] and item["awards"] else 10
-            confidence = "HIGH" if len(item["conf"]) == len(events) and cid in companies else ("MEDIUM" if cid in companies else "LOW")
+            confidence = (
+                "HIGH"
+                if len(item["conf"]) == len(events) and cid in companies
+                else ("MEDIUM" if cid in companies else "LOW")
+            )
             data.append(
                 {
                     "company_id": cid,
@@ -746,14 +823,30 @@ def market_company_ranking(
                     "total_known_value": round(item["value"], 2),
                     "latest_activity_date": latest.isoformat(),
                     "activity_types": sorted({event["kind"] for event in events}),
-                    "strongest_cities": [name for name, _ in sorted(item["cities"].items(), key=lambda pair: (-pair[1], pair[0]))[:3]],
+                    "strongest_cities": [
+                        name
+                        for name, _ in sorted(
+                            item["cities"].items(), key=lambda pair: (-pair[1], pair[0])
+                        )[:3]
+                    ],
                     "geography": scope_value,
                     "geography_scope": scope_type,
                     "evidence": ["permits.company_id", "contract_awards.company_id"],
-                    "score_breakdown": {"volume": round(volume, 2), "economic": round(economy, 2), "recency": round(recency, 2), "diversity": diversity},
+                    "score_breakdown": {
+                        "volume": round(volume, 2),
+                        "economic": round(economy, 2),
+                        "recency": round(recency, 2),
+                        "diversity": diversity,
+                    },
                 }
             )
-        data.sort(key=lambda row: (-row["activity_score"], -row["distinct_activity_count"], row["company_id"]))
+        data.sort(
+            key=lambda row: (
+                -row["activity_score"],
+                -row["distinct_activity_count"],
+                row["company_id"],
+            )
+        )
         for rank, row in enumerate(data[:limit], start=1):
             row["rank"] = rank
         return {
@@ -785,7 +878,10 @@ def market_company_ranking(
         session.close()
 
 
-@app.get("/api/market/company-activity/growth", summary="Fastest-growing Recent Company Activity")
+@app.get(
+    "/api/market/company-activity/growth",
+    summary="Fastest-growing Recent Company Activity",
+)
 def company_activity_growth(
     geography: str = Query(..., min_length=1, max_length=200),
     lookback_days: int = Query(90, ge=1, le=3650),
@@ -795,12 +891,17 @@ def company_activity_growth(
     """Compare equal event-time windows; never rank solely by percentage growth."""
     session = get_session()
     try:
-        return fastest_growing(session, geography, lookback_days, limit, minimum_activity)
+        return fastest_growing(
+            session, geography, lookback_days, limit, minimum_activity
+        )
     finally:
         session.close()
 
 
-@app.get("/api/companies/{company_id}/geographic-footprint", summary="Company Geographic Footprint")
+@app.get(
+    "/api/companies/{company_id}/geographic-footprint",
+    summary="Company Geographic Footprint",
+)
 def company_geographic_footprint(
     company_id: int,
     lookback_days: int = Query(180, ge=1, le=3650),
