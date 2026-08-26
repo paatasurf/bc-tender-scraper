@@ -2,6 +2,7 @@ import config.env  # noqa: F401  # load env before pipeline imports
 
 import hmac
 import logging
+import math
 import os
 import time
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ from sqlalchemy import Float, func, or_, select
 from sqlalchemy.exc import DBAPIError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from db.connection import (
     check_db_connection,
@@ -44,6 +45,7 @@ from db.models import (
     ClientProfile,
     CommercialTender,
     Company,
+    CompanyApplicantAlias,
     CompanyWiki,
     ContractAward,
     Job,
@@ -69,6 +71,7 @@ from pipeline.executor import pipeline_status as get_pipeline_runtime_status
 from pipeline.construction_tier import parse_tier_filter
 from pipeline.registry_verification.service import get_company_verification_hub
 from pipeline.scheduler import scheduler_status, start_scheduler, stop_scheduler
+from api.market_activity import fastest_growing, geographic_footprint
 
 logger = logging.getLogger(__name__)
 
@@ -558,6 +561,356 @@ def list_contract_awards(
             data.append(item)
 
         return {"total": total, "limit": limit, "offset": offset, "data": data}
+    finally:
+        session.close()
+
+
+@app.get(
+    "/api/market/company-ranking",
+    summary="Recent Company Activity Ranking",
+    description=(
+        "Ranks companies by recently observed, linked permit and award activity. "
+        "This is not an absolute market-wide activity ranking while tenders and "
+        "early signals lack reliable company attribution."
+    ),
+)
+def market_company_ranking(
+    geography: str | None = Query(None, min_length=1, max_length=200),
+    city: str | None = Query(None, min_length=1, max_length=100),
+    region: str | None = Query(None, min_length=1, max_length=100),
+    province: str | None = Query(None, min_length=1, max_length=100),
+    lookback_days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(5, ge=1, le=20),
+) -> dict[str, Any]:
+    """Recent Company Activity Ranking (deterministic and evidence-backed).
+
+    Only records with a canonical ``company_id`` are counted.  Tender and
+    early-signal rows are deliberately reported as unavailable here because
+    those tables do not currently carry a reliable company FK.
+    """
+    requested = (geography or city or region or province or "").strip()
+    if not requested:
+        raise HTTPException(
+            status_code=422, detail="geography, city, region, or province is required"
+        )
+    known_regions = {
+        "metro vancouver": {
+            "Burnaby",
+            "Vancouver",
+            "Surrey",
+            "Richmond",
+            "Coquitlam",
+            "New Westminster",
+            "Delta",
+            "Langley",
+            "North Vancouver",
+            "West Vancouver",
+            "Maple Ridge",
+            "Port Coquitlam",
+            "Port Moody",
+            "White Rock",
+        },
+    }
+    normalized = requested.casefold()
+    if province or normalized in {"bc", "b.c.", "british columbia"}:
+        scope_type, scope_value, cities = "province", "British Columbia", None
+    elif region or normalized in known_regions:
+        scope_type, scope_value = "region", requested.title()
+        cities = known_regions.get(normalized)
+    elif "," in requested:
+        scope_type, scope_value = "city_set", requested
+        cities = {part.strip().title() for part in requested.split(",") if part.strip()}
+    else:
+        scope_type, scope_value, cities = "city", requested.title(), {requested.title()}
+    today = datetime.now(timezone.utc).date()
+    cutoff = today - timedelta(days=lookback_days)
+    session = get_session()
+    try:
+
+        def parse_event_date(value: Any) -> Any:
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(str(value)[:10]).date()
+            except (TypeError, ValueError):
+                return None
+
+        def parse_value(value: Any) -> float:
+            if value is None:
+                return 0.0
+            try:
+                return float(str(value).replace(",", "").replace("$", "").strip())
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Filter by event time in Python because these are legacy String date
+        # columns; this avoids unsafe database casts on malformed source data.
+        activities: list[dict[str, Any]] = []
+        permit_query = select(Permit).where(
+            Permit.is_active.is_(True), Permit.company_id.isnot(None)
+        )
+        award_query = select(ContractAward).where(ContractAward.company_id.isnot(None))
+        if cities is not None:
+            permit_query = permit_query.where(Permit.city.in_(cities))
+            award_query = award_query.where(ContractAward.winner_city.in_(cities))
+        elif scope_type == "province":
+            award_query = award_query.where(
+                ContractAward.winner_province.ilike("BC")
+                | ContractAward.winner_province.ilike("British Columbia")
+            )
+        raw_permits = session.scalars(permit_query).all()
+        raw_awards = session.scalars(award_query).all()
+        invalid_dates = 0
+        for permit in raw_permits:
+            event_date = parse_event_date(permit.issue_date) or parse_event_date(
+                permit.application_date
+            )
+            if event_date is None:
+                invalid_dates += 1
+                continue
+            if cutoff <= event_date <= today:
+                activities.append(
+                    {
+                        "kind": "permit",
+                        "id": permit.id,
+                        "raw_company_id": int(permit.company_id),
+                        "event_date": event_date,
+                        "value": parse_value(permit.project_value),
+                        "confidence": permit.canonical_merge_confidence,
+                        "city": permit.city,
+                    }
+                )
+        for award in raw_awards:
+            event_date = parse_event_date(award.award_date)
+            if event_date is None:
+                invalid_dates += 1
+                continue
+            if cutoff <= event_date <= today:
+                activities.append(
+                    {
+                        "kind": "award",
+                        "id": award.id,
+                        "raw_company_id": int(award.company_id),
+                        "event_date": event_date,
+                        "value": float(award.award_value or 0),
+                        "confidence": award.match_confidence,
+                        "city": award.winner_city,
+                    }
+                )
+
+        raw_ids = {item["raw_company_id"] for item in activities}
+        companies = (
+            {
+                row.id: row
+                for row in session.scalars(
+                    select(Company).where(Company.id.in_(list(raw_ids)))
+                ).all()
+            }
+            if raw_ids
+            else {}
+        )
+        alias_rows = (
+            session.scalars(
+                select(CompanyApplicantAlias).where(
+                    CompanyApplicantAlias.alias_company_id.in_(list(raw_ids))
+                )
+            ).all()
+            if raw_ids
+            else []
+        )
+        alias_map = {
+            int(row.alias_company_id): int(row.canonical_company_id)
+            for row in alias_rows
+        }
+
+        def canonical_id(raw_id: int) -> int | None:
+            current = raw_id
+            seen: set[int] = set()
+            while current not in seen:
+                seen.add(current)
+                row = companies.get(current)
+                next_id = alias_map.get(current) or (
+                    int(row.canonical_company_id)
+                    if row and row.canonical_company_id
+                    else None
+                )
+                if next_id is None:
+                    return current if row else None
+                current = next_id
+            return None
+
+        merged: dict[int, dict[str, Any]] = {}
+        unresolved = 0
+        for item in activities:
+            cid = canonical_id(item["raw_company_id"])
+            if cid is None:
+                unresolved += 1
+                continue
+            target = merged.setdefault(
+                cid,
+                {
+                    "permits": 0,
+                    "awards": 0,
+                    "value": 0.0,
+                    "events": [],
+                    "conf": [],
+                    "cities": {},
+                },
+            )
+            target["permits"] += item["kind"] == "permit"
+            target["awards"] += item["kind"] == "award"
+            target["value"] += item["value"]
+            target["events"].append(item)
+            target["cities"][item["city"]] = target["cities"].get(item["city"], 0) + 1
+            if item["confidence"] is not None:
+                target["conf"].append(float(item["confidence"]))
+
+        if not merged:
+            return {
+                "ranking_name": "Recent Company Activity Ranking",
+                "geography": scope_value,
+                "geography_scope": scope_type,
+                "lookback_days": lookback_days,
+                "candidate_companies": 0,
+                "activity_records_considered": len(activities),
+                "raw_company_ids": len(raw_ids),
+                "canonical_companies": 0,
+                "unresolved_activity_records": unresolved,
+                "data_gaps": [
+                    "No linked permit or award activity matched this geography and period.",
+                    "Invalid or missing event dates excluded: %d." % invalid_dates,
+                ],
+                "data": [],
+            }
+        max_events = max(len(item["events"]) for item in merged.values())
+        values = sorted(item["value"] for item in merged.values())
+        p95 = (
+            values[min(len(values) - 1, math.ceil(len(values) * 0.95) - 1)]
+            if values
+            else 0.0
+        )
+        data: list[dict[str, Any]] = []
+        for cid, item in merged.items():
+            company = companies.get(cid) or session.get(Company, cid)
+            if company is None:
+                continue
+            events = item["events"]
+            latest = max(event["event_date"] for event in events)
+            recency = max(0.0, 1.0 - (today - latest).days / max(1, lookback_days)) * 20
+            volume = (
+                35 * (math.log1p(len(events)) / math.log1p(max_events))
+                if max_events > 1
+                else 35
+            )
+            economy = (
+                25 * (math.log1p(item["value"]) / math.log1p(p95)) if p95 > 0 else 0.0
+            )
+            diversity = 20 if item["permits"] and item["awards"] else 10
+            confidence = (
+                "HIGH"
+                if len(item["conf"]) == len(events) and cid in companies
+                else ("MEDIUM" if cid in companies else "LOW")
+            )
+            data.append(
+                {
+                    "company_id": cid,
+                    "company_name": (company.display_name or company.name).strip(),
+                    "activity_score": round(volume + economy + recency + diversity, 2),
+                    "evidence_confidence": confidence,
+                    "permit_count": item["permits"],
+                    "award_count": item["awards"],
+                    "distinct_activity_count": len(events),
+                    "total_known_value": round(item["value"], 2),
+                    "latest_activity_date": latest.isoformat(),
+                    "activity_types": sorted({event["kind"] for event in events}),
+                    "strongest_cities": [
+                        name
+                        for name, _ in sorted(
+                            item["cities"].items(), key=lambda pair: (-pair[1], pair[0])
+                        )[:3]
+                    ],
+                    "geography": scope_value,
+                    "geography_scope": scope_type,
+                    "evidence": ["permits.company_id", "contract_awards.company_id"],
+                    "score_breakdown": {
+                        "volume": round(volume, 2),
+                        "economic": round(economy, 2),
+                        "recency": round(recency, 2),
+                        "diversity": diversity,
+                    },
+                }
+            )
+        data.sort(
+            key=lambda row: (
+                -row["activity_score"],
+                -row["distinct_activity_count"],
+                row["company_id"],
+            )
+        )
+        for rank, row in enumerate(data[:limit], start=1):
+            row["rank"] = rank
+        return {
+            "ranking_name": "Recent Company Activity Ranking",
+            "geography": scope_value,
+            "geography_scope": scope_type,
+            "lookback_days": lookback_days,
+            "candidate_companies": len(data),
+            "activity_records_considered": len(activities),
+            "raw_company_ids": len(raw_ids),
+            "canonical_companies": len(merged),
+            "unresolved_activity_records": unresolved,
+            "scoring": {
+                "recent_activity_volume": "35 * log1p(distinct event count) / log1p(max candidate event count)",
+                "economic_significance": "25 * log1p(known value) / log1p(candidate p95 known value)",
+                "recency": "20 * max(0, 1 - age_days / lookback_days)",
+                "activity_diversity": "20 when permits and awards are both present, otherwise 10",
+                "evidence_confidence": "separate label; never added to activity_score",
+                "deterministic": True,
+            },
+            "data_gaps": [
+                "Tenders cannot be attributed: tenders has no company_id.",
+                "Early signals cannot be attributed: early_signal_events has no company_id.",
+                "Invalid or missing event dates excluded: %d." % invalid_dates,
+            ],
+            "data": data[:limit],
+        }
+    finally:
+        session.close()
+
+
+@app.get(
+    "/api/market/company-activity/growth",
+    summary="Fastest-growing Recent Company Activity",
+)
+def company_activity_growth(
+    geography: str = Query(..., min_length=1, max_length=200),
+    lookback_days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(10, ge=1, le=50),
+    minimum_activity: int = Query(2, ge=2, le=100),
+) -> dict[str, Any]:
+    """Compare equal event-time windows; never rank solely by percentage growth."""
+    session = get_session()
+    try:
+        return fastest_growing(
+            session, geography, lookback_days, limit, minimum_activity
+        )
+    finally:
+        session.close()
+
+
+@app.get(
+    "/api/companies/{company_id}/geographic-footprint",
+    summary="Company Geographic Footprint",
+)
+def company_geographic_footprint(
+    company_id: int,
+    lookback_days: int = Query(180, ge=1, le=3650),
+    limit: int = Query(10, ge=1, le=100),
+) -> dict[str, Any]:
+    """Return event-time activity by city for a canonical company."""
+    session = get_session()
+    try:
+        return geographic_footprint(session, company_id, lookback_days, limit)
     finally:
         session.close()
 
