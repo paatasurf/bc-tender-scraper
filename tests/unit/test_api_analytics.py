@@ -51,6 +51,25 @@ def test_raw_sql_and_unapproved_join_dimensions_are_rejected() -> None:
         raise AssertionError("unsafe QuerySpec was accepted")
 
 
+def test_distinct_count_works_for_permits_and_contract_awards() -> None:
+    for domain, alias in (("permits", "p"), ("contract_awards", "a")):
+        spec = AnalyticsQuerySpec(domain=domain, metrics=["distinct_count"])
+        sql, _params, _provenance = build_query(spec)
+        assert f"COUNT(DISTINCT {alias}.company_id)" in sql
+
+
+def test_distinct_count_rejected_for_domains_without_company_id() -> None:
+    """Regression: the old hardcoded permits/else-contract_awards alias
+    silently produced SQL referencing an undefined table alias for
+    companies/tenders/early_signals -- caught only by the endpoint's
+    generic except-block as an opaque 503. Must fail fast as a clear
+    ValueError (-> 422) instead."""
+    for domain in ("companies", "tenders", "early_signals"):
+        spec = AnalyticsQuerySpec(domain=domain, metrics=["distinct_count"])
+        with pytest.raises(ValueError, match="distinct_count"):
+            build_query(spec)
+
+
 def test_records_operation_builds_allowlisted_field_select() -> None:
     spec = AnalyticsQuerySpec(
         domain="permits",
@@ -172,3 +191,34 @@ def test_aggregate_query_actually_executes_against_real_schema(
     for row in rows:
         assert "count" in row
         assert "city" in row
+
+
+def test_group_by_company_id_does_not_leak_as_alias_into_group_by_clause() -> None:
+    """Regression: dimensions (SELECT, "expr AS name") was reused verbatim
+    for GROUP BY, producing "GROUP BY p.company_id AS company_id" -- a
+    Postgres syntax error. Every "which N companies had the most ..."
+    ranking query (group_by=company_id or canonical_company_id) failed with
+    this, surfaced only as an opaque 503 to the caller."""
+    for group in ("company_id", "canonical_company_id"):
+        spec = AnalyticsQuerySpec(domain="permits", metrics=["count"], group_by=[group])
+        sql, _params, _provenance = build_query(spec)
+        assert " AS " not in sql[sql.index("GROUP BY") :]
+
+
+def test_group_by_company_id_actually_executes_against_real_schema(
+    local_db_session: Session,
+) -> None:
+    """The syntax-only check above would not have caught this bug on its
+    own -- prove the query is valid against a real connection too."""
+    spec = AnalyticsQuerySpec(
+        domain="permits",
+        metrics=["count"],
+        group_by=["company_id"],
+        order_by="count",
+        limit=5,
+    )
+    sql, params, _provenance = build_query(spec)
+    rows = local_db_session.execute(text(sql), params).mappings().all()
+    for row in rows:
+        assert "count" in row
+        assert "company_id" in row

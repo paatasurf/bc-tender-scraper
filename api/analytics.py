@@ -6,6 +6,7 @@ through static allowlists and all values are bound parameters.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, timedelta
 from typing import Any
@@ -15,6 +16,8 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 
 from db.connection import get_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -190,12 +193,22 @@ def _event_date_sql(field: str) -> str:
     )
 
 
+_COMPANY_ID_ALIAS = {"permits": "p", "contract_awards": "a"}
+
+
 def _metric_sql(metric: str, table: str, spec: AnalyticsQuerySpec) -> str:
     if metric == "count":
         return "COUNT(*) AS count"
     if metric == "distinct_count":
-        column = "p.company_id" if spec.domain == "permits" else "a.company_id"
-        return f"COUNT(DISTINCT {column}) AS distinct_count"
+        # Only permits/contract_awards carry a company_id column. The old
+        # hardcoded "p.company_id"/else-"a.company_id" silently produced
+        # invalid SQL (undefined alias) for companies/tenders/early_signals,
+        # which the endpoint's generic except-block turned into an opaque
+        # 503 with the real cause visible only in server logs.
+        alias = _COMPANY_ID_ALIAS.get(spec.domain)
+        if not alias:
+            raise ValueError(f"{metric} is not available for {spec.domain}")
+        return f"COUNT(DISTINCT {alias}.company_id) AS distinct_count"
     field = _VALUE_FIELDS.get(spec.domain)
     if not field:
         raise ValueError(f"{metric} is not available for {spec.domain}")
@@ -260,16 +273,26 @@ def _build_aggregate_query(
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     table = _TABLES[spec.domain]
     alias = _alias_for(spec.domain)
+    # SELECT needs the aliased "expr AS name" form; GROUP BY must repeat the
+    # bare expression -- "GROUP BY expr AS name" is a Postgres syntax error.
+    # Reusing `dimensions` (with the AS-suffix) for GROUP BY was the actual
+    # 503 cause: any group_by containing company_id/canonical_company_id
+    # (ranking-by-company queries) always failed with a real SQL syntax
+    # error, caught only by the endpoint's generic except-block.
     dimensions: list[str] = []
+    group_exprs: list[str] = []
     for group in spec.group_by:
         if group == "canonical_company_id":
-            dimensions.append(
-                "COALESCE(c.canonical_company_id, c.id) AS canonical_company_id"
-            )
+            expr = "COALESCE(c.canonical_company_id, c.id)"
+            dimensions.append(f"{expr} AS canonical_company_id")
+            group_exprs.append(expr)
         elif group == "company_id":
-            dimensions.append(f"{alias}.company_id AS company_id")
+            expr = f"{alias}.company_id"
+            dimensions.append(f"{expr} AS company_id")
+            group_exprs.append(expr)
         else:
             dimensions.append(group)
+            group_exprs.append(group)
     metrics = [_metric_sql(metric, table, spec) for metric in spec.metrics]
     join = ""
     if "company_id" in spec.group_by or "canonical_company_id" in spec.group_by:
@@ -280,8 +303,8 @@ def _build_aggregate_query(
     sql = f"SELECT {', '.join(dimensions + metrics)} FROM {table} {alias}{join}"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    if dimensions:
-        sql += " GROUP BY " + ", ".join(dimensions)
+    if group_exprs:
+        sql += " GROUP BY " + ", ".join(group_exprs)
     if spec.order_by:
         direction = "DESC" if spec.order_by in spec.metrics else "ASC"
         sql += f" ORDER BY {spec.order_by} {direction}"
@@ -372,10 +395,18 @@ def analytics_query(spec: AnalyticsQuerySpec) -> dict[str, Any]:
             "confidence": "medium" if rows else "low",
             "data_gaps": ([] if rows else ["no matching records"]),
         }
-    except Exception as exc:
+    except Exception:
         session.rollback()
+        # Full cause goes to server logs only -- the API response never
+        # leaks DB/internal details (query text, table names, driver
+        # errors) to the caller.
+        logger.exception(
+            "analytics query failed domain=%s operation=%s",
+            spec.domain,
+            spec.operation,
+        )
         raise HTTPException(
             status_code=503, detail="analytics query unavailable"
-        ) from exc
+        ) from None
     finally:
         session.close()
