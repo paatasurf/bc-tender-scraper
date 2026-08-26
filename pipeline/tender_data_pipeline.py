@@ -3,11 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from config.env import env_flag
 from db.connection import get_session, init_db
 from db.import_contract_awards import import_contract_awards
 from db.import_csv import import_all_csvs
 from pipeline.csv_verify import verify_tender_csvs
 from pipeline.db_verify import count_table_rows, verify_database_counts
+from pipeline.job_run import (
+    finish_job_run,
+    heartbeat_job_run,
+    record_job_step,
+    start_job_run,
+)
+from pipeline.job_run_telemetry import call_with_telemetry_session
 from pipeline.run_coordinator import (
     begin_full_scrape,
     begin_import,
@@ -38,6 +46,26 @@ TENDER_SCRAPER_RUNNERS: tuple[tuple[str, str, Any], ...] = (
     ("scrape-commercial", "Commercial tenders", run_commercial_scraper),
 )
 
+# (Stage 2) Maps each TENDER_SCRAPER_RUNNERS step key to the artifact
+# name pipeline.csv_verify.TENDER_CSV_ARTIFACTS uses, and to the import
+# key db.import_csv.import_all_csvs()/pipeline.db_verify.verify_database_counts()
+# use for the same source. One mapping, defined once, reused everywhere
+# a step needs to be translated to "which CSV/import does this source
+# own" -- a wrong entry here would silently verify/import the wrong
+# artifact, so lookups use plain [] (never .get()): an unmapped step
+# must fail loudly, not skip silently. Covered by its own trivial
+# dict-equality test.
+TENDER_SCRAPE_STEP_TO_ARTIFACT: dict[str, str] = {
+    "scrape-federal": "federal_merx_tenders",
+    "scrape-merx-arch": "architecture_tenders",
+    "scrape-commercial": "commercial_tenders",
+}
+TENDER_SCRAPE_STEP_TO_IMPORT_KEY: dict[str, str] = {
+    "scrape-federal": "tenders",
+    "scrape-merx-arch": "arch_tenders",
+    "scrape-commercial": "commercial_tenders",
+}
+
 AUXILIARY_SCRAPER_RUNNERS: tuple[tuple[str, Any], ...] = (
     ("Building permits", run_building_permits_scraper),
     ("Vancouver early signal events", run_vancouver_early_signal_events_scraper),
@@ -46,17 +74,409 @@ AUXILIARY_SCRAPER_RUNNERS: tuple[tuple[str, Any], ...] = (
     ("LinkedIn signals", run_linkedin_scraper),
 )
 
+# (M3F foundation) The only two trigger values run_tender_data_pipeline()
+# has real, honest production callers for today: the scheduled daily cron
+# (pipeline/run.py, unchanged by this constant -- its bare call inherits
+# the default below) and the manual full-pipeline admin endpoint
+# (api/internal.py's POST /internal/pipeline/tender-data, which n8n also
+# calls -- there is no distinct n8n-specific trigger path here, so "n8n"
+# is deliberately not in this allowlist even though it's a valid value in
+# the broader pipeline.job_run trigger schema used elsewhere).
+_VALID_TENDER_DATA_PIPELINE_TRIGGERS = frozenset({"scheduler", "manual"})
+
+BUILDING_PERMITS_JOB_RUN_TELEMETRY_FLAG = "ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY"
+BUILDING_PERMITS_JOB_RUN_JOB_TYPE = "building_permits"
+_BUILDING_PERMITS_TELEMETRY_LOG_LABEL = "Building permits telemetry"
+
+# Flat int fields already present, unchanged, in
+# run_building_permits_scraper()'s own return dict -- see
+# scraper/building_permits.py::scrape_vancouver_permits(). Deliberately an
+# explicit allowlist, not a blanket pass-through, same reasoning as every
+# M3D-A/B/C count allowlist. `mode` (str), `csv_path` (a filesystem path
+# string), and `source`/`city` (fixed string constants) are NEVER included
+# -- validate_counts() rejects strings outright, and none of them are
+# useful telemetry counts even if they weren't.
+_BUILDING_PERMITS_COUNT_KEYS = ("permits_scraped", "permits_persisted", "days")
+
+
+def building_permits_job_run_telemetry_enabled() -> bool:
+    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
+    every other flag in this repo. False by default."""
+    return env_flag(BUILDING_PERMITS_JOB_RUN_TELEMETRY_FLAG, default=False)
+
+
+def _safe_building_permits_counts(result: dict) -> dict[str, int]:
+    """Allowlisted counts only -- never `mode`, `csv_path`, or the fixed
+    `source`/`city` string constants. None of those belong in
+    ops_job_runs.counts (a flat numeric-only JSON object); this function
+    only narrows further, and protects against the return dict growing an
+    unexpected field in the future."""
+    return {key: result[key] for key in _BUILDING_PERMITS_COUNT_KEYS if key in result}
+
+
+def _building_permits_telemetry_start(*, trigger: str) -> str | None:
+    def _do(session: object) -> str:
+        return start_job_run(
+            session,
+            job_type=BUILDING_PERMITS_JOB_RUN_JOB_TYPE,
+            trigger=trigger,
+            source="permits",
+        )
+
+    return call_with_telemetry_session(
+        _do,
+        log_label=_BUILDING_PERMITS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to start job run tracking",
+    )
+
+
+def _building_permits_telemetry_finish(
+    run_id: str,
+    *,
+    status: str,
+    counts: dict[str, int] | None = None,
+    raw_error: str | None = None,
+) -> None:
+    def _do(session: object) -> None:
+        finish_job_run(
+            session, run_id, status=status, counts=counts, raw_error=raw_error
+        )
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_BUILDING_PERMITS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to finish job run tracking",
+    )
+
+
+def _run_building_permits_with_telemetry(runner, *, trigger: str) -> dict[str, Any]:
+    """(M3F-1) Wraps run_building_permits_scraper() with optional
+    ops_job_run telemetry -- started -> finished only. scrape_vancouver_
+    permits() has no internal step boundaries to report (a single
+    unwrapped fetch -> write -> persist sequence -- see the M3F audit),
+    so there is no phase event to add and no honest partial_failure to
+    distinguish -- only success/failed.
+
+    Fail-open: a telemetry failure at any boundary never affects the
+    scraper's own call or its exception propagation. On a raised
+    exception, status="failed" is recorded and the exception is
+    re-raised UNCHANGED, so the existing per-runner try/except in
+    run_auxiliary_scrapers() below still performs its normal
+    fail-and-continue handling -- this wrapper never swallows or alters
+    what that loop already does.
+    """
+    telemetry_run_id = _building_permits_telemetry_start(trigger=trigger)
+    try:
+        counts = runner()
+    except Exception as exc:
+        if telemetry_run_id is not None:
+            _building_permits_telemetry_finish(
+                telemetry_run_id, status="failed", raw_error=str(exc)
+            )
+        raise
+    else:
+        if telemetry_run_id is not None:
+            _building_permits_telemetry_finish(
+                telemetry_run_id,
+                status="success",
+                counts=_safe_building_permits_counts(counts),
+            )
+        return counts
+
+
+VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY_FLAG = (
+    "ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY"
+)
+VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_JOB_TYPE = "vancouver_early_signal_events"
+_VANCOUVER_EARLY_SIGNAL_EVENTS_TELEMETRY_LOG_LABEL = (
+    "Vancouver early signal events telemetry"
+)
+
+# Flat int fields already present, unchanged, in
+# run_vancouver_early_signal_events_scraper()'s own return dict -- see
+# scraper/vancouver_early_signal_events.py::scrape_vancouver_early_signal_events()
+# (via _persist_records()). Deliberately an explicit allowlist, not a
+# blanket pass-through, same reasoning as every other M3D/M3F count
+# allowlist. `source`, `dataset`, and `municipality` (fixed string
+# constants also present in that return dict) are NEVER included --
+# validate_counts() rejects strings outright, and none of them are useful
+# telemetry counts even if they weren't.
+_VANCOUVER_EARLY_SIGNAL_EVENTS_COUNT_KEYS = (
+    "events_scraped",
+    "rezoning_applications",
+    "development_permit_applications",
+    "events_persisted",
+)
+
+
+def vancouver_early_signal_events_job_run_telemetry_enabled() -> bool:
+    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
+    every other flag in this repo. False by default."""
+    return env_flag(VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY_FLAG, default=False)
+
+
+def _safe_vancouver_early_signal_events_counts(result: dict) -> dict[str, int]:
+    """Allowlisted counts only -- never `source`, `dataset`, or
+    `municipality` (fixed string constants). None of those belong in
+    ops_job_runs.counts (a flat numeric-only JSON object); this function
+    only narrows further, and protects against the return dict growing an
+    unexpected field in the future."""
+    return {
+        key: result[key]
+        for key in _VANCOUVER_EARLY_SIGNAL_EVENTS_COUNT_KEYS
+        if key in result
+    }
+
+
+def _vancouver_early_signal_events_telemetry_start(*, trigger: str) -> str | None:
+    def _do(session: object) -> str:
+        return start_job_run(
+            session,
+            job_type=VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_JOB_TYPE,
+            trigger=trigger,
+            source="vancouver_open_data",
+        )
+
+    return call_with_telemetry_session(
+        _do,
+        log_label=_VANCOUVER_EARLY_SIGNAL_EVENTS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to start job run tracking",
+    )
+
+
+def _vancouver_early_signal_events_telemetry_finish(
+    run_id: str,
+    *,
+    status: str,
+    counts: dict[str, int] | None = None,
+    raw_error: str | None = None,
+) -> None:
+    def _do(session: object) -> None:
+        finish_job_run(
+            session, run_id, status=status, counts=counts, raw_error=raw_error
+        )
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_VANCOUVER_EARLY_SIGNAL_EVENTS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to finish job run tracking",
+    )
+
+
+def _run_vancouver_early_signal_events_with_telemetry(
+    runner, *, trigger: str
+) -> dict[str, Any]:
+    """(M3F-2) Wraps run_vancouver_early_signal_events_scraper() with
+    optional ops_job_run telemetry -- started -> finished only.
+    scrape_vancouver_early_signal_events() has no internal step
+    boundaries to report (a single unwrapped fetch -> classify -> persist
+    sequence -- see the M3F audit), so there is no phase event to add and
+    no honest partial_failure to distinguish -- only success/failed.
+
+    Fail-open: a telemetry failure at any boundary never affects the
+    scraper's own call or its exception propagation. On a raised
+    exception, status="failed" is recorded and the exception is
+    re-raised UNCHANGED, so the existing per-runner try/except in
+    run_auxiliary_scrapers() below still performs its normal
+    fail-and-continue handling -- this wrapper never swallows or alters
+    what that loop already does.
+
+    This wraps only the base scrape (the scheduled auxiliary-scraper
+    runner) -- the separate enrichment step
+    (run_vancouver_early_signal_enrichment_scraper(), manual/n8n-only via
+    POST /internal/enrich-early-signals) is untouched and out of scope.
+    """
+    telemetry_run_id = _vancouver_early_signal_events_telemetry_start(trigger=trigger)
+    try:
+        counts = runner()
+    except Exception as exc:
+        if telemetry_run_id is not None:
+            _vancouver_early_signal_events_telemetry_finish(
+                telemetry_run_id, status="failed", raw_error=str(exc)
+            )
+        raise
+    else:
+        if telemetry_run_id is not None:
+            _vancouver_early_signal_events_telemetry_finish(
+                telemetry_run_id,
+                status="success",
+                counts=_safe_vancouver_early_signal_events_counts(counts),
+            )
+        return counts
+
+
+NEWS_SIGNALS_JOB_RUN_TELEMETRY_FLAG = "ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY"
+NEWS_SIGNALS_JOB_RUN_JOB_TYPE = "news_signals"
+_NEWS_SIGNALS_TELEMETRY_LOG_LABEL = "News signals telemetry"
+
+# The one flat int field already present, unchanged, in
+# run_news_scraper()'s own return dict -- see scraper/news_signals.py::
+# scrape_news_signals(). Deliberately kept at exactly this shape per the
+# accepted M3F-3 design: the return shape of scrape_news_signals()/
+# run_news_scraper() is NOT changed by this telemetry work -- no
+# per-publisher counts are added, only the pre-existing signals_saved.
+_NEWS_SIGNALS_COUNT_KEYS = ("signals_saved",)
+
+
+def news_signals_job_run_telemetry_enabled() -> bool:
+    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
+    every other flag in this repo. False by default."""
+    return env_flag(NEWS_SIGNALS_JOB_RUN_TELEMETRY_FLAG, default=False)
+
+
+def _safe_news_signals_counts(result: dict) -> dict[str, int]:
+    """Allowlisted counts only -- exactly signals_saved, nothing else.
+    Protects against the return dict growing an unexpected field in the
+    future."""
+    return {key: result[key] for key in _NEWS_SIGNALS_COUNT_KEYS if key in result}
+
+
+def _news_signals_telemetry_start(*, trigger: str) -> str | None:
+    def _do(session: object) -> str:
+        return start_job_run(
+            session,
+            job_type=NEWS_SIGNALS_JOB_RUN_JOB_TYPE,
+            trigger=trigger,
+            source=None,
+        )
+
+    return call_with_telemetry_session(
+        _do,
+        log_label=_NEWS_SIGNALS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to start job run tracking",
+    )
+
+
+def _news_signals_telemetry_phase(run_id: str, phase: str) -> None:
+    """Records step_completed for a successful feed, or step_failed for a
+    phase name ending in "_failed" (the convention
+    scrape_news_signals()'s own on_phase calls use for its per-feed
+    except-block -- see scraper/news_signals.py). Both event types
+    heartbeat the run the same way."""
+
+    def _do(session: object) -> None:
+        event_type = "step_failed" if phase.endswith("_failed") else "step_completed"
+        record_job_step(session, run_id, event_type=event_type, step=phase)
+        heartbeat_job_run(session, run_id)
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_NEWS_SIGNALS_TELEMETRY_LOG_LABEL,
+        failure_message=f"failed to record phase={phase}",
+    )
+
+
+def _news_signals_telemetry_finish(
+    run_id: str,
+    *,
+    status: str,
+    counts: dict[str, int] | None = None,
+    raw_error: str | None = None,
+) -> None:
+    def _do(session: object) -> None:
+        finish_job_run(
+            session, run_id, status=status, counts=counts, raw_error=raw_error
+        )
+
+    call_with_telemetry_session(
+        _do,
+        log_label=_NEWS_SIGNALS_TELEMETRY_LOG_LABEL,
+        failure_message="failed to finish job run tracking",
+    )
+
+
+def _run_news_signals_with_telemetry(runner, *, trigger: str) -> dict[str, Any]:
+    """(M3F-3) Wraps run_news_scraper() with optional ops_job_run
+    telemetry. Unlike M3F-1/M3F-2, scrape_news_signals() already has real
+    per-feed fault isolation (the existing per-source try/except around
+    each of the 4 NEWS_SOURCES, unchanged by this wrapper) -- structurally
+    the same shape as arch_company_intelligence's steps. This wrapper
+    threads an on_phase callback through run_news_scraper() so a single
+    feed's failure is honestly reported as step_failed, and the overall
+    status becomes "partial_failure" (not "success") whenever any feed
+    failed but the run still completed -- never guessed.
+
+    Fail-open: a telemetry failure at any boundary never affects the
+    scraper's own call or its exception propagation. On a raised
+    exception (outside the per-feed try/except -- e.g. a CSV write
+    failure), status="failed" is recorded and the exception is re-raised
+    UNCHANGED, so the existing per-runner try/except in
+    run_auxiliary_scrapers() below still performs its normal
+    fail-and-continue handling -- this wrapper never swallows or alters
+    what that loop already does.
+    """
+    telemetry_run_id = _news_signals_telemetry_start(trigger=trigger)
+    try:
+        if telemetry_run_id is not None:
+            any_step_failed = False
+
+            def on_phase(phase: str) -> None:
+                nonlocal any_step_failed
+                if phase.endswith("_failed"):
+                    any_step_failed = True
+                _news_signals_telemetry_phase(telemetry_run_id, phase)
+
+            counts = runner(on_phase=on_phase)
+        else:
+            # Telemetry start failed (fail-open): call with the exact
+            # pre-M3F-3 signature -- no on_phase kwarg at all -- so this
+            # path is byte-for-byte the same call as when the flag is off.
+            counts = runner()
+    except Exception as exc:
+        if telemetry_run_id is not None:
+            _news_signals_telemetry_finish(
+                telemetry_run_id, status="failed", raw_error=str(exc)
+            )
+        raise
+    else:
+        if telemetry_run_id is not None:
+            status = "partial_failure" if any_step_failed else "success"
+            _news_signals_telemetry_finish(
+                telemetry_run_id,
+                status=status,
+                counts=_safe_news_signals_counts(counts),
+            )
+        return counts
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def run_tender_scrapers(run_id: str) -> dict[str, Any]:
-    """Run all tender scrapers sequentially and mark coordinator steps."""
+    """Run all tender scrapers sequentially and mark coordinator steps.
+
+    (Stage 1 of the partial-failure resilience design.) Returns a
+    structured per-source result instead of raising when a scraper
+    fails. This function itself never raises on a scraper-level failure
+    -- run_tender_data_pipeline() (its only production caller) decides
+    what to do with the result. As of Stage 2, that caller lets an
+    independently-successful scraper's CSV still get imported the same
+    day despite another scraper's failure (see
+    TENDER_SCRAPE_STEP_TO_ARTIFACT/TENDER_SCRAPE_STEP_TO_IMPORT_KEY and
+    run_tender_data_pipeline()'s own docstring); this function's own
+    per-scraper try/except loop is unchanged by Stage 2 -- it already
+    produced everything the caller needs.
+
+    The loop's order and each scraper's own try/except are unchanged
+    from before this refactor.
+
+    Return shape:
+        {
+            "scrape_started_at": iso str,
+            "scrape_finished_at": iso str,
+            "status": "success" | "partial_failure" | "failed",
+            "steps": {step: {"status": "success"|"failed",
+                              "counts": dict | None, "error": str | None}},
+            "merx_open_status": "success" | "failed" | "not_attempted",
+            "errors": [str, ...],
+        }
+    """
     begin_tender_scrape(run_id)
     scrape_started_at = _utc_now()
-    results: dict[str, Any] = {"scrape_started_at": scrape_started_at.isoformat(), "steps": {}}
+    steps: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
+    merx_open_status = "not_attempted"
 
     print("[Pipeline] Phase 1/4: Tender scrapers (sequential)")
     for step, label, runner in TENDER_SCRAPER_RUNNERS:
@@ -68,28 +488,97 @@ def run_tender_scrapers(run_id: str) -> dict[str, Any]:
             else:
                 print(f"[Pipeline] {label} complete: {counts}")
             mark_tender_scrape_step(run_id, step)
-            results["steps"][step] = counts
+            steps[step] = {"status": "success", "counts": counts, "error": None}
+            if step == "scrape-federal":
+                # run_federal_scraper() (scraper/runners.py) only reaches
+                # its MERX Open call after its own Federal scrape
+                # succeeds -- if we get here, MERX Open was at least
+                # attempted. "merx_error" in counts (set by
+                # _scrape_merx_open_or_empty()) means MERX Open was
+                # attempted and failed, not that it was skipped.
+                merx_open_status = "failed" if counts.get("merx_error") else "success"
         except Exception as exc:
             errors.append(f"{label}: {exc}")
             print(f"[Pipeline] {label} failed: {exc}")
+            steps[step] = {"status": "failed", "counts": None, "error": str(exc)}
+            # run_federal_scraper() raises here only if its own Federal
+            # scrape failed, before ever reaching the MERX Open call --
+            # MERX Open was never attempted this run (merx_open_status
+            # keeps its "not_attempted" default from above).
 
-    if errors:
-        finish_run(run_id, success=False, error="; ".join(errors))
-        raise RuntimeError("Tender scrape phase failed: " + "; ".join(errors))
+    if not errors:
+        complete_tender_scrape(run_id)
+        status = "success"
+    elif len(errors) == len(TENDER_SCRAPER_RUNNERS):
+        status = "failed"
+    else:
+        status = "partial_failure"
 
-    complete_tender_scrape(run_id)
-    results["scrape_finished_at"] = _utc_now().isoformat()
-    return results
+    return {
+        "scrape_started_at": scrape_started_at.isoformat(),
+        "scrape_finished_at": _utc_now().isoformat(),
+        "status": status,
+        "steps": steps,
+        "merx_open_status": merx_open_status,
+        "errors": errors,
+    }
 
 
-def run_auxiliary_scrapers() -> dict[str, Any]:
-    """Run non-tender scrapers after tender CSVs are written (best-effort)."""
+def run_auxiliary_scrapers(*, trigger: str = "scheduler") -> dict[str, Any]:
+    """Run non-tender scrapers after tender CSVs are written (best-effort).
+
+    (M3F foundation) ``trigger`` is a plain pass-through -- not
+    re-validated here, run_tender_data_pipeline() is this function's only
+    production caller and already validates it against
+    _VALID_TENDER_DATA_PIPELINE_TRIGGERS before calling in.
+
+    (M3F-1) The "Building permits" runner optionally persists run history
+    to ops_job_runs/ops_job_run_events (migration 033, pipeline/job_run.py),
+    gated by ENABLE_BUILDING_PERMITS_JOB_RUN_TELEMETRY (default false).
+    With the flag off, run_building_permits_scraper() is called with the
+    exact same zero-argument signature as before this change -- no
+    telemetry writes of any kind. Uses the ``trigger`` value passed into
+    this function (never hardcoded) -- honest whether this run came from
+    the scheduled cron or the manual full-pipeline endpoint.
+
+    (M3F-2) The "Vancouver early signal events" runner optionally persists
+    run history the same way, gated by
+    ENABLE_VANCOUVER_EARLY_SIGNAL_EVENTS_JOB_RUN_TELEMETRY (default
+    false), with the same flag-off byte-equivalence guarantee. This wraps
+    only the base scrape (this auxiliary-scraper entry) -- the separate
+    manual/n8n-only enrichment step is untouched.
+
+    (M3F-3) The "News signals" runner optionally persists run history the
+    same way, gated by ENABLE_NEWS_SIGNALS_JOB_RUN_TELEMETRY (default
+    false), with the same flag-off byte-equivalence guarantee. Unlike
+    M3F-1/M3F-2, this one can report status="partial_failure" -- see
+    _run_news_signals_with_telemetry()'s own docstring for why.
+
+    The remaining two auxiliary scrapers (Reddit signals, LinkedIn
+    signals) are untouched by this change and remain plain ``runner()``
+    calls.
+    """
     print("[Pipeline] Running auxiliary scrapers (permits, signals)...")
     results: dict[str, Any] = {"errors": []}
 
     for label, runner in AUXILIARY_SCRAPER_RUNNERS:
         try:
-            counts = runner()
+            if (
+                label == "Building permits"
+                and building_permits_job_run_telemetry_enabled()
+            ):
+                counts = _run_building_permits_with_telemetry(runner, trigger=trigger)
+            elif (
+                label == "Vancouver early signal events"
+                and vancouver_early_signal_events_job_run_telemetry_enabled()
+            ):
+                counts = _run_vancouver_early_signal_events_with_telemetry(
+                    runner, trigger=trigger
+                )
+            elif label == "News signals" and news_signals_job_run_telemetry_enabled():
+                counts = _run_news_signals_with_telemetry(runner, trigger=trigger)
+            else:
+                counts = runner()
             if counts.get("skipped"):
                 print(f"[Pipeline] {label} skipped: {counts.get('reason', 'disabled')}")
             else:
@@ -108,7 +597,9 @@ def run_auxiliary_scrapers() -> dict[str, Any]:
     return results
 
 
-def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
+def run_tender_data_pipeline(
+    *, run_id: str | None = None, trigger: str = "scheduler"
+) -> dict[str, Any]:
     """
     Deterministic tender data path:
       1. Tender scrapers (sequential)
@@ -116,7 +607,26 @@ def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
       3. CSV verification
       4. Import all CSVs + contract awards
       5. Database count verification
+
+    (M3F foundation) ``trigger`` defaults to "scheduler" -- the honest
+    default for the overwhelming majority real caller, the daily
+    APScheduler cron (pipeline/run.py, unchanged by this parameter: its
+    existing bare call inherits this default). The manual full-pipeline
+    admin endpoint (api/internal.py's POST /internal/pipeline/tender-data,
+    which n8n also calls) passes trigger="manual" explicitly. Validated
+    against _VALID_TENDER_DATA_PIPELINE_TRIGGERS before any coordinator
+    state is touched -- an invalid value raises ValueError immediately,
+    before begin_run()/begin_full_scrape() ever run. Threaded straight
+    into run_auxiliary_scrapers(trigger=trigger) -- no telemetry is added
+    by this change; trigger is pure plumbing for a later per-source
+    telemetry change to read.
     """
+    if trigger not in _VALID_TENDER_DATA_PIPELINE_TRIGGERS:
+        raise ValueError(
+            f"trigger must be one of {sorted(_VALID_TENDER_DATA_PIPELINE_TRIGGERS)}, "
+            f"got {trigger!r}"
+        )
+
     actual_run_id = run_id or new_run_id()
     begin_run(actual_run_id)
     begin_full_scrape(actual_run_id)
@@ -127,13 +637,47 @@ def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
         tender_scrape = run_tender_scrapers(actual_run_id)
         summary["phases"]["tender_scrape"] = tender_scrape
 
-        auxiliary = run_auxiliary_scrapers()
+        # (Stage 2) Only a total scrape failure -- tender_scrape["status"]
+        # == "failed", meaning every TENDER_SCRAPER_RUNNERS step failed --
+        # still aborts the whole run before auxiliary scrapers/CSV
+        # verification/import, exactly as Stage 1's fail-fast behavior
+        # (same RuntimeError type and message text). A "partial_failure"
+        # (some but not all steps succeeded) now proceeds: only the
+        # failed/not_attempted source's own CSV/import is skipped, every
+        # independently-successful source is verified and imported
+        # normally, and auxiliary scrapers still run. This function no
+        # longer raising on partial_failure is also what lets
+        # pipeline/run.py's ai_scoring/company_intelligence/
+        # arch_company_intelligence steps continue afterward -- that
+        # file's own try/except around this function only triggers on a
+        # raise, so it needs no change of its own.
+        scrape_errors = tender_scrape.get("errors", [])
+        if tender_scrape.get("status") == "failed":
+            raise RuntimeError(
+                "Tender scrape phase failed: " + "; ".join(scrape_errors)
+            )
+
+        # Per-source skip sets, derived only from this run's own recorded
+        # step status -- never a blanket "skip everything because
+        # something failed". A step key missing from the mapping raises
+        # KeyError immediately (fail loud), never silently skips the
+        # wrong artifact.
+        skip_artifacts: set[str] = set()
+        skip_import_keys: set[str] = set()
+        for step, step_result in tender_scrape.get("steps", {}).items():
+            if step_result.get("status") != "success":
+                skip_artifacts.add(TENDER_SCRAPE_STEP_TO_ARTIFACT[step])
+                skip_import_keys.add(TENDER_SCRAPE_STEP_TO_IMPORT_KEY[step])
+
+        auxiliary = run_auxiliary_scrapers(trigger=trigger)
         summary["phases"]["auxiliary_scrape"] = auxiliary
         complete_full_scrape(actual_run_id)
 
         scrape_started = datetime.fromisoformat(tender_scrape["scrape_started_at"])
         print("[Pipeline] Phase 2/4: Verify tender CSV artifacts")
-        csv_results = verify_tender_csvs(not_before=scrape_started)
+        csv_results = verify_tender_csvs(
+            not_before=scrape_started, skip=frozenset(skip_artifacts)
+        )
         summary["phases"]["csv_verification"] = csv_results
 
         print("[Pipeline] Phase 3/4: Import all CSVs into PostgreSQL")
@@ -142,7 +686,7 @@ def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
         try:
             previous_counts = count_table_rows(session)
             begin_import(actual_run_id)
-            import_counts = import_all_csvs(session)
+            import_counts = import_all_csvs(session, skip=frozenset(skip_import_keys))
             awards_imported = import_contract_awards(session)
             import_counts["contract_awards"] = awards_imported
             refresh_company_award_stats(session)
@@ -154,14 +698,27 @@ def run_tender_data_pipeline(*, run_id: str | None = None) -> dict[str, Any]:
                 session,
                 import_counts,
                 previous_counts=previous_counts,
+                skip_import_check=frozenset(skip_import_keys),
             )
             summary["phases"]["db_verification"] = db_results
         finally:
             session.close()
 
+        # (Stage 2) finish_run()'s own success flag stays a plain boolean
+        # at the coordinator level -- the coordinator itself has no
+        # partial-state concept and is explicitly out of scope. True
+        # whenever this run produced usable, imported data, whether every
+        # source succeeded or only some did; the fine-grained signal
+        # lives in summary["status"] below, not in the coordinator.
         finish_run(actual_run_id, success=True)
-        summary["status"] = "success"
-        print("[Pipeline] Tender data pipeline finished successfully")
+        summary["status"] = tender_scrape.get("status", "success")
+        if summary["status"] == "partial_failure":
+            print(
+                "[Pipeline] Tender data pipeline finished with partial_failure: "
+                + "; ".join(scrape_errors)
+            )
+        else:
+            print("[Pipeline] Tender data pipeline finished successfully")
         return summary
     except Exception as exc:
         finish_run(actual_run_id, success=False, error=str(exc))

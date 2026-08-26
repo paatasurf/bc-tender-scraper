@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 from sqlalchemy import func, select
@@ -29,6 +30,8 @@ from pipeline.company_intelligence import (
     _parse_value,
     _tender_lines,
 )
+
+logger = logging.getLogger(__name__)
 
 EXCLUDED_ARCHITECT_VALUES = {"", "N/A"}
 
@@ -101,11 +104,17 @@ def populate_arch_companies_from_permits(session: Session) -> int:
             "name": name,
             "total_projects": entry.total_projects,
             "total_value": round(entry.total_value, 2),
-            "avg_project_value": round(entry.total_value / entry.total_projects, 2)
-            if entry.total_projects
-            else 0.0,
-            "project_types": [item for item, _ in entry.project_types.most_common(MAX_LIST_ITEMS)],
-            "neighborhoods": [item for item, _ in entry.neighborhoods.most_common(MAX_LIST_ITEMS)],
+            "avg_project_value": (
+                round(entry.total_value / entry.total_projects, 2)
+                if entry.total_projects
+                else 0.0
+            ),
+            "project_types": [
+                item for item, _ in entry.project_types.most_common(MAX_LIST_ITEMS)
+            ],
+            "neighborhoods": [
+                item for item, _ in entry.neighborhoods.most_common(MAX_LIST_ITEMS)
+            ],
             "first_project_date": entry.first_project_date,
             "last_project_date": entry.last_project_date,
         }
@@ -139,7 +148,9 @@ def enrich_arch_companies_google(session: Session) -> int:
     """Fetch rating, review count, address, and phone from Google Places."""
     api_key = _google_api_key()
     if not api_key:
-        print("[ArchCompanies] Skipping Google enrichment: GOOGLE_PLACES_API_KEY is not set.")
+        print(
+            "[ArchCompanies] Skipping Google enrichment: GOOGLE_PLACES_API_KEY is not set."
+        )
         return 0
 
     limit = _batch_limit("ARCH_COMPANY_GOOGLE_MAX_PER_RUN", DEFAULT_GOOGLE_BATCH_LIMIT)
@@ -198,17 +209,25 @@ def _arch_company_profile_lines(company: ArchCompany) -> str:
         )
         lines.append(f"Houzz: {houzz}")
         if company.houzz_project_types:
-            lines.append(f"Houzz project types: {', '.join(company.houzz_project_types)}")
+            lines.append(
+                f"Houzz project types: {', '.join(company.houzz_project_types)}"
+            )
     if company.website_projects_count is not None:
         lines.append(
             f"Website portfolio: {company.website_projects_count} BC projects showcased"
         )
         if company.website_specializations:
-            lines.append(f"Specializations: {', '.join(company.website_specializations)}")
+            lines.append(
+                f"Specializations: {', '.join(company.website_specializations)}"
+            )
         if company.website_service_areas:
-            lines.append(f"BC service areas: {', '.join(company.website_service_areas[:8])}")
+            lines.append(
+                f"BC service areas: {', '.join(company.website_service_areas[:8])}"
+            )
         if company.website_notable_projects:
-            lines.append(f"Notable BC projects: {', '.join(company.website_notable_projects[:5])}")
+            lines.append(
+                f"Notable BC projects: {', '.join(company.website_notable_projects[:5])}"
+            )
     if company.total_projects:
         lines.extend(
             [
@@ -241,7 +260,9 @@ def _score_houzz_component(company: ArchCompany) -> float:
     max_pts = 30.0
     if company.houzz_rating is not None:
         rating_pts = (company.houzz_rating / 5.0) * max_pts * 0.7
-        review_pts = min(max_pts * 0.3, ((company.houzz_reviews_count or 0) / 100.0) * max_pts * 0.3)
+        review_pts = min(
+            max_pts * 0.3, ((company.houzz_reviews_count or 0) / 100.0) * max_pts * 0.3
+        )
         return min(max_pts, rating_pts + review_pts)
     if (company.houzz_reviews_count or 0) > 0:
         return min(max_pts * 0.4, (company.houzz_reviews_count / 50.0) * max_pts * 0.4)
@@ -300,16 +321,23 @@ def _fallback_summary(company: ArchCompany, score: int) -> str:
     if company.houzz_projects_count:
         parts.append(f"Houzz lists {company.houzz_projects_count} portfolio projects.")
     if company.website_projects_count:
-        parts.append(f"The firm website showcases {company.website_projects_count} BC projects.")
+        parts.append(
+            f"The firm website showcases {company.website_projects_count} BC projects."
+        )
     if company.total_projects:
-        parts.append(f"{company.total_projects} Vancouver building permits are on record.")
+        parts.append(
+            f"{company.total_projects} Vancouver building permits are on record."
+        )
     return " ".join(parts)
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
     if isinstance(exc, anthropic.RateLimitError):
         return True
-    if isinstance(exc, anthropic.APIStatusError) and getattr(exc, "status_code", None) == 429:
+    if (
+        isinstance(exc, anthropic.APIStatusError)
+        and getattr(exc, "status_code", None) == 429
+    ):
         return True
     message = str(exc).lower()
     return "429" in message or "rate limit" in message
@@ -332,14 +360,18 @@ def _fetch_claude_summary(client: anthropic.Anthropic, company: ArchCompany) -> 
     return summary
 
 
-def _fetch_claude_summary_with_retry(client: anthropic.Anthropic, company: ArchCompany) -> str:
+def _fetch_claude_summary_with_retry(
+    client: anthropic.Anthropic, company: ArchCompany
+) -> str:
     last_error: Exception | None = None
     for attempt in range(len(RATE_LIMIT_BACKOFF_SECONDS) + 1):
         try:
             return _fetch_claude_summary(client, company)
         except Exception as exc:
             last_error = exc
-            if not _is_rate_limit_error(exc) or attempt >= len(RATE_LIMIT_BACKOFF_SECONDS):
+            if not _is_rate_limit_error(exc) or attempt >= len(
+                RATE_LIMIT_BACKOFF_SECONDS
+            ):
                 raise
             wait = RATE_LIMIT_BACKOFF_SECONDS[attempt]
             print(
@@ -360,7 +392,9 @@ def backfill_arch_reliability_scores(session: Session) -> int:
     if not companies:
         return 0
 
-    print(f"[ArchCompanies] Backfilling {len(companies)} reliability scores (local, no API)...")
+    print(
+        f"[ArchCompanies] Backfilling {len(companies)} reliability scores (local, no API)..."
+    )
     for company in companies:
         score = _compute_arch_reliability_score(company)
         company.ai_reliability_score = score
@@ -401,7 +435,9 @@ def analyze_arch_companies_ai(session: Session) -> int:
 
     api_key = get_anthropic_api_key()
     if not api_key:
-        print("[ArchCompanies] Skipping Claude summaries: ANTHROPIC_API_KEY is not set.")
+        print(
+            "[ArchCompanies] Skipping Claude summaries: ANTHROPIC_API_KEY is not set."
+        )
         return scored
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -424,7 +460,9 @@ def analyze_arch_companies_ai(session: Session) -> int:
         if index > 1:
             time.sleep(ARCH_AI_REQUEST_DELAY_SECONDS)
 
-        print(f"[ArchCompanies] AI summary {index}/{len(candidates)}: {company.name[:70]}")
+        print(
+            f"[ArchCompanies] AI summary {index}/{len(candidates)}: {company.name[:70]}"
+        )
         try:
             summary = _fetch_claude_summary_with_retry(client, company)
             company.ai_summary = summary
@@ -432,9 +470,13 @@ def analyze_arch_companies_ai(session: Session) -> int:
             enriched += 1
         except Exception as exc:
             session.rollback()
-            print(f"[ArchCompanies] Claude summary failed for {company.name[:50]}: {exc}")
+            print(
+                f"[ArchCompanies] Claude summary failed for {company.name[:50]}: {exc}"
+            )
 
-    print(f"[ArchCompanies] AI analysis complete: {scored} scored, {enriched} summaries enriched")
+    print(
+        f"[ArchCompanies] AI analysis complete: {scored} scored, {enriched} summaries enriched"
+    )
     return scored + enriched
 
 
@@ -443,7 +485,9 @@ def analyze_arch_companies_ai(session: Session) -> int:
 # ---------------------------------------------------------------------------
 
 
-def match_arch_company_to_tender(company: ArchCompany, tender: MatchableTender) -> dict[str, Any]:
+def match_arch_company_to_tender(
+    company: ArchCompany, tender: MatchableTender
+) -> dict[str, Any]:
     """Score how well an architecture firm fits a tender and suggest a win strategy."""
     api_key = get_anthropic_api_key()
     if not api_key:
@@ -490,7 +534,9 @@ Return JSON only:
         recommendations = []
     recommendations = [str(r).strip() for r in recommendations if str(r).strip()][:3]
     while len(recommendations) < 3:
-        recommendations.append("Highlight relevant BC portfolio projects in your proposal.")
+        recommendations.append(
+            "Highlight relevant BC portfolio projects in your proposal."
+        )
     analysis = str(payload.get("analysis", "")).strip()
     return {
         "match_score": match_score,
@@ -505,12 +551,42 @@ Return JSON only:
 # ---------------------------------------------------------------------------
 
 
-def run_arch_company_intelligence(session: Session) -> dict[str, int]:
+def _safe_call_on_phase(on_phase: Callable[[str], None], phase: str) -> None:
+    """(M3D-C) Invoke an optional progress callback without ever letting it
+    affect the caller -- mirrors pipeline.company_intelligence._safe_call_on_phase()
+    and pipeline.ai_scoring._safe_call_on_phase() exactly (kept as a
+    separate, small, local copy rather than a shared import so this
+    module's own arch-company-intelligence logic stays untouched by
+    anything outside it). Never logs the callback's exception text --
+    only a fixed, phase-named warning."""
+    try:
+        on_phase(phase)
+    except Exception:
+        logger.warning("[ArchCompanies] on_phase callback failed for phase=%s", phase)
+
+
+def run_arch_company_intelligence(
+    session: Session, *, on_phase: Callable[[str], None] | None = None
+) -> dict[str, int]:
+    """``on_phase``, if given, is called once after every step below: with
+    the step's own name on success, or ``f"{step}_failed"`` from inside the
+    step's existing except-block (steps 2-9 only -- step 1 has never had
+    its own except-block and that is unchanged here; an exception from
+    step 1 still propagates out of this function exactly as before M3D-C).
+    Both the success and failure calls go through _safe_call_on_phase(), so
+    a raising callback can never change this function's own steps, order,
+    fallback values, print() log lines, or return value. Defaults to None,
+    a complete no-op -- existing callers (the manual/n8n
+    run_arch_company_intelligence_step() and any test calling this
+    function positionally) are unaffected.
+    """
     from pipeline.research_arch_websites import research_arch_websites
     from pipeline.scrape_arch_aibc import scrape_arch_aibc
     from pipeline.scrape_arch_houzz import scrape_arch_houzz
 
     populated = populate_arch_companies_from_permits(session)
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "populate")
 
     # Score all firms immediately — must run before slow Houzz / website / Claude steps.
     try:
@@ -518,48 +594,90 @@ def run_arch_company_intelligence(session: Session) -> dict[str, int]:
     except Exception as exc:
         print(f"[ArchCompanies] Score backfill failed: {exc}")
         scores_backfilled = 0
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_backfilled_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_backfilled")
 
     try:
         ai_analyzed = analyze_arch_companies_ai(session)
     except Exception as exc:
         print(f"[ArchCompanies] AI analysis failed: {exc}")
         ai_analyzed = scores_backfilled
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "ai_analyzed_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "ai_analyzed")
 
     try:
         houzz_scraped = scrape_arch_houzz(session)
     except Exception as exc:
         print(f"[ArchCompanies] Houzz scrape failed: {exc}")
         houzz_scraped = 0
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "houzz_scraped_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "houzz_scraped")
 
     try:
         aibc_verified = scrape_arch_aibc(session)
     except Exception as exc:
         print(f"[ArchCompanies] AIBC scrape failed: {exc}")
         aibc_verified = 0
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "aibc_verified_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "aibc_verified")
 
     try:
         scores_refreshed = _refresh_arch_reliability_scores(session)
         if scores_refreshed:
-            print(f"[ArchCompanies] Refreshed {scores_refreshed} scores after Houzz enrichment")
+            print(
+                f"[ArchCompanies] Refreshed {scores_refreshed} scores after Houzz enrichment"
+            )
     except Exception as exc:
         print(f"[ArchCompanies] Score refresh failed: {exc}")
         scores_refreshed = 0
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_refreshed_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_refreshed")
 
     try:
         websites_researched = research_arch_websites(session)
     except Exception as exc:
         print(f"[ArchCompanies] Website research failed: {exc}")
         websites_researched = 0
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "websites_researched_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "websites_researched")
 
     try:
         scores_refreshed += _refresh_arch_reliability_scores(session)
     except Exception as exc:
         print(f"[ArchCompanies] Post-website score refresh failed: {exc}")
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_refreshed_post_website_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_refreshed_post_website")
 
     try:
         backfill_arch_reliability_scores(session)
     except Exception as exc:
         print(f"[ArchCompanies] Final score backfill failed: {exc}")
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_backfilled_final_failed")
+    else:
+        if on_phase is not None:
+            _safe_call_on_phase(on_phase, "scores_backfilled_final")
 
     return {
         "arch_companies_populated": populated,

@@ -202,9 +202,26 @@ def test_importable_row_values_normalizes_mixed_key_batch_for_insert():
     assert batch[0]["company_id"] == 123
     assert batch[1]["company_id"] is None
     assert batch[1]["canonical_merge_confidence"] is None
-    assert batch[1]["canonical_merge_method"] is None
+    # canonical_merge_method is a NOT NULL text column with no server-side
+    # default -- a missing key must normalize to "", not None (see below).
+    assert batch[1]["canonical_merge_method"] == ""
 
     _compile_keyed_permit_upsert(batch)
+
+
+def test_importable_row_values_defaults_missing_not_null_text_column_to_empty_string():
+    """Regression: a NOT NULL text column missing from the source row (e.g. a CSV
+    without an "architect" field) must become "", not an explicit None -- Core-level
+    insert() bypasses the ORM's Python-side default and would otherwise raise
+    psycopg2.errors.NotNullViolation."""
+    row = {"external_id": "REPRO-2", "address": "1 Main St"}
+    assert "architect" not in row
+
+    values = _importable_row_values(row, source="vancouver")
+
+    assert values["architect"] == ""
+    # company_id stays None: it's a nullable column, not text-typed.
+    assert values["company_id"] is None
 
 
 def test_clamp_permit_row_truncates_varchar_fields():

@@ -38,12 +38,32 @@ def _count_csv_rows(path: Path) -> int:
         return sum(1 for _ in reader)
 
 
-def verify_tender_csvs(*, not_before: datetime | None = None) -> dict[str, int | str]:
-    """Verify tender CSV files exist, are readable, and were written after scrape start."""
-    results: dict[str, int | str] = {}
+def verify_tender_csvs(
+    *,
+    not_before: datetime | None = None,
+    skip: frozenset[str] = frozenset(),
+) -> dict[str, int | str | bool]:
+    """Verify tender CSV files exist, are readable, and were written after
+    scrape start.
+
+    (Stage 2) ``skip`` names artifacts (CsvArtifact.name values) whose
+    owning scraper step did not succeed this run -- their file is never
+    opened, never stat'd, and the not_before staleness check never runs
+    for them. The skip is recorded explicitly as
+    ``results[f"{name}_skipped"] = True`` rather than silently omitted,
+    so a caller can always tell which artifacts were checked versus
+    skipped. Defaults to an empty set, which reproduces today's exact
+    "check every artifact strictly" behavior for any caller that doesn't
+    pass it -- nothing is weakened unless explicitly named here.
+    """
+    results: dict[str, int | str | bool] = {}
     errors: list[str] = []
 
     for artifact in TENDER_CSV_ARTIFACTS:
+        if artifact.name in skip:
+            results[f"{artifact.name}_skipped"] = True
+            continue
+
         path = artifact.path
         if not path.exists():
             if artifact.required:

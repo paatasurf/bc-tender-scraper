@@ -11,6 +11,7 @@ from pipeline.surrey_identity_scheduler import (
     SURREY_SCHEDULER_FLAG,
     SurreyIdentitySchedulerResult,
     compute_result_digest,
+    map_surrey_result_to_job_run_outcome,
     run_surrey_identity_import_once,
     surrey_scheduler_enabled,
 )
@@ -524,3 +525,279 @@ def test_run_once_full_success_applies_every_row_and_commits(db_session):
         {"n": new_number},
     ).scalar()
     assert inserted_count == 1
+
+
+# --- M3C: map_surrey_result_to_job_run_outcome (pure) -------------------
+
+
+def test_map_result_success_when_errors_zero():
+    result = SurreyIdentitySchedulerResult(
+        source_rows=12,
+        updated=3,
+        inserted=2,
+        errors=0,
+        plan_digest="a" * 64,
+        result_digest="b" * 64,
+    )
+    status, counts = map_surrey_result_to_job_run_outcome(result)
+    assert status == "success"
+    assert counts == {
+        "source_rows": 12,
+        "inserted": 2,
+        "updated": 3,
+        "error_count": 0,
+    }
+
+
+def test_map_result_partial_failure_when_errors_nonzero():
+    result = SurreyIdentitySchedulerResult(
+        source_rows=5,
+        updated=0,
+        inserted=0,
+        errors=1,
+        plan_digest="c" * 64,
+        result_digest=None,
+    )
+    status, counts = map_surrey_result_to_job_run_outcome(result)
+    assert status == "partial_failure"
+    assert counts["error_count"] == 1
+
+
+def test_map_result_counts_are_flat_ints_only_no_digests_or_text():
+    result = SurreyIdentitySchedulerResult(
+        source_rows=1,
+        updated=1,
+        inserted=0,
+        errors=0,
+        plan_digest="d" * 64,
+        result_digest="e" * 64,
+    )
+    _, counts = map_surrey_result_to_job_run_outcome(result)
+    assert set(counts.keys()) == {"source_rows", "inserted", "updated", "error_count"}
+    for value in counts.values():
+        assert isinstance(value, int) and not isinstance(value, bool)
+    serialized = str(counts)
+    assert "d" * 64 not in serialized
+    assert "e" * 64 not in serialized
+
+
+def test_map_result_never_returns_status_other_than_success_or_partial_failure():
+    for errors in (0, 1, 2, 100):
+        status, _ = map_surrey_result_to_job_run_outcome(
+            SurreyIdentitySchedulerResult(
+                source_rows=1,
+                updated=0,
+                inserted=0,
+                errors=errors,
+                plan_digest=None,
+                result_digest=None,
+            )
+        )
+        assert status in {"success", "partial_failure"}
+
+
+# --- M3C: on_phase progress boundaries -----------------------------------
+
+
+def test_on_phase_called_at_plan_validate_apply_on_full_success(monkeypatch):
+    session = _FakeSession()
+    report = _safe_report(updates=1, inserts=1)
+    _patch_plan(monkeypatch, report)
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.apply_surrey_identity_import_full",
+        lambda *_a, **_k: {
+            "eligible_updates": 1,
+            "eligible_inserts": 1,
+            "updated": 1,
+            "inserted": 1,
+            "plan_digest": report["plan_digest"],
+        },
+    )
+
+    phases_seen: list[str] = []
+    result = run_surrey_identity_import_once(
+        session, rows=[{"external_id": "x"}], on_phase=phases_seen.append
+    )
+
+    assert phases_seen == ["plan", "validate", "apply"]
+    assert result.errors == 0
+
+
+def test_on_phase_not_called_beyond_plan_when_blocked_on_unsafe_plan(monkeypatch):
+    session = _FakeSession()
+    report = _safe_report()
+    report["counts"]["invalid_rows"] = 1
+    _patch_plan(monkeypatch, report)
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.apply_surrey_identity_import_full",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("adapter must not be called")
+        ),
+    )
+
+    phases_seen: list[str] = []
+    result = run_surrey_identity_import_once(
+        session, rows=[{"external_id": "x"}], on_phase=phases_seen.append
+    )
+
+    assert phases_seen == ["plan"]  # plan succeeded, validate/apply never reached
+    assert result.errors == 1
+
+
+def test_on_phase_not_called_at_all_when_planning_raises(monkeypatch):
+    session = _FakeSession()
+
+    def raising_plan(_session, *, rows):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.plan_surrey_identity_import", raising_plan
+    )
+
+    phases_seen: list[str] = []
+    result = run_surrey_identity_import_once(
+        session, rows=[{"external_id": "x"}], on_phase=phases_seen.append
+    )
+
+    assert phases_seen == []
+    assert result.errors == 1
+
+
+def test_on_phase_none_is_a_complete_noop_existing_callers_unaffected(monkeypatch):
+    """Default on_phase=None must behave exactly like every pre-M3C
+    caller/test -- no attribute error, no behavior change."""
+    session = _FakeSession()
+    report = _safe_report(updates=1, inserts=0)
+    _patch_plan(monkeypatch, report)
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.apply_surrey_identity_import_full",
+        lambda *_a, **_k: {
+            "eligible_updates": 1,
+            "eligible_inserts": 0,
+            "updated": 1,
+            "inserted": 0,
+            "plan_digest": report["plan_digest"],
+        },
+    )
+    result = run_surrey_identity_import_once(session, rows=[{"external_id": "x"}])
+    assert result.errors == 0
+    assert session.commits == 1
+
+
+def test_a_raising_on_phase_callback_never_breaks_the_real_import(monkeypatch, caplog):
+    """Fail-open: a callback that raises must not affect the Surrey
+    import's own commit/result, and the callback's own exception text
+    must never appear in the logs -- only a fixed, phase-named warning."""
+    session = _FakeSession()
+    report = _safe_report(updates=1, inserts=1)
+    _patch_plan(monkeypatch, report)
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.apply_surrey_identity_import_full",
+        lambda *_a, **_k: {
+            "eligible_updates": 1,
+            "eligible_inserts": 1,
+            "updated": 1,
+            "inserted": 1,
+            "plan_digest": report["plan_digest"],
+        },
+    )
+
+    def exploding_on_phase(_phase: str) -> None:
+        raise RuntimeError("TELEMETRY-SECRET-SHOULD-NOT-LEAK")
+
+    with caplog.at_level("WARNING"):
+        result = run_surrey_identity_import_once(
+            session, rows=[{"external_id": "x"}], on_phase=exploding_on_phase
+        )
+
+    assert result.errors == 0
+    assert result.updated == 1
+    assert result.inserted == 1
+    assert session.commits == 1
+    assert session.rollbacks == 0
+    assert "TELEMETRY-SECRET-SHOULD-NOT-LEAK" not in caplog.text
+    assert "on_phase callback failed" in caplog.text
+
+
+# --- review fix: "apply" fires strictly after a successful commit -------
+
+
+class _CommitRaisingSession(_FakeSession):
+    """Same as _FakeSession, but commit() can be told to raise --
+    proves on_phase("apply") only fires once the commit genuinely
+    succeeded, never merely because the adapter call returned."""
+
+    def __init__(self, *, fail_commit: bool = False):
+        super().__init__()
+        self._fail_commit = fail_commit
+
+    def commit(self):
+        if self._fail_commit:
+            raise RuntimeError("commit failed")
+        super().commit()
+
+
+def test_on_phase_apply_fires_only_after_successful_commit(monkeypatch):
+    session = _CommitRaisingSession(fail_commit=False)
+    report = _safe_report(updates=1, inserts=1)
+    _patch_plan(monkeypatch, report)
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.apply_surrey_identity_import_full",
+        lambda *_a, **_k: {
+            "eligible_updates": 1,
+            "eligible_inserts": 1,
+            "updated": 1,
+            "inserted": 1,
+            "plan_digest": report["plan_digest"],
+        },
+    )
+
+    commits_seen_by_apply_phase: list[int] = []
+
+    def on_phase(phase: str) -> None:
+        if phase == "apply":
+            commits_seen_by_apply_phase.append(session.commits)
+
+    result = run_surrey_identity_import_once(
+        session, rows=[{"external_id": "x"}], on_phase=on_phase
+    )
+
+    assert result.errors == 0
+    assert session.commits == 1
+    # At the moment "apply" fired, the commit had ALREADY happened.
+    assert commits_seen_by_apply_phase == [1]
+
+
+def test_commit_failure_prevents_apply_milestone_and_propagates_exception(monkeypatch):
+    """If commit() itself raises, "apply" must never fire, and the
+    exception must propagate uncaught out of
+    run_surrey_identity_import_once() -- unlike every other failure path
+    in this function, which returns a _blocked() result instead. The
+    scheduler wrapper (pipeline/scheduler.py) is what turns this
+    propagated exception into a terminal `failed` telemetry outcome --
+    see test_flag_true_exception_from_import_once_maps_to_failed_and_propagates
+    in tests/unit/test_surrey_job_run_telemetry.py, which proves that
+    generically for any exception out of this function."""
+    session = _CommitRaisingSession(fail_commit=True)
+    report = _safe_report(updates=1, inserts=1)
+    _patch_plan(monkeypatch, report)
+    monkeypatch.setattr(
+        "pipeline.surrey_identity_scheduler.apply_surrey_identity_import_full",
+        lambda *_a, **_k: {
+            "eligible_updates": 1,
+            "eligible_inserts": 1,
+            "updated": 1,
+            "inserted": 1,
+            "plan_digest": report["plan_digest"],
+        },
+    )
+
+    phases_seen: list[str] = []
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        run_surrey_identity_import_once(
+            session, rows=[{"external_id": "x"}], on_phase=phases_seen.append
+        )
+
+    assert phases_seen == ["plan", "validate"]  # "apply" never fired
+    assert session.commits == 0

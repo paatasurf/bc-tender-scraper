@@ -27,7 +27,14 @@ def upsert_early_signal_events(session: Session, rows: list[dict[str, str]]) -> 
 
     table = EarlySignalEvent.__table__
     imported = 0
-    skip_on_update = {"id", "scraped_at", "address", "applicant", "project_value"}
+    # scraped_at is deliberately NOT in this set: it must update on every
+    # re-upsert to reflect the actual last-scrape time, not just the
+    # first-ever INSERT. Its server_default=func.now() (db/models.py)
+    # means the column isn't in `batch`'s row dicts at all -- PostgreSQL
+    # still computes EXCLUDED.scraped_at as the default-derived value for
+    # this attempt (a fresh now()), so listing it in update_cols below is
+    # sufficient; no explicit value needs to be added to `batch`.
+    skip_on_update = {"id", "address", "applicant", "project_value"}
 
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start : start + BATCH_SIZE]

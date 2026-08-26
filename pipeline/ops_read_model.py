@@ -33,15 +33,19 @@ MISSION_CONTROL_M1_READONLY_API.md for the full contract):
     about other Railway replicas, and a coordinator active_run can exist
     while this container's own lock is not held (the run may have started
     on a different container) or vice versa.
-  - (M2B) Surrey identity scheduler run history and the AI-scoring /
-    company-intelligence / arch-company-intelligence steps of
-    pipeline.run.run_pipeline() are not persisted anywhere (see
-    SURREY_IDENTITY_SCHEDULER_TELEMETRY / AI_PIPELINE_TELEMETRY below) --
-    these are honest capability=unavailable flags, never a fabricated
-    health/configured status. Do not read Resend/Anthropic/n8n/Railway
-    environment variables here even for a boolean "configured" check --
-    that was explicitly rejected as not proving anything useful about
-    whether they actually work.
+  - (M2B) The AI-scoring / company-intelligence / arch-company-intelligence
+    steps of pipeline.run.run_pipeline() are not persisted anywhere (see
+    AI_PIPELINE_TELEMETRY below) -- an honest capability=unavailable flag,
+    never a fabricated health/configured status. Do not read
+    Resend/Anthropic/n8n/Railway environment variables here even for a
+    boolean "configured" check -- that was explicitly rejected as not
+    proving anything useful about whether they actually work.
+  - (M3E-A) The Surrey identity scheduler's equivalent capability flag is
+    NOT here -- it moved to
+    pipeline.ops_jobs_read_model.surrey_identity_scheduler_telemetry_capability()
+    once M3C gave it a real writer, since "does run history exist" is now
+    an actually-checkable question (ops_job_run schema + flag state)
+    rather than a fixed constant. See that function's docstring.
 """
 
 from __future__ import annotations
@@ -347,21 +351,17 @@ def get_container_lock_status() -> dict[str, Any]:
 
 # ---------------------------------------------------------------------
 # Honest capability flags (M2B) -- static, not a health/configured check
+#
+# (M3E-A) The Surrey identity scheduler's flag used to live here too
+# (SURREY_IDENTITY_SCHEDULER_TELEMETRY, fixed available=False) but was
+# removed once M3C gave it a real writer -- see
+# pipeline.ops_jobs_read_model.surrey_identity_scheduler_telemetry_capability()
+# for its dynamic replacement, computed per-request from the
+# ENABLE_SURREY_JOB_RUN_TELEMETRY flag and a real ops_job_run schema
+# check, not a fixed constant.
 # ---------------------------------------------------------------------
 
-# Run history for the Surrey identity scheduler
-# (pipeline.surrey_identity_scheduler) is never persisted anywhere --
-# _scheduled_surrey_identity_run() only logs its SurreyIdentitySchedulerResult
-# via logger.info(). There is no table, no coordinator row, nothing to
-# query. This is a fixed capability=unavailable flag, not a health check --
-# it does not change based on env vars, DB state, or anything else, and it
-# must never be reinterpreted as "healthy" or "configured".
-SURREY_IDENTITY_SCHEDULER_TELEMETRY: dict[str, Any] = {
-    "available": False,
-    "reason": "run_history_not_persisted",
-}
-
-# Same situation for pipeline.run.run_pipeline()'s AI-scoring /
+# Run history for pipeline.run.run_pipeline()'s AI-scoring /
 # company-intelligence / arch-company-intelligence steps: no pipeline_runs
 # row, no coordinator row, only print() to stdout. A handful of Company
 # columns carry real timestamps for specific enrichment sub-steps (see
@@ -388,10 +388,36 @@ class FreshnessSource:
 
 
 FRESHNESS_SOURCES: tuple[FreshnessSource, ...] = (
-    FreshnessSource("Federal", Tender, "scraped_at", "source", "buyandsell.gc.ca"),
-    FreshnessSource("MERX Open", Tender, "scraped_at", "source", "merx.com"),
-    FreshnessSource("MERX Architecture", ArchTender, "scraped_at"),
-    FreshnessSource("Commercial", CommercialTender, "scraped_at"),
+    # (M3G/M3H) last_seen_at, not scraped_at, for every source backed by
+    # db/tender_presence.py::upsert_with_presence() (Tender -- both
+    # Federal and MERX Open share this table via db/import_csv.py's
+    # import_tenders() -- CommercialTender, and ArchTender). That
+    # function unconditionally skips scraped_at on ON CONFLICT DO
+    # UPDATE (it is insert-time only), while last_seen_at is refreshed
+    # on every successful upsert, insert or update. A source whose scrape
+    # mostly re-confirms already-known rows on a given day (few or zero
+    # brand-new URLs) will have its MAX(scraped_at) stop advancing even
+    # though the scraper ran and every row was re-confirmed -- this was
+    # first caught for MERX Architecture (a small, mostly-static
+    # "Open & Ongoing" listing) and fixed there in PR #135; the same
+    # code path and the same latent risk apply identically to Federal,
+    # MERX Open, and Commercial, so they get the same fix here.
+    # last_seen_at is the correct "scraper confirmed this row today"
+    # signal; scraped_at's value, its insert-time semantics, and
+    # db/tender_presence.py itself are all unchanged by this fix -- this
+    # is a read-model-only change. See
+    # tests/unit/test_merx_architecture_freshness.py and
+    # tests/unit/test_federal_merx_open_commercial_freshness.py.
+    #
+    # pipeline/data_coverage_audit.py computes its own, separate
+    # scraped_at-based freshness reading for these same tables and is
+    # NOT updated by this change -- a deliberate, explicit follow-up,
+    # not an oversight (see that module for its own MAX(scraped_at)
+    # queries, untouched here).
+    FreshnessSource("Federal", Tender, "last_seen_at", "source", "buyandsell.gc.ca"),
+    FreshnessSource("MERX Open", Tender, "last_seen_at", "source", "merx.com"),
+    FreshnessSource("MERX Architecture", ArchTender, "last_seen_at"),
+    FreshnessSource("Commercial", CommercialTender, "last_seen_at"),
     FreshnessSource("Surrey Permits", Permit, "scraped_at", "source", "surrey"),
     FreshnessSource("Burnaby Permits", Permit, "scraped_at", "source", "burnaby"),
     FreshnessSource("Vancouver Permits", Permit, "scraped_at", "source", "vancouver"),

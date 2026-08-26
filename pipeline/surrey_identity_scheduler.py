@@ -33,6 +33,22 @@ No exception's ``str()`` is ever logged or returned -- only
 ``type(exc).__name__`` -- and the returned result carries aggregate
 counters and digests only, never raw ids, PermitNumbers, applicant
 names, or addresses.
+
+(M3C) ``run_surrey_identity_import_once`` accepts an optional ``on_phase``
+callback, invoked with a fixed phase name ("plan"/"validate"/"apply") at
+three real boundaries -- right after a safe plan, right after the
+plan is confirmed safe, and right after the caller-owned commit
+succeeds ("apply" means committed, not merely "the adapter call
+returned" -- if commit() itself raises, "apply" is never fired and the
+exception propagates uncaught, exactly as every other exception in this
+function already does). This is the ONLY hook this module exposes for
+pipeline.scheduler's optional
+ops_job_run telemetry (pipeline/job_run.py, gated by
+ENABLE_SURREY_JOB_RUN_TELEMETRY in pipeline/scheduler.py) -- the callback
+never receives the session, never touches this function's transaction,
+and a failing callback is swallowed here (_safe_call_on_phase) and logged
+as a fixed warning, never the callback's exception text, so telemetry can
+never change this function's own success/failure/rollback behavior.
 """
 
 from __future__ import annotations
@@ -40,7 +56,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from config.env import env_flag
 from pipeline.surrey_identity_import_canary import (
@@ -56,6 +72,7 @@ __all__ = [
     "SURREY_SCHEDULER_FLAG",
     "SurreyIdentitySchedulerResult",
     "compute_result_digest",
+    "map_surrey_result_to_job_run_outcome",
     "run_surrey_identity_import_once",
     "surrey_scheduler_enabled",
 ]
@@ -113,10 +130,47 @@ def _blocked(
     )
 
 
+def _safe_call_on_phase(on_phase: Callable[[str], None], phase: str) -> None:
+    """(M3C) Invoke an optional progress callback without ever letting it
+    affect the caller. Never logs the callback's exception text -- only a
+    fixed, phase-named warning -- so a telemetry-layer failure can never
+    surface anything the callback happened to raise (which is out of this
+    module's control) into these logs."""
+    try:
+        on_phase(phase)
+    except Exception:
+        logger.warning(
+            "Surrey identity scheduler: on_phase callback failed for phase=%s", phase
+        )
+
+
+def map_surrey_result_to_job_run_outcome(
+    result: SurreyIdentitySchedulerResult,
+) -> tuple[str, dict[str, int]]:
+    """(M3C) Pure mapping from a completed SurreyIdentitySchedulerResult to
+    the (status, counts) pipeline.job_run.finish_job_run() should record.
+    ``status`` is "success" when errors == 0, else "partial_failure" --
+    "failed" is reserved for an exception escaping the surrounding
+    scheduler wrapper entirely (e.g. the scrape itself failing before this
+    function ever runs), never assigned here. ``counts`` is a flat dict of
+    plain integers only (source_rows/inserted/updated/error_count) --
+    never plan_digest, result_digest, or any text.
+    """
+    counts = {
+        "source_rows": result.source_rows,
+        "inserted": result.inserted,
+        "updated": result.updated,
+        "error_count": result.errors,
+    }
+    status = "success" if result.errors == 0 else "partial_failure"
+    return status, counts
+
+
 def run_surrey_identity_import_once(
     session,
     *,
     rows: Iterable[Mapping[str, Any]],
+    on_phase: Callable[[str], None] | None = None,
 ) -> SurreyIdentitySchedulerResult:
     """Plan, validate, and apply one atomic Surrey identity-aware import
     batch, all inside the caller's single transaction.
@@ -127,6 +181,12 @@ def run_surrey_identity_import_once(
     text, only its type name. Blank/invalid source identity is a stop
     condition for the whole batch (via the plan's ``invalid_rows``
     counter), never a silently-skipped row.
+
+    ``on_phase``, if given, is called with "plan"/"validate"/"apply" at
+    the three real success boundaries described in the module docstring
+    -- never on a blocked/failed path, and never able to affect this
+    function's own outcome (see _safe_call_on_phase()). Defaults to None,
+    which is a complete no-op -- existing callers are unaffected.
     """
     all_rows = list(rows)
 
@@ -138,6 +198,9 @@ def run_surrey_identity_import_once(
             "Surrey identity scheduler planning failed: %s", type(exc).__name__
         )
         return _blocked(source_rows=len(all_rows), plan_digest=None)
+
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "plan")
 
     counts = report["counts"]
     plan_digest = report["plan_digest"]
@@ -155,6 +218,9 @@ def run_surrey_identity_import_once(
             counts["duplicate_risk"],
         )
         return _blocked(source_rows=len(all_rows), plan_digest=plan_digest)
+
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "validate")
 
     try:
         result = apply_surrey_identity_import_full(
@@ -186,6 +252,19 @@ def run_surrey_identity_import_once(
         return _blocked(source_rows=len(all_rows), plan_digest=plan_digest)
 
     session.commit()
+
+    # The "apply" milestone means "committed", not merely "the adapter
+    # call returned" -- fired strictly after a successful commit. If
+    # commit() itself raises, this line is never reached: no milestone is
+    # recorded, and the exception propagates uncaught out of this
+    # function exactly as every other exception here would have before
+    # on_phase existed -- the scheduler wrapper's own exception handling
+    # (pipeline/scheduler.py) is what turns that into a terminal `failed`
+    # telemetry outcome; this function does not (and must not) attempt to
+    # classify or swallow a commit failure itself.
+    if on_phase is not None:
+        _safe_call_on_phase(on_phase, "apply")
+
     return SurreyIdentitySchedulerResult(
         source_rows=len(all_rows),
         updated=result["updated"],
