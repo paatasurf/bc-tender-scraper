@@ -406,3 +406,149 @@ def test_province_filter_actually_scopes_to_bc_against_real_schema(
             {"ids": [bc_award.id, on_award.id]},
         )
         local_db_session.commit()
+
+
+def test_canonical_company_name_falls_back_past_empty_display_name(
+    local_db_session: Session,
+) -> None:
+    """Positive-data proof: COALESCE alone treats '' as non-null, so a
+    canonical company with display_name='' (not NULL) would return an empty
+    canonical_company_name even though a real `name` exists. NULLIF(...,'')
+    must make it fall through to name."""
+    import uuid
+
+    from db.models import Company, Permit
+
+    uid = uuid.uuid4().hex[:8]
+    city = f"EmptyDisplayNameCity-{uid}"
+
+    canonical = Company(name=f"Real Name Co {uid}", display_name="")
+    local_db_session.add(canonical)
+    local_db_session.flush()
+
+    permit = Permit(
+        address=f"1 St {uid}", city=city, source="unittest", company_id=canonical.id
+    )
+    local_db_session.add(permit)
+    local_db_session.commit()
+
+    try:
+        spec = AnalyticsQuerySpec(
+            domain="permits",
+            metrics=["count"],
+            filters={"city": city},
+            group_by=["canonical_company_id"],
+        )
+        sql, params, _provenance = build_query(spec)
+        row = local_db_session.execute(text(sql), params).mappings().one()
+        assert row["canonical_company_name"] == canonical.name
+        assert row["canonical_company_name"] != ""
+    finally:
+        local_db_session.execute(
+            text("DELETE FROM permits WHERE id = :id"), {"id": permit.id}
+        )
+        local_db_session.execute(
+            text("DELETE FROM companies WHERE id = :id"), {"id": canonical.id}
+        )
+        local_db_session.commit()
+
+
+def test_ranking_evidence_payload_is_capped_and_discloses_truncation(
+    local_db_session: Session,
+) -> None:
+    """Positive-data proof: a company with >100 contributing permits must
+    not return an unbounded contributing_ids array. contributing_count
+    reflects the true total, contributing_ids is capped at 100, and
+    evidence_truncated discloses the cap. A company under the cap gets
+    evidence_truncated=False and the full id list."""
+    import uuid
+
+    from api.analytics import _MAX_CONTRIBUTING_IDS, analytics_query
+    from db.models import Company, Permit
+
+    uid = uuid.uuid4().hex[:8]
+    big_city = f"BigEvidenceCity-{uid}"
+    small_city = f"SmallEvidenceCity-{uid}"
+
+    big_company = Company(name=f"Prolific Co {uid}")
+    small_company = Company(name=f"Modest Co {uid}")
+    local_db_session.add_all([big_company, small_company])
+    local_db_session.flush()
+
+    over_cap = _MAX_CONTRIBUTING_IDS + 5
+    big_permits = [
+        Permit(
+            address=f"{i} Big St {uid}",
+            city=big_city,
+            source="unittest",
+            company_id=big_company.id,
+        )
+        for i in range(over_cap)
+    ]
+    small_permits = [
+        Permit(
+            address=f"{i} Small St {uid}",
+            city=small_city,
+            source="unittest",
+            company_id=small_company.id,
+        )
+        for i in range(2)
+    ]
+    local_db_session.add_all(big_permits + small_permits)
+    local_db_session.commit()
+
+    try:
+        big_spec = AnalyticsQuerySpec(
+            domain="permits",
+            metrics=["count"],
+            filters={"city": big_city},
+            group_by=["canonical_company_id"],
+        )
+        big_response = analytics_query(big_spec)
+        big_row = big_response["rows"][0]
+        assert big_row["contributing_count"] == over_cap
+        assert len(big_row["contributing_ids"]) == _MAX_CONTRIBUTING_IDS
+        assert big_row["evidence_truncated"] is True
+        assert len(big_response["evidence_refs"]) == _MAX_CONTRIBUTING_IDS
+
+        small_spec = AnalyticsQuerySpec(
+            domain="permits",
+            metrics=["count"],
+            filters={"city": small_city},
+            group_by=["canonical_company_id"],
+        )
+        small_response = analytics_query(small_spec)
+        small_row = small_response["rows"][0]
+        assert small_row["contributing_count"] == 2
+        assert len(small_row["contributing_ids"]) == 2
+        assert small_row["evidence_truncated"] is False
+    finally:
+        local_db_session.execute(
+            text("DELETE FROM permits WHERE id = ANY(:ids)"),
+            {"ids": [p.id for p in big_permits + small_permits]},
+        )
+        local_db_session.execute(
+            text("DELETE FROM companies WHERE id = ANY(:ids)"),
+            {"ids": [big_company.id, small_company.id]},
+        )
+        local_db_session.commit()
+
+
+def test_province_other_than_bc_is_rejected_not_silently_coerced() -> None:
+    """Positive-data proof: any province value other than BC/British
+    Columbia must be an explicit 422, and must never be silently swapped
+    for a BC scope the caller didn't ask for."""
+    with pytest.raises(ValidationError, match="unsupported province value"):
+        AnalyticsQuerySpec(domain="contract_awards", metrics=["count"], province="Ontario")
+    with pytest.raises(ValidationError, match="unsupported province value"):
+        AnalyticsQuerySpec(domain="companies", metrics=["count"], province="Alberta")
+
+
+def test_province_bc_spellings_normalize_to_bc() -> None:
+    """Both accepted spellings normalize to the single canonical 'BC' value
+    the rest of the pipeline (provenance, narrator) relies on."""
+    for spelling in ("BC", "bc", "British Columbia", "british columbia"):
+        spec = AnalyticsQuerySpec(
+            domain="contract_awards", metrics=["count"], province=spelling
+        )
+        assert spec.province == "BC"

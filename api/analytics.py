@@ -56,6 +56,15 @@ _PROVINCE_FIELDS = {
     "companies": "primary_province",
 }
 _PROVINCE_VALUES = ("BC", "BRITISH COLUMBIA")
+# V1 only ever means "BC" -- accept the two common spellings of that one
+# province and normalize both to "BC". Any other province name (Ontario,
+# Alberta, ...) is an explicit 422, never silently coerced into a BC scope.
+_PROVINCE_ALIASES = {"BC": "BC", "BRITISH COLUMBIA": "BC"}
+# A ranking row's evidence must point at real contributing rows, but an
+# unbounded ARRAY_AGG can return thousands of ids for a popular company --
+# cap what rides in the response payload; full drilldown stays available
+# via operation=records.
+_MAX_CONTRIBUTING_IDS = 100
 _TABLES = {
     "permits": "permits",
     "contract_awards": "contract_awards",
@@ -162,13 +171,24 @@ class AnalyticsQuerySpec(BaseModel):
             raise ValueError("invalid event-time field for domain")
         if self.lookback_days is not None and self.date_field is None:
             raise ValueError("date_field is required with lookback_days")
-        if self.province is not None and self.domain not in _PROVINCE_FIELDS:
-            # Explicit capability gap -- never silently drop province scope
-            # and answer with an unscoped total for a domain with no real
-            # province column (permits, tenders, early_signals).
-            raise ValueError(
-                f"province-wide geography is not supported for domain '{self.domain}'"
-            )
+        if self.province is not None:
+            normalized = _PROVINCE_ALIASES.get(self.province.strip().upper())
+            if normalized is None:
+                # Any value other than BC/British Columbia is rejected
+                # outright -- never silently swap a caller's real province
+                # (e.g. "Ontario") for a BC scope they didn't ask for.
+                raise ValueError(
+                    f"unsupported province value '{self.province}' -- "
+                    "only BC/British Columbia is supported"
+                )
+            if self.domain not in _PROVINCE_FIELDS:
+                # Explicit capability gap -- never silently drop province
+                # scope and answer with an unscoped total for a domain with
+                # no real province column (permits, tenders, early_signals).
+                raise ValueError(
+                    f"province-wide geography is not supported for domain '{self.domain}'"
+                )
+            self.province = normalized
         allowed_filters = set(_GROUPS[self.domain])
         if self.domain != "companies":
             allowed_filters.add("source")
@@ -319,9 +339,13 @@ def _build_aggregate_query(
             # is resolved alongside it -- the caller should never have to
             # make a second lookup just to know whose count this is.
             id_expr = "COALESCE(c.canonical_company_id, c.id)"
+            # NULLIF(..., '') before each display_name: an empty-string
+            # display_name (vs. NULL) must not win over a real `name` value
+            # -- COALESCE alone treats '' as non-null and would return an
+            # empty canonical_company_name even though name is populated.
             name_expr = (
-                "COALESCE(canonical.display_name, canonical.name, "
-                "c.display_name, c.name)"
+                "COALESCE(NULLIF(canonical.display_name, ''), canonical.name, "
+                "NULLIF(c.display_name, ''), c.name)"
             )
             dimensions.append(f"{id_expr} AS canonical_company_id")
             dimensions.append(f"{name_expr} AS canonical_company_name")
@@ -468,9 +492,17 @@ def analytics_query(spec: AnalyticsQuerySpec) -> dict[str, Any]:
             if contributing:
                 # Real contributing row ids, not a repeat of the aggregate --
                 # this is the evidence behind a canonical-company ranking row.
-                evidence_refs.extend(
-                    f"{source_table}:{cid}" for cid in contributing if cid is not None
-                )
+                # An unbounded ARRAY_AGG can carry thousands of ids for a
+                # popular company; cap what rides in the payload and disclose
+                # the cap instead of silently truncating. Full drilldown
+                # remains available via operation=records.
+                contributing_ids = [cid for cid in contributing if cid is not None]
+                contributing_count = len(contributing_ids)
+                capped_ids = contributing_ids[:_MAX_CONTRIBUTING_IDS]
+                row["contributing_ids"] = capped_ids
+                row["contributing_count"] = contributing_count
+                row["evidence_truncated"] = contributing_count > _MAX_CONTRIBUTING_IDS
+                evidence_refs.extend(f"{source_table}:{cid}" for cid in capped_ids)
             else:
                 evidence_refs.append(f"{source_table}:{row.get('id', 'aggregate')}")
 
