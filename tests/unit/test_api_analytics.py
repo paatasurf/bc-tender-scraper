@@ -453,14 +453,38 @@ def test_canonical_company_name_falls_back_past_empty_display_name(
         local_db_session.commit()
 
 
+def test_contributing_ids_cap_is_expressed_in_generated_sql() -> None:
+    """The cap must be a property of the SQL itself (ROW_NUMBER() + ARRAY_AGG
+    ... FILTER), not a Python-side slice after an unbounded ARRAY_AGG -- a
+    company with 10,000 contributing rows must never have all 10,000 ids
+    materialized/transmitted just to be truncated in the endpoint."""
+    from api.analytics import _MAX_CONTRIBUTING_IDS
+
+    spec = AnalyticsQuerySpec(
+        domain="permits", metrics=["count"], group_by=["canonical_company_id"]
+    )
+    sql, _params, _provenance = build_query(spec)
+    assert "ROW_NUMBER() OVER (PARTITION BY" in sql
+    assert f"FILTER (WHERE rn <= {_MAX_CONTRIBUTING_IDS})" in sql
+    assert "ARRAY_AGG(contributing_id ORDER BY contributing_id)" in sql
+    assert "COUNT(*) AS contributing_count" in sql
+    assert f"COUNT(*) > {_MAX_CONTRIBUTING_IDS} AS evidence_truncated" in sql
+    # The old unbounded pattern (ARRAY_AGG of the whole group, no FILTER)
+    # must not exist anywhere in the generated SQL.
+    assert "ARRAY_AGG(p.id) AS contributing_ids" not in sql
+
+
 def test_ranking_evidence_payload_is_capped_and_discloses_truncation(
     local_db_session: Session,
 ) -> None:
-    """Positive-data proof: a company with >100 contributing permits must
-    not return an unbounded contributing_ids array. contributing_count
-    reflects the true total, contributing_ids is capped at 100, and
-    evidence_truncated discloses the cap. A company under the cap gets
-    evidence_truncated=False and the full id list."""
+    """Positive-data, SQL-level proof: a company with >100 contributing
+    permits must not return an unbounded contributing_ids array.
+    contributing_count is COUNT(*) over the true (uncapped) total,
+    contributing_ids is capped to 100 by ARRAY_AGG(...) FILTER inside the
+    SQL itself (see test_contributing_ids_cap_is_expressed_in_generated_sql
+    for the SQL-shape half of this proof), and evidence_truncated discloses
+    the cap. A company under the cap gets evidence_truncated=False and the
+    full id list."""
     import uuid
 
     from api.analytics import _MAX_CONTRIBUTING_IDS, analytics_query

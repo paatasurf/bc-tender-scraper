@@ -315,6 +315,104 @@ def _where_clauses(
     return clauses, params
 
 
+def _build_company_ranking_query(
+    spec: AnalyticsQuerySpec,
+    table: str,
+    alias: str,
+    dimensions: list[str],
+    group_exprs: list[str],
+    needs_canonical_join: bool,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Company-ranking aggregate (group_by company_id/canonical_company_id).
+
+    Evidence is capped at the SQL level, not with ARRAY_AGG-everything-then-
+    slice-in-Python: a per-row ROW_NUMBER() inside the CTE tags each
+    contributing row, and the outer ARRAY_AGG(...) FILTER (WHERE rn <= cap)
+    only ever materializes/transmits up to _MAX_CONTRIBUTING_IDS array
+    elements, however many thousands of rows a popular company actually has.
+    contributing_count is COUNT(*) over ALL matching rows (uncapped) so the
+    disclosed total is always the true total, independent of the cap.
+    """
+    if spec.domain not in {"permits", "contract_awards"}:
+        raise ValueError("company joins are not approved for this domain")
+    join = f" JOIN companies c ON c.id = {alias}.company_id"
+    if needs_canonical_join:
+        join += " LEFT JOIN companies canonical ON canonical.id = c.canonical_company_id"
+
+    group_names = [dim.partition(" AS ")[2] for dim in dimensions]
+
+    raw_metric_cols: list[str] = []
+    outer_metrics: list[str] = []
+    for metric in spec.metrics:
+        if metric == "count":
+            outer_metrics.append("COUNT(*) AS count")
+            continue
+        if metric == "distinct_count":
+            raise ValueError(
+                "distinct_count is not supported combined with company ranking"
+            )
+        field = _VALUE_FIELDS.get(spec.domain)
+        if not field:
+            raise ValueError(f"{metric} is not available for {spec.domain}")
+        # project_value is text in the permits table; only numeric values count.
+        raw_expr = field
+        if spec.domain == "permits":
+            raw_expr = (
+                "CASE WHEN project_value ~ '^[^0-9]*[0-9]+([.,][0-9]+)?[^0-9]*$' "
+                "THEN NULLIF(regexp_replace(project_value, '[^0-9.]', '', 'g'), '')::numeric END"
+            )
+        col_name = f"raw_{metric}"
+        raw_metric_cols.append(f"{raw_expr} AS {col_name}")
+        outer_metrics.append(f"{metric.upper()}({col_name}) AS {metric}")
+
+    clauses, params = _where_clauses(spec, alias)
+    cte_select = (
+        dimensions
+        + [f"{alias}.id AS contributing_id"]
+        + raw_metric_cols
+        + [
+            "ROW_NUMBER() OVER (PARTITION BY "
+            + ", ".join(group_exprs)
+            + f" ORDER BY {alias}.id) AS rn"
+        ]
+    )
+    cte_sql = f"SELECT {', '.join(cte_select)} FROM {table} {alias}{join}"
+    if clauses:
+        cte_sql += " WHERE " + " AND ".join(clauses)
+
+    outer_select = (
+        group_names
+        + outer_metrics
+        + [
+            "COUNT(*) AS contributing_count",
+            f"ARRAY_AGG(contributing_id ORDER BY contributing_id) "
+            f"FILTER (WHERE rn <= {_MAX_CONTRIBUTING_IDS}) AS contributing_ids",
+            f"COUNT(*) > {_MAX_CONTRIBUTING_IDS} AS evidence_truncated",
+        ]
+    )
+    sql = (
+        f"WITH ranked AS ({cte_sql}) "
+        f"SELECT {', '.join(outer_select)} FROM ranked "
+        f"GROUP BY {', '.join(group_names)}"
+    )
+    if spec.order_by:
+        direction = "DESC" if spec.order_by in spec.metrics else "ASC"
+        sql += f" ORDER BY {spec.order_by} {direction}"
+    sql += " LIMIT :result_limit"
+    params["result_limit"] = spec.limit
+    provenance = {
+        "operation": "aggregate",
+        "source_tables": [table, "companies"],
+        "event_time_field": spec.date_field,
+        "filters": spec.filters,
+        "geography": spec.geography,
+        "province": spec.province,
+        "lookback_days": spec.lookback_days,
+        "read_only": True,
+    }
+    return sql, params, provenance
+
+
 def _build_aggregate_query(
     spec: AnalyticsQuerySpec,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -361,21 +459,15 @@ def _build_aggregate_query(
         else:
             dimensions.append(group)
             group_exprs.append(group)
-    metrics = [_metric_sql(metric, table, spec) for metric in spec.metrics]
-    extra_selects: list[str] = []
-    join = ""
+
     if ranks_by_company:
-        if spec.domain not in {"permits", "contract_awards"}:
-            raise ValueError("company joins are not approved for this domain")
-        # Real contributing row ids per ranking position -- evidence for a
-        # ranking row must point at the actual permits/awards behind the
-        # count, not just repeat the aggregate.
-        extra_selects.append(f"ARRAY_AGG({alias}.id) AS contributing_ids")
-        join = f" JOIN companies c ON c.id = {alias}.company_id"
-        if needs_canonical_join:
-            join += " LEFT JOIN companies canonical ON canonical.id = c.canonical_company_id"
+        return _build_company_ranking_query(
+            spec, table, alias, dimensions, group_exprs, needs_canonical_join
+        )
+
+    metrics = [_metric_sql(metric, table, spec) for metric in spec.metrics]
     clauses, params = _where_clauses(spec, alias)
-    sql = f"SELECT {', '.join(dimensions + metrics + extra_selects)} FROM {table} {alias}{join}"
+    sql = f"SELECT {', '.join(dimensions + metrics)} FROM {table} {alias}"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     if group_exprs:
@@ -387,7 +479,7 @@ def _build_aggregate_query(
     params["result_limit"] = spec.limit
     provenance = {
         "operation": "aggregate",
-        "source_tables": [table] + (["companies"] if join else []),
+        "source_tables": [table],
         "event_time_field": spec.date_field,
         "filters": spec.filters,
         "geography": spec.geography,
@@ -489,20 +581,17 @@ def analytics_query(spec: AnalyticsQuerySpec) -> dict[str, Any]:
         evidence_refs: list[str] = []
         for row in rows:
             contributing = row.get("contributing_ids")
-            if contributing:
+            if contributing is not None:
                 # Real contributing row ids, not a repeat of the aggregate --
                 # this is the evidence behind a canonical-company ranking row.
-                # An unbounded ARRAY_AGG can carry thousands of ids for a
-                # popular company; cap what rides in the payload and disclose
-                # the cap instead of silently truncating. Full drilldown
-                # remains available via operation=records.
-                contributing_ids = [cid for cid in contributing if cid is not None]
-                contributing_count = len(contributing_ids)
-                capped_ids = contributing_ids[:_MAX_CONTRIBUTING_IDS]
-                row["contributing_ids"] = capped_ids
-                row["contributing_count"] = contributing_count
-                row["evidence_truncated"] = contributing_count > _MAX_CONTRIBUTING_IDS
-                evidence_refs.extend(f"{source_table}:{cid}" for cid in capped_ids)
+                # contributing_count/contributing_ids/evidence_truncated are
+                # already computed and capped at the SQL level (ROW_NUMBER()
+                # + ARRAY_AGG(...) FILTER) -- no unbounded ARRAY_AGG is ever
+                # built and sliced here. Full drilldown remains available
+                # via operation=records.
+                evidence_refs.extend(
+                    f"{source_table}:{cid}" for cid in contributing if cid is not None
+                )
             else:
                 evidence_refs.append(f"{source_table}:{row.get('id', 'aggregate')}")
 
