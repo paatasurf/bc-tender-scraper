@@ -337,7 +337,9 @@ def _build_company_ranking_query(
         raise ValueError("company joins are not approved for this domain")
     join = f" JOIN companies c ON c.id = {alias}.company_id"
     if needs_canonical_join:
-        join += " LEFT JOIN companies canonical ON canonical.id = c.canonical_company_id"
+        join += (
+            " LEFT JOIN companies canonical ON canonical.id = c.canonical_company_id"
+        )
 
     group_names = [dim.partition(" AS ")[2] for dim in dimensions]
 

@@ -563,7 +563,9 @@ def test_province_other_than_bc_is_rejected_not_silently_coerced() -> None:
     Columbia must be an explicit 422, and must never be silently swapped
     for a BC scope the caller didn't ask for."""
     with pytest.raises(ValidationError, match="unsupported province value"):
-        AnalyticsQuerySpec(domain="contract_awards", metrics=["count"], province="Ontario")
+        AnalyticsQuerySpec(
+            domain="contract_awards", metrics=["count"], province="Ontario"
+        )
     with pytest.raises(ValidationError, match="unsupported province value"):
         AnalyticsQuerySpec(domain="companies", metrics=["count"], province="Alberta")
 
