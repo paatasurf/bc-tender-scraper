@@ -56,6 +56,7 @@ from db.models import (
     Tender,
 )
 from api.admin import router as admin_router
+from api.analytics import router as analytics_router
 from api.clerk_plan import (
     assert_company_intelligence_access,
     requires_company_intelligence_access,
@@ -206,6 +207,7 @@ app.include_router(deadline_alerts_router, dependencies=[Depends(verify_internal
 app.include_router(ops_router)
 app.include_router(win_loss_router)
 app.include_router(admin_router)
+app.include_router(analytics_router)
 
 
 @app.post(
