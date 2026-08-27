@@ -475,6 +475,48 @@ def test_run_returns_honest_counts_and_never_raises(monkeypatch):
     assert result["write_failures"] == 0
 
 
+# --- Runner forwards the operational canary limit ---
+
+
+def test_runner_forwards_canary_limit_to_core_function(monkeypatch):
+    from scraper.runners import run_vancouver_early_signal_enrichment_scraper
+
+    captured = {}
+
+    def _fake_run_early_signal_enrichment(**kwargs):
+        captured.update(kwargs)
+        return {"candidates": 0}
+
+    monkeypatch.setattr(
+        enrichment, "run_early_signal_enrichment", _fake_run_early_signal_enrichment
+    )
+
+    run_vancouver_early_signal_enrichment_scraper(limit=25)
+
+    assert captured["limit"] == 25
+    assert captured["force"] is False
+    assert captured["fetch_details"] is True
+    assert captured["persist"] is True
+
+
+def test_runner_default_limit_is_none(monkeypatch):
+    from scraper.runners import run_vancouver_early_signal_enrichment_scraper
+
+    captured = {}
+
+    def _fake_run_early_signal_enrichment(**kwargs):
+        captured.update(kwargs)
+        return {"candidates": 0}
+
+    monkeypatch.setattr(
+        enrichment, "run_early_signal_enrichment", _fake_run_early_signal_enrichment
+    )
+
+    run_vancouver_early_signal_enrichment_scraper()
+
+    assert captured["limit"] is None
+
+
 # --- HTTP resource lifecycle ---
 
 
