@@ -130,6 +130,45 @@ def test_enrich_early_signals_request_rejects_non_integer_limit():
         internal_api.EnrichEarlySignalsRequest(limit="not-a-number")
 
 
+def _fake_pipeline_step_record(status: str) -> MagicMock:
+    record = MagicMock()
+    record.id = 5
+    record.run_id = "run-status-check"
+    record.step = "enrich-early-signals"
+    record.status = status
+    record.started_at = None
+    record.finished_at = None
+    record.error = ""
+    record.counts_json = "{}"
+    return record
+
+
+def test_pipeline_step_status_done_true_for_partial_success():
+    record = _fake_pipeline_step_record("partial_success")
+
+    with patch("api.internal.get_session", return_value=MagicMock()):
+        with patch("api.internal.get_pipeline_run", return_value=record):
+            payload = internal_api.get_pipeline_step_status(5)
+
+    assert payload["status"] == "partial_success"
+    assert payload["done"] is True
+
+
+def test_pipeline_step_status_done_field_unchanged_for_other_statuses():
+    """success/failed/skipped stay done=True; running stays done=False."""
+    for status, expected_done in (
+        ("success", True),
+        ("failed", True),
+        ("skipped", True),
+        ("running", False),
+    ):
+        record = _fake_pipeline_step_record(status)
+        with patch("api.internal.get_session", return_value=MagicMock()):
+            with patch("api.internal.get_pipeline_run", return_value=record):
+                payload = internal_api.get_pipeline_step_status(5)
+        assert payload["done"] is expected_done, status
+
+
 def test_populate_project_contacts_requires_internal_key():
     request = MagicMock()
     request.headers.get.return_value = None
