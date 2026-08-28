@@ -74,7 +74,7 @@ from db.pipeline_coordinator_tables import pipeline_coordinator_runs
 from pipeline.error_classification import classify_run_error
 from pipeline.executor import pipeline_status
 
-_TERMINAL_RUN_STATUSES = frozenset({"success", "failed", "skipped"})
+_TERMINAL_RUN_STATUSES = frozenset({"success", "failed", "skipped", "partial_success"})
 _COORDINATOR_SCOPE = "tender_data"
 
 # Freshness thresholds (M1 defaults -- documented, adjustable, not hidden).
@@ -136,8 +136,10 @@ def normalize_pipeline_run_status(
     """Map a raw pipeline_runs.status value to the contract's
     normalized_status.
 
-    - success / failed / skipped: passed through as-is (these are already
-      unambiguous terminal outcomes recorded by the writer).
+    - success / failed / skipped / partial_success: passed through as-is
+      (these are already unambiguous terminal outcomes recorded by the
+      writer -- partial_success means some chunks committed and some
+      write_failures also occurred; it is terminal, not "still running").
     - running, with run_id present in coordinator_active_run_ids (i.e.
       backed by a currently valid pipeline_coordinator_runs lease for the
       tender_data scope): "active". The coordinator lease takes priority

@@ -734,7 +734,12 @@ def get_pipeline_step_status(pipeline_run_id: int) -> dict[str, Any]:
                 detail=f"No pipeline run found for id '{pipeline_run_id}'",
             )
         payload = pipeline_run_to_dict(record)
-        payload["done"] = record.status in {"success", "failed", "skipped"}
+        payload["done"] = record.status in {
+            "success",
+            "failed",
+            "skipped",
+            "partial_success",
+        }
         return payload
     finally:
         session.close()

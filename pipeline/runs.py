@@ -56,6 +56,44 @@ def get_pipeline_run(session: Session, pipeline_run_id: int) -> PipelineRun | No
     return session.get(PipelineRun, pipeline_run_id)
 
 
+def _resolve_status(counts: dict[str, Any]) -> str:
+    """Decide pipeline_runs status from a worker's returned counts.
+
+    Workers that report chunked-commit progress (`committed_chunks` and/or
+    `write_failures` present in counts) get an honest, commit-aware status:
+      - any write_failures with zero committed_chunks -> "failed" (nothing
+        persisted, and something broke).
+      - any write_failures with committed_chunks > 0 -> "partial_success"
+        (real progress persisted, but not everything -- must not read as a
+        clean success).
+      - committed_chunks > 0 and no write_failures -> "success", regardless
+        of how many individual records were legitimately no-ops (e.g.
+        no_match candidates) -- a normal no-op record must not turn a
+        successful run into "skipped".
+      - no commits and no write_failures -> "skipped": the run genuinely
+        did no persisting work (zero candidates, or every candidate was a
+        legitimate no-op).
+
+    Workers that don't report committed_chunks/write_failures keep the
+    original, pre-existing contract unchanged: status is "skipped" iff
+    counts.get("skipped") is truthy, else "success".
+    """
+    if "committed_chunks" in counts or "write_failures" in counts:
+        committed_chunks = counts.get("committed_chunks") or 0
+        write_failures = counts.get("write_failures") or 0
+        if write_failures and not committed_chunks:
+            return "failed"
+        if write_failures and committed_chunks:
+            return "partial_success"
+        if committed_chunks:
+            return "success"
+        return "skipped"
+
+    if counts.get("skipped"):
+        return "skipped"
+    return "success"
+
+
 def _execute_tracked_worker(
     *,
     record_id: int,
@@ -63,14 +101,15 @@ def _execute_tracked_worker(
     run_id: str,
     worker: Callable[[], dict[str, Any]],
 ) -> tuple[str, dict[str, Any], str | None]:
-    logger.info("[Pipeline/%s] Started run_id=%s pipeline_run_id=%s", step, run_id, record_id)
+    logger.info(
+        "[Pipeline/%s] Started run_id=%s pipeline_run_id=%s", step, run_id, record_id
+    )
     counts: dict[str, Any] = {}
     status = "success"
     error: str | None = None
     try:
         counts = worker()
-        if counts.get("skipped"):
-            status = "skipped"
+        status = _resolve_status(counts)
     except Exception as exc:
         status = "failed"
         error = str(exc)
@@ -174,7 +213,9 @@ def list_recent_runs(
     step: str | None = None,
     limit: int = 20,
 ) -> list[PipelineRun]:
-    query = select(PipelineRun).order_by(PipelineRun.started_at.desc(), PipelineRun.id.desc())
+    query = select(PipelineRun).order_by(
+        PipelineRun.started_at.desc(), PipelineRun.id.desc()
+    )
     if step:
         query = query.where(PipelineRun.step == step)
     return list(session.scalars(query.limit(limit)).all())

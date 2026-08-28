@@ -158,7 +158,7 @@ def test_build_run_payload_no_error_is_error_present_false():
 
 
 def test_normalize_terminal_statuses_pass_through():
-    for status in ("success", "failed", "skipped"):
+    for status in ("success", "failed", "skipped", "partial_success"):
         assert (
             rm.normalize_pipeline_run_status(
                 status=status,
