@@ -118,6 +118,24 @@ class ConstructionTiersRequest(BaseModel):
     )
 
 
+class EnrichEarlySignalsRequest(BaseModel):
+    run_id: str | None = Field(
+        default=None,
+        max_length=36,
+        description="Optional shared run id for grouping steps in n8n orchestration.",
+    )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=25,
+        description=(
+            "Optional operational canary cap on candidates processed this run "
+            "(1-25). Omitting it preserves the normal scheduled/n8n behavior "
+            "(no limit, full backlog)."
+        ),
+    )
+
+
 class GoogleEnrichmentRunRequest(BaseModel):
     run_id: str | None = Field(
         default=None,
@@ -375,14 +393,19 @@ def scrape_linkedin(
 def enrich_early_signals(
     request: Request,
     background_tasks: BackgroundTasks,
-    body: InternalRunRequest | None = None,
+    body: EnrichEarlySignalsRequest | None = None,
 ) -> dict[str, Any]:
     _require_internal_key(request)
+    payload = body or EnrichEarlySignalsRequest()
+
+    def _worker() -> dict[str, Any]:
+        return run_vancouver_early_signal_enrichment_scraper(limit=payload.limit)
+
     return _enqueue_step(
         background_tasks,
         "enrich-early-signals",
-        run_vancouver_early_signal_enrichment_scraper,
-        body.run_id if body else None,
+        _worker,
+        payload.run_id,
     )
 
 
