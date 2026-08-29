@@ -13,10 +13,18 @@ import scripts.run_permit_official_source_id_bridge_full as runner
 from db.models import Permit
 from pipeline.permit_official_source_id_bridge import compute_bridge_digest
 from tests.db_test_safety import require_local_test_database
+from tests.db_transactional_fixture import transactional_session
 
 
 @pytest.fixture()
 def db_session():
+    """runner.execute_full_bridge() itself calls session.rollback() on any
+    failure (it owns the transaction by design -- see that function's
+    docstring). A plain outer transaction is not enough to protect this
+    test's own setup rows from that rollback (session.flush() writes are
+    just as undoable as a commit); see tests/db_transactional_fixture.py
+    for why a SAVEPOINT-based session is required here.
+    """
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
@@ -25,17 +33,10 @@ def db_session():
     except Exception:
         pytest.skip("Local Postgres unavailable")
 
-    conn = engine.connect()
-    outer = conn.begin()
-    conn.execute(text("SET LOCAL lock_timeout = '10s'"))
-    session = Session(bind=conn)
     try:
-        yield session
+        with transactional_session(engine) as session:
+            yield session
     finally:
-        session.close()
-        if outer.is_active:
-            outer.rollback()
-        conn.close()
         engine.dispose()
 
 
@@ -57,6 +58,9 @@ def _make_permit(index: int) -> tuple[Permit, str]:
 
 
 def test_full_bridge_updates_exact_rowcount_and_only_official_source_id(db_session):
+    companies_before = (
+        db_session.connection().execute(text("SELECT COUNT(*) FROM companies")).scalar()
+    )
     permits_and_evidence = [_make_permit(i) for i in range(3)]
     for permit, _source_id in permits_and_evidence:
         db_session.add(permit)
@@ -98,17 +102,26 @@ def test_full_bridge_updates_exact_rowcount_and_only_official_source_id(db_sessi
         assert row.company_id is None
         assert row.applicant == ""
 
-    companies_count = (
+    companies_after = (
         db_session.connection().execute(text("SELECT COUNT(*) FROM companies")).scalar()
     )
-    assert companies_count == 0
+    # Bridging permits must never touch companies -- assert no NEW rows
+    # were created, not an absolute count (other tests in the same
+    # session may have already committed unrelated company rows).
+    assert companies_after == companies_before
 
 
 def test_full_bridge_rejects_and_does_not_write_on_stale_artifact(db_session):
     permits_and_evidence = [_make_permit(i) for i in range(2)]
     for permit, _source_id in permits_and_evidence:
         db_session.add(permit)
-    db_session.flush()
+    # commit (not flush): execute_full_bridge rolls back on failure, and
+    # under join_transaction_mode="create_savepoint" a rollback only
+    # undoes the current savepoint -- committing here releases it and
+    # opens a fresh one, so this setup survives that internal rollback
+    # while still living entirely inside the fixture's own outer
+    # transaction (never touches real data; rolled back at teardown).
+    db_session.commit()
 
     source_rows = [
         {"PermitNumber": source_id} for _permit, source_id in permits_and_evidence
@@ -151,7 +164,7 @@ def test_full_bridge_rolls_back_with_no_partial_rows_when_live_eligible_count_gr
     permits_and_evidence = [_make_permit(i) for i in range(3)]
     for permit, _source_id in permits_and_evidence:
         db_session.add(permit)
-    db_session.flush()
+    db_session.commit()  # see comment in the previous test for why commit, not flush
     permits_and_evidence.sort(key=lambda pe: int(pe[0].id))
 
     entries_all = [

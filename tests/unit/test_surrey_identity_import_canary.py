@@ -305,11 +305,16 @@ def db_session():
 
 
 def _run_marker() -> str:
-    """A 4-digit marker, constant across every permit/row a single test
+    """An 8-digit marker, constant across every permit/row a single test
     creates, so that appending a 2-digit zero-padded index to it yields a
-    legacy id whose lexicographic order matches the index order -- while
-    still being unique enough across separate test invocations."""
-    return f"{uuid.uuid4().int % 10_000:04d}"
+    legacy id whose lexicographic order matches the index order.
+
+    Widened from 4 to 8 digits (10,000 -> 100,000,000 possible values):
+    a 4-digit marker collided in CI once the whole suite started actually
+    running these DB-integration tests together in one session (they were
+    previously always silently skipped) -- see PR history for the exact
+    repro."""
+    return f"{uuid.uuid4().int % 100_000_000:08d}"
 
 
 def _make_update_permit(db_session, run_marker: str, index: int):
