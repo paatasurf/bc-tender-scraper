@@ -332,19 +332,44 @@ def enrich_early_signal_events(
     head-of-table rows. The cursor is self-tracked in pipeline_runs (see
     _resolve_starting_cursor/_compute_next_cursor) so consecutive runs walk
     forward through the table and wrap around once they reach the end.
-    `since_id`/`force` let a caller override the auto cursor explicitly.
+    `since_id` lets a caller override the auto-tracked starting cursor
+    explicitly; `force` resets the starting cursor to 0 unconditionally
+    (see _resolve_starting_cursor) -- both are about WHERE a run starts,
+    not how many candidates it processes.
 
-    Scheduled-enrichment page-size policy: a bare call (limit=None,
-    refresh_all=False -- the default for the internal API / scheduled
-    trigger) is an INCREMENTAL page of DEFAULT_PAGE_LIMIT candidates, not a
-    full-table sweep -- this is deliberate: an unbounded default would
+    Scheduled-enrichment page-size policy (how many candidates a run
+    processes -- fixed contract, do not change without updating this
+    docstring, the EnrichEarlySignalsRequest field descriptions in
+    api/internal.py, and the tests below in lockstep):
+
+      | limit | force | refresh_all | effective page size          |
+      |-------|-------|-------------|-------------------------------|
+      | N     | any   | any         | exactly N (explicit wins)     |
+      | None  | False | False       | DEFAULT_PAGE_LIMIT (default)  |
+      | None  | False | True        | unbounded (explicit opt-in)   |
+      | None  | True  | any         | unbounded (legacy contract)   |
+
+    `limit=None, force=False, refresh_all=False` is the scheduled/n8n
+    trigger's default: an INCREMENTAL page of DEFAULT_PAGE_LIMIT
+    candidates, not a full-table sweep -- an unbounded default here would
     mean every scheduled run re-scrapes the ENTIRE table over HTTP, every
-    time, forever, with cost scaling with table size. `refresh_all=True`
-    is the explicit opt-in for the old "no limit, one full pass" behavior
-    (used by the manual backfill script); an explicit `limit=N` always
-    means exactly N regardless of `refresh_all`. Either way, the table is
-    still fully covered over time: once a page's cursor reaches the end,
-    it wraps to 0 and the rotation continues from the top on a later run.
+    time, forever, with cost scaling with table size.
+
+    `limit=None, force=True` is the PRE-EXISTING force contract (used by
+    the manual backfill script) and is preserved unchanged: force has
+    always meant "an authoritative full pass," so it stays unbounded
+    without also requiring `refresh_all=True`. `refresh_all=True` is the
+    separate, explicit opt-in for the same unbounded behavior when a
+    caller wants it WITHOUT force's cursor reset (e.g. to sweep the whole
+    table once while still respecting/advancing the auto-tracked cursor
+    afterward).
+
+    An explicit `limit=N` always wins over both `force` and `refresh_all`
+    -- neither flag can make a bounded request unbounded.
+
+    Either way, the table is still fully covered over time: once a page's
+    cursor reaches the end, it wraps to 0 and the rotation continues from
+    the top on a later run.
     """
     if get_session is None:
         from db.connection import get_session as _default_get_session
@@ -352,7 +377,7 @@ def enrich_early_signal_events(
         get_session = _default_get_session
 
     effective_limit = limit
-    if effective_limit is None and not refresh_all:
+    if effective_limit is None and not refresh_all and not force:
         effective_limit = DEFAULT_PAGE_LIMIT
 
     # Phase 1: short read session -> plain candidate data, then close.
@@ -499,6 +524,13 @@ def run_early_signal_enrichment(
     persist: bool = True,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> dict[str, Any]:
+    """See enrich_early_signal_events' docstring for the full page-size
+    contract table. Short version: limit=None, force=True stays unbounded
+    (the pre-existing contract the manual backfill script relies on);
+    limit=None, force=False, refresh_all=False (the scheduled/n8n default)
+    is a bounded DEFAULT_PAGE_LIMIT page; refresh_all=True is the explicit
+    opt-in for unbounded without force's cursor reset; an explicit
+    limit=N always wins over both flags."""
     from db.connection import get_session, init_db
 
     init_db()

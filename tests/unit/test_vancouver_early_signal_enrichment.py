@@ -906,7 +906,7 @@ def test_default_bare_call_uses_bounded_page_not_full_table_sweep(monkeypatch):
     )
 
     result = enrichment.enrich_early_signal_events(
-        Session(), get_session=Session, persist=True
+        Session(), get_session=Session, force=False, refresh_all=False, persist=True
     )
 
     assert result["page_limit"] == enrichment.DEFAULT_PAGE_LIMIT
@@ -953,6 +953,89 @@ def test_refresh_all_explicitly_opts_into_full_unbounded_sweep(monkeypatch):
     assert result["candidates"] == total
     # the whole table was covered in one pass -- cursor wraps to 0.
     assert result["next_cursor"] == 0
+
+
+def test_legacy_force_true_with_no_limit_stays_unbounded(monkeypatch):
+    """force=True is the pre-existing contract the manual backfill script
+    relies on: limit=None, force=True has always meant "an authoritative
+    full pass," and that must not silently become a bounded
+    DEFAULT_PAGE_LIMIT page just because refresh_all defaults to False."""
+    Session = _session_factory()
+    total = enrichment.DEFAULT_PAGE_LIMIT + 5
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(total)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    result = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, force=True, refresh_all=False, persist=True
+    )
+
+    assert result["page_limit"] is None
+    assert result["candidates"] == total
+    assert result["next_cursor"] == 0
+
+
+def test_explicit_limit_constrains_force_and_refresh_all(monkeypatch):
+    """An explicit limit=N always wins: neither force=True nor
+    refresh_all=True can turn a bounded request into an unbounded one."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(10)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    for force, refresh_all in ((True, False), (False, True), (True, True)):
+        result = enrichment.enrich_early_signal_events(
+            Session(),
+            get_session=Session,
+            limit=3,
+            force=force,
+            refresh_all=refresh_all,
+            persist=True,
+        )
+        assert result["page_limit"] == 3
+        assert result["candidates"] == 3
 
 
 def test_repeat_run_after_cursor_wrap_is_idempotent(monkeypatch):
