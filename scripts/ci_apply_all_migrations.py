@@ -59,25 +59,6 @@ def main() -> None:
         result = apply_fn(engine)
         print(f"{name}: ok ({result})")
 
-    # Diagnostic: verify via a brand-new, independent connection (not the
-    # one that applied the migrations) that the schema change is actually
-    # visible -- catches any connection/pooling/visibility surprise before
-    # pytest hits it as a confusing UndefinedColumn error.
-    from sqlalchemy import create_engine, text
-
-    fresh_engine = create_engine(engine.url)
-    with fresh_engine.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'permits' AND column_name = 'official_source_id'"
-            )
-        ).fetchone()
-        print(
-            f"verify (fresh connection): official_source_id present = {row is not None}"
-        )
-    fresh_engine.dispose()
-
 
 if __name__ == "__main__":
     main()
