@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, text
 from db.permit_official_source_id_ddl import (
     is_valid_ddl_digest,
     permit_official_source_id_ddl_digest,
+    permit_official_source_id_migration_statements,
 )
 from db.permit_official_source_id_migration import (
     ApplyReadinessStatus,
@@ -253,8 +254,40 @@ def test_nonnull_row_count_reads_real_count_when_column_exists():
 # --- transactional apply (local Postgres) ------------------------------
 
 
+def _drop_official_source_id_schema(conn) -> None:
+    conn.execute(text("DROP INDEX IF EXISTS ux_permits_source_official_source_id"))
+    conn.execute(text("ALTER TABLE permits DROP COLUMN IF EXISTS official_source_id"))
+
+
+def _official_source_id_column_exists(conn) -> bool:
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'permits' AND column_name = 'official_source_id'"
+            )
+        ).first()
+        is not None
+    )
+
+
 @pytest.fixture()
 def local_engine():
+    """An unmigrated-baseline engine for testing
+    apply_permit_official_source_id_migration() from a clean starting
+    point -- test_apply_rolls_back_fully_on_postcondition_failure
+    specifically needs the column absent before it runs.
+
+    Isolation: this database is shared with every other test file in the
+    same pytest session (there is no per-test database). Dropping the
+    column unconditionally at teardown -- the previous behavior -- left
+    it permanently missing for every test that ran afterward and
+    expected it to exist (test_surrey_permit_import.py,
+    test_permit_source_status.py, etc.), independent of this file's own
+    pass/fail. Teardown must restore exactly the state this fixture
+    found at setup, not assume "unmigrated" is always the correct state
+    to leave the shared database in.
+    """
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
@@ -262,16 +295,109 @@ def local_engine():
             probe.execute(text("SELECT 1"))
     except Exception:
         pytest.skip("Local Postgres unavailable")
+
+    with engine.connect() as conn:
+        was_migrated_before = _official_source_id_column_exists(conn)
+
+    with engine.begin() as conn:
+        _drop_official_source_id_schema(conn)
+
     try:
         yield engine
     finally:
+        _restore_official_source_id_schema(
+            engine, was_migrated_before=was_migrated_before
+        )
+        engine.dispose()
+
+
+def _restore_official_source_id_schema(engine, *, was_migrated_before: bool) -> None:
+    """Put the shared database back exactly how local_engine found it --
+    isolated from `yield engine`/DDL executed by the test itself, so this
+    is safe to call regardless of what the test did or whether it raised.
+    """
+    with engine.begin() as conn:
+        if was_migrated_before:
+            for statement in permit_official_source_id_migration_statements():
+                conn.execute(text(statement))
+        else:
+            _drop_official_source_id_schema(conn)
+
+
+def _require_real_engine():
+    database_url = require_local_test_database()
+    engine = create_engine(database_url, connect_args={"connect_timeout": 3})
+    try:
+        with engine.connect() as probe:
+            probe.execute(text("SELECT 1"))
+    except Exception:
+        pytest.skip("Local Postgres unavailable")
+    return engine
+
+
+def test_local_engine_teardown_restores_a_previously_migrated_column():
+    """Regression test for the isolation bug this fixture used to have:
+    local_engine's teardown unconditionally dropped official_source_id,
+    which permanently broke every OTHER test file that ran afterward in
+    the same pytest session and expected the column to exist
+    (test_surrey_permit_import.py, test_permit_source_status.py, etc.) --
+    there is no per-test database, only one shared one.
+
+    Simulates the real CI baseline (a global migration step runs before
+    any test, so the column already exists), then drives local_engine's
+    own setup/teardown sequence directly, then checks -- via a completely
+    independent connection standing in for a later test file -- that the
+    column is still there afterward.
+    """
+    engine = _require_real_engine()
+    try:
         with engine.begin() as conn:
-            conn.execute(
-                text("DROP INDEX IF EXISTS ux_permits_source_official_source_id")
-            )
-            conn.execute(
-                text("ALTER TABLE permits DROP COLUMN IF EXISTS official_source_id")
-            )
+            for statement in permit_official_source_id_migration_statements():
+                conn.execute(text(statement))
+
+        with engine.connect() as conn:
+            was_migrated_before = _official_source_id_column_exists(conn)
+        assert was_migrated_before is True  # sanity check on the simulated baseline
+
+        with engine.begin() as conn:
+            _drop_official_source_id_schema(conn)  # local_engine's own setup step
+
+        _restore_official_source_id_schema(
+            engine, was_migrated_before=was_migrated_before
+        )
+
+        with engine.connect() as conn:
+            assert _official_source_id_column_exists(conn) is True
+    finally:
+        engine.dispose()
+
+
+def test_local_engine_teardown_preserves_a_genuinely_unmigrated_baseline():
+    """The other half of the contract: when the column truly did not
+    exist before local_engine ran, teardown must not invent it."""
+    engine = _require_real_engine()
+    try:
+        with engine.begin() as conn:
+            _drop_official_source_id_schema(conn)
+
+        with engine.connect() as conn:
+            was_migrated_before = _official_source_id_column_exists(conn)
+        assert was_migrated_before is False
+
+        _restore_official_source_id_schema(
+            engine, was_migrated_before=was_migrated_before
+        )
+
+        with engine.connect() as conn:
+            assert _official_source_id_column_exists(conn) is False
+    finally:
+        # Leave the shared database migrated for any other test file that
+        # runs afterward -- this test's own baseline was unmigrated, but
+        # the real CI baseline (and every other test in this session) is
+        # migrated.
+        with engine.begin() as conn:
+            for statement in permit_official_source_id_migration_statements():
+                conn.execute(text(statement))
         engine.dispose()
 
 
