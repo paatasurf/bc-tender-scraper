@@ -38,6 +38,15 @@ from scraper.utils import create_session, fetch_html
 NOT_FOUND_TITLE = "can't be found"
 DEFAULT_CHUNK_SIZE = 25
 
+# Scheduled-enrichment page-size policy (see enrich_early_signal_events'
+# docstring for the full rationale): a bare call with no `limit` is an
+# INCREMENTAL page of this many candidates, not a full-table sweep. At
+# roughly 1-2 HTTP fetches per matched candidate, ~100 candidates keeps a
+# scheduled run's external I/O bounded to a few minutes instead of scaling
+# unboundedly with table size. A caller that genuinely wants a full sweep
+# in one pass must opt in explicitly with refresh_all=True.
+DEFAULT_PAGE_LIMIT = 100
+
 
 @dataclass(frozen=True)
 class _Candidate:
@@ -209,22 +218,26 @@ def _fetch_candidates(
 
 def _compute_next_cursor(
     candidates: list[_Candidate],
-    had_error_by_idx: dict[int, bool],
+    blocked_ids: set[int],
     *,
     requested_limit: int | None,
 ) -> int:
     """Advance the cursor past everything this run looked at -- except a
-    real external error, which must be retried on the very next run rather
-    than waiting for the queue to wrap all the way around. If this page
-    came back short of the requested limit (or empty), the table has been
-    fully traversed from the previous cursor, so wrap back to 0.
+    record blocked by a REAL problem, which must be retried on the very
+    next run rather than waiting for the queue to wrap all the way around.
+    `blocked_ids` covers both causes: a real external fetch error, and a
+    candidate whose DB chunk write failed to commit (the write never
+    happened, so the cursor must not advance past it either -- advancing
+    past a failed write would silently drop that record from the queue
+    forever). If this page came back short of the requested limit (or
+    empty/unbounded), the table has been fully traversed from the previous
+    cursor, so wrap back to 0.
     """
     if not candidates:
         return 0
 
-    error_ids = [c.id for idx, c in enumerate(candidates) if had_error_by_idx.get(idx)]
-    if error_ids:
-        return min(error_ids) - 1
+    if blocked_ids:
+        return min(blocked_ids) - 1
 
     max_id = max(c.id for c in candidates)
     if requested_limit is None or len(candidates) < requested_limit:
@@ -300,6 +313,7 @@ def enrich_early_signal_events(
     limit: int | None = None,
     force: bool = False,
     since_id: int | None = None,
+    refresh_all: bool = False,
     fetch_details: bool = True,
     persist: bool = True,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
@@ -319,15 +333,31 @@ def enrich_early_signal_events(
     _resolve_starting_cursor/_compute_next_cursor) so consecutive runs walk
     forward through the table and wrap around once they reach the end.
     `since_id`/`force` let a caller override the auto cursor explicitly.
+
+    Scheduled-enrichment page-size policy: a bare call (limit=None,
+    refresh_all=False -- the default for the internal API / scheduled
+    trigger) is an INCREMENTAL page of DEFAULT_PAGE_LIMIT candidates, not a
+    full-table sweep -- this is deliberate: an unbounded default would
+    mean every scheduled run re-scrapes the ENTIRE table over HTTP, every
+    time, forever, with cost scaling with table size. `refresh_all=True`
+    is the explicit opt-in for the old "no limit, one full pass" behavior
+    (used by the manual backfill script); an explicit `limit=N` always
+    means exactly N regardless of `refresh_all`. Either way, the table is
+    still fully covered over time: once a page's cursor reaches the end,
+    it wraps to 0 and the rotation continues from the top on a later run.
     """
     if get_session is None:
         from db.connection import get_session as _default_get_session
 
         get_session = _default_get_session
 
+    effective_limit = limit
+    if effective_limit is None and not refresh_all:
+        effective_limit = DEFAULT_PAGE_LIMIT
+
     # Phase 1: short read session -> plain candidate data, then close.
     cursor = _resolve_starting_cursor(read_session, since_id=since_id, force=force)
-    candidates = _fetch_candidates(read_session, cursor=cursor, limit=limit)
+    candidates = _fetch_candidates(read_session, cursor=cursor, limit=effective_limit)
     read_session.close()
 
     # Phase 2: external HTTP scraping. No DB session is open past this point.
@@ -369,14 +399,6 @@ def enrich_early_signal_events(
     finally:
         http.close()
 
-    # A real external error must be retried on the very next run rather
-    # than waiting for the whole table to wrap back around -- computed here
-    # (not after Phase 3) because it depends only on what Phase 2 observed,
-    # regardless of whether persist=True actually writes anything.
-    next_cursor = _compute_next_cursor(
-        candidates, had_error_by_idx, requested_limit=limit
-    )
-
     # Phase 3: chunked, independently-committed writes. No external I/O past
     # this point, and no single chunk's DB session spans another chunk.
     # "enriched" means an actual field value changed on an actual commit --
@@ -388,6 +410,7 @@ def enrich_early_signal_events(
     no_new_values = 0
     committed_chunks = 0
     write_failures = 0
+    write_failed_idx: set[int] = set()
 
     if persist:
         for chunk in _chunked(to_write, chunk_size):
@@ -415,6 +438,7 @@ def enrich_early_signal_events(
             else:
                 write_failures += 1
                 for idx, candidate, payload in chunk:
+                    write_failed_idx.add(idx)
                     results[idx] = {
                         "id": candidate.id,
                         "external_id": candidate.external_id,
@@ -436,6 +460,18 @@ def enrich_early_signal_events(
                 **payload,
             }
 
+    # The cursor must not advance past a record whose chunk write failed --
+    # that record was never actually persisted, so leaving it behind would
+    # silently drop it from the queue forever. Computed here, after Phase
+    # 3, specifically so write failures (not just external fetch errors)
+    # are accounted for.
+    blocked_ids = {
+        candidates[idx].id for idx, had_error in had_error_by_idx.items() if had_error
+    } | {candidates[idx].id for idx in write_failed_idx}
+    next_cursor = _compute_next_cursor(
+        candidates, blocked_ids, requested_limit=effective_limit
+    )
+
     return {
         "projects_indexed": len(projects),
         "candidates": len(candidates),
@@ -447,6 +483,8 @@ def enrich_early_signal_events(
         "write_failures": write_failures,
         "committed_chunks": committed_chunks,
         "next_cursor": next_cursor,
+        "page_limit": effective_limit,
+        "refresh_all": refresh_all,
         "results": results,
     }
 
@@ -456,6 +494,7 @@ def run_early_signal_enrichment(
     limit: int | None = None,
     force: bool = False,
     since_id: int | None = None,
+    refresh_all: bool = False,
     fetch_details: bool = True,
     persist: bool = True,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
@@ -470,6 +509,7 @@ def run_early_signal_enrichment(
             limit=limit,
             force=force,
             since_id=since_id,
+            refresh_all=refresh_all,
             fetch_details=fetch_details,
             persist=persist,
             chunk_size=chunk_size,

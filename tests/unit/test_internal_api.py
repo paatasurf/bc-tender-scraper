@@ -81,13 +81,15 @@ def test_enrich_early_signals_default_limit_preserves_existing_behavior():
             ) as fake_runner:
                 internal_api.enrich_early_signals(request, MagicMock(), None)
                 captured["worker"]()
-                fake_runner.assert_called_once_with(limit=None, since_id=None)
+                fake_runner.assert_called_once_with(
+                    limit=None, since_id=None, refresh_all=False
+                )
 
     assert captured["run_id"] is None
 
 
 def test_enrich_early_signals_passes_validated_canary_limit_and_run_id():
-    """An authenticated canary body must thread limit/since_id into the runner and keep run_id findable."""
+    """An authenticated canary body must thread limit/since_id/refresh_all into the runner and keep run_id findable."""
     request = MagicMock()
     request.headers.get.return_value = "secret"
 
@@ -110,9 +112,36 @@ def test_enrich_early_signals_passes_validated_canary_limit_and_run_id():
             ) as fake_runner:
                 internal_api.enrich_early_signals(request, MagicMock(), body)
                 captured["worker"]()
-                fake_runner.assert_called_once_with(limit=25, since_id=100)
+                fake_runner.assert_called_once_with(
+                    limit=25, since_id=100, refresh_all=False
+                )
 
     assert captured["run_id"] == "early-signal-canary-abc123"
+
+
+def test_enrich_early_signals_forwards_explicit_refresh_all():
+    request = MagicMock()
+    request.headers.get.return_value = "secret"
+
+    captured = {}
+
+    def _fake_enqueue_step(background_tasks, step, worker, run_id):
+        captured["worker"] = worker
+        return {"status": "started"}
+
+    body = internal_api.EnrichEarlySignalsRequest(refresh_all=True)
+
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
+        with patch("api.internal._enqueue_step", side_effect=_fake_enqueue_step):
+            with patch(
+                "api.internal.run_vancouver_early_signal_enrichment_scraper",
+                return_value={"candidates": 0},
+            ) as fake_runner:
+                internal_api.enrich_early_signals(request, MagicMock(), body)
+                captured["worker"]()
+                fake_runner.assert_called_once_with(
+                    limit=None, since_id=None, refresh_all=True
+                )
 
 
 def test_enrich_early_signals_request_rejects_negative_since_id():

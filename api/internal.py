@@ -130,8 +130,9 @@ class EnrichEarlySignalsRequest(BaseModel):
         le=25,
         description=(
             "Optional operational canary cap on candidates processed this run "
-            "(1-25). Omitting it preserves the normal scheduled/n8n behavior "
-            "(no limit, full backlog)."
+            "(1-25). Omitting it uses the scheduled default: an incremental "
+            "keyset page of DEFAULT_PAGE_LIMIT (100) candidates, not the full "
+            "backlog -- see refresh_all to opt into a full-table sweep."
         ),
     )
     since_id: int | None = Field(
@@ -142,6 +143,15 @@ class EnrichEarlySignalsRequest(BaseModel):
             "(process only early_signal_events.id > since_id). Omitting it "
             "preserves the normal behavior: the run auto-continues from "
             "wherever the previous enrich-early-signals run left off."
+        ),
+    )
+    refresh_all: bool = Field(
+        default=False,
+        description=(
+            "Explicit opt-in for a full, unbounded, single-pass sweep of the "
+            "whole table (only takes effect when limit is omitted). The "
+            "default (false) keeps every scheduled/n8n run bounded to an "
+            "incremental page so cost never scales with table size."
         ),
     )
 
@@ -410,7 +420,9 @@ def enrich_early_signals(
 
     def _worker() -> dict[str, Any]:
         return run_vancouver_early_signal_enrichment_scraper(
-            limit=payload.limit, since_id=payload.since_id
+            limit=payload.limit,
+            since_id=payload.since_id,
+            refresh_all=payload.refresh_all,
         )
 
     return _enqueue_step(

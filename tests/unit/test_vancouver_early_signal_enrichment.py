@@ -345,6 +345,77 @@ def test_write_failure_in_one_chunk_preserves_earlier_committed_chunks(monkeypat
     assert rows["e4"] != ""
     assert rows["e5"] != ""
 
+    # The cursor must stop just before the failed chunk's first id (3) --
+    # advancing past it would silently drop e2/e3 from the queue forever,
+    # since their fields were never actually written.
+    assert result["next_cursor"] == 2
+
+
+def test_write_failure_records_are_reselected_by_the_next_run(monkeypatch):
+    """Continuation of the scenario above: a second, separate run (reading
+    the cursor persisted by the first, exactly as two production
+    HTTP-triggered runs communicate) must reselect the ids whose chunk
+    write failed -- not skip past them because the run "looked at" them
+    once already."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(6)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    call_count = {"n": 0}
+
+    def _flaky_get_session():
+        call_count["n"] += 1
+        session = Session()
+        if call_count["n"] == 2:
+
+            def _boom():
+                raise RuntimeError("simulated write failure")
+
+            session.commit = _boom
+        return session
+
+    first = enrichment.enrich_early_signal_events(
+        Session(), get_session=_flaky_get_session, chunk_size=2, persist=True
+    )
+    assert first["write_failures"] == 1
+    assert first["next_cursor"] == 2
+    _persist_run(Session, first)
+
+    second = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, persist=True
+    )
+
+    second_ids = {r["id"] for r in second["results"]}
+    # e2 (id 3) and e3 (id 4), whose chunk failed to commit, are reselected.
+    assert {3, 4}.issubset(second_ids)
+    # they now write successfully with no flaky session in the way.
+    statuses = {r["id"]: r["status"] for r in second["results"]}
+    assert statuses[3] == "enriched"
+    assert statuses[4] == "enriched"
+    assert second["write_failures"] == 0
+
 
 def test_repeat_run_does_not_erase_existing_enrichment(monkeypatch):
     Session = _session_factory()
@@ -799,3 +870,140 @@ def test_external_error_does_not_block_other_candidates_and_is_retried(monkeypat
     # next_cursor stops just before the failed id so it (and anything after
     # it) is retried on the very next run, not after a full wraparound.
     assert result["next_cursor"] == 1
+
+
+# --- Scheduled-enrichment page-size policy ---
+
+
+def test_default_bare_call_uses_bounded_page_not_full_table_sweep(monkeypatch):
+    """The scheduled/n8n trigger calls with no limit and no refresh_all.
+    That must be an incremental, bounded page (DEFAULT_PAGE_LIMIT), not an
+    unbounded full-table re-scrape every single run."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(enrichment.DEFAULT_PAGE_LIMIT + 5)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    result = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, persist=True
+    )
+
+    assert result["page_limit"] == enrichment.DEFAULT_PAGE_LIMIT
+    assert result["refresh_all"] is False
+    assert result["candidates"] == enrichment.DEFAULT_PAGE_LIMIT
+    # more rows remain past this page -- the cursor did NOT wrap to 0.
+    assert result["next_cursor"] == enrichment.DEFAULT_PAGE_LIMIT
+
+
+def test_refresh_all_explicitly_opts_into_full_unbounded_sweep(monkeypatch):
+    Session = _session_factory()
+    total = enrichment.DEFAULT_PAGE_LIMIT + 5
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(total)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    result = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, refresh_all=True, persist=True
+    )
+
+    assert result["page_limit"] is None
+    assert result["refresh_all"] is True
+    assert result["candidates"] == total
+    # the whole table was covered in one pass -- cursor wraps to 0.
+    assert result["next_cursor"] == 0
+
+
+def test_repeat_run_after_cursor_wrap_is_idempotent(monkeypatch):
+    """Once a page reaches the end of the table and next_cursor wraps to 0,
+    a later run must safely revisit the same rows without erasing or
+    double-counting anything -- proving the rotation is safe long-term,
+    not just within one contiguous walk forward."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(3)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    first = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, persist=True
+    )
+    assert first["candidates"] == 3
+    assert first["enriched"] == 3
+    assert first["next_cursor"] == 0  # wrapped: fewer rows than the default page
+    _persist_run(Session, first)
+
+    second = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, persist=True
+    )
+    assert second["candidates"] == 3
+    assert second["enriched"] == 0
+    assert second["no_new_values"] == 3
+    assert second["next_cursor"] == 0
+
+    verify = Session()
+    rows = list(verify.scalars(select(EarlySignalEvent)).all())
+    verify.close()
+    assert len(rows) == 3
+    assert all(r.address.startswith("Addr") for r in rows)
