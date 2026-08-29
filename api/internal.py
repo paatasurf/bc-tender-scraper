@@ -134,6 +134,16 @@ class EnrichEarlySignalsRequest(BaseModel):
             "(no limit, full backlog)."
         ),
     )
+    since_id: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Optional manual override for the keyset pagination cursor "
+            "(process only early_signal_events.id > since_id). Omitting it "
+            "preserves the normal behavior: the run auto-continues from "
+            "wherever the previous enrich-early-signals run left off."
+        ),
+    )
 
 
 class GoogleEnrichmentRunRequest(BaseModel):
@@ -399,7 +409,9 @@ def enrich_early_signals(
     payload = body or EnrichEarlySignalsRequest()
 
     def _worker() -> dict[str, Any]:
-        return run_vancouver_early_signal_enrichment_scraper(limit=payload.limit)
+        return run_vancouver_early_signal_enrichment_scraper(
+            limit=payload.limit, since_id=payload.since_id
+        )
 
     return _enqueue_step(
         background_tasks,

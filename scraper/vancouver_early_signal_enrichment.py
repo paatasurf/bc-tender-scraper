@@ -15,13 +15,14 @@ end-of-run commit could ever fire. Instead:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import EarlySignalEvent
+from db.models import EarlySignalEvent, PipelineRun
 from scraper.shapeyourcity_development import (
     build_shapeyourcity_url,
     extract_reference_number_from_url,
@@ -140,18 +141,56 @@ def enrich_early_signal_event(
     return project_to_enrichment(project, detail=detail), had_error
 
 
+def _resolve_starting_cursor(
+    read_session: Session, *, since_id: int | None, force: bool
+) -> int:
+    """Decide the keyset cursor a run should start after.
+
+    Priority: an explicit `since_id` always wins (manual override). A
+    `force` run always starts at 0 (a deliberate full sweep from the top,
+    matching the pre-existing force=True contract). Otherwise, the cursor
+    is read back from the most recent enrich-early-signals pipeline_runs
+    row's own `next_cursor` -- each run persists where it left off so the
+    next run (a separate process/request) can continue the same rotation
+    without any new schema, coordinator, or caller changes. Never raises:
+    a missing/malformed prior counts_json degrades to cursor 0.
+    """
+    if since_id is not None:
+        return max(since_id, 0)
+    if force:
+        return 0
+
+    last_run = read_session.scalars(
+        select(PipelineRun)
+        .where(PipelineRun.step == "enrich-early-signals")
+        .order_by(PipelineRun.id.desc())
+        .limit(1)
+    ).first()
+    if last_run is None:
+        return 0
+
+    try:
+        counts = json.loads(last_run.counts_json or "{}")
+    except (TypeError, ValueError):
+        return 0
+    cursor = counts.get("next_cursor") if isinstance(counts, dict) else None
+    return cursor if isinstance(cursor, int) and cursor >= 0 else 0
+
+
 def _fetch_candidates(
-    read_session: Session, *, limit: int | None, force: bool
+    read_session: Session, *, cursor: int, limit: int | None
 ) -> list[_Candidate]:
-    query = select(EarlySignalEvent).order_by(EarlySignalEvent.id.asc())
-    if not force:
-        query = query.where(
-            or_(
-                EarlySignalEvent.address == "",
-                EarlySignalEvent.applicant == "",
-                EarlySignalEvent.project_value == "",
-            )
-        )
+    """Stable keyset page: id > cursor, ordered by id, optionally capped.
+
+    Deliberately not OFFSET-based -- OFFSET pagination can skip or repeat
+    rows under concurrent inserts/deletes; `id > cursor ORDER BY id ASC` is
+    monotonic and safe regardless of what else is writing to the table.
+    """
+    query = (
+        select(EarlySignalEvent)
+        .where(EarlySignalEvent.id > cursor)
+        .order_by(EarlySignalEvent.id.asc())
+    )
     if limit is not None:
         query = query.limit(limit)
 
@@ -166,6 +205,33 @@ def _fetch_candidates(
         )
         for row in rows
     ]
+
+
+def _compute_next_cursor(
+    candidates: list[_Candidate],
+    had_error_by_idx: dict[int, bool],
+    *,
+    requested_limit: int | None,
+) -> int:
+    """Advance the cursor past everything this run looked at -- except a
+    real external error, which must be retried on the very next run rather
+    than waiting for the queue to wrap all the way around. If this page
+    came back short of the requested limit (or empty), the table has been
+    fully traversed from the previous cursor, so wrap back to 0.
+    """
+    if not candidates:
+        return 0
+
+    error_ids = [c.id for idx, c in enumerate(candidates) if had_error_by_idx.get(idx)]
+    if error_ids:
+        return min(error_ids) - 1
+
+    max_id = max(c.id for c in candidates)
+    if requested_limit is None or len(candidates) < requested_limit:
+        # An unbounded page always reaches the true end of the table; a
+        # capped page that came back short of the cap does too either way.
+        return 0
+    return max_id
 
 
 def _chunked(items: list[Any], size: int) -> list[list[Any]]:
@@ -233,6 +299,7 @@ def enrich_early_signal_events(
     *,
     limit: int | None = None,
     force: bool = False,
+    since_id: int | None = None,
     fetch_details: bool = True,
     persist: bool = True,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
@@ -243,6 +310,15 @@ def enrich_early_signal_events(
     `read_session` is used only for phase 1 (candidate discovery) and is
     closed before any external HTTP call is made. `get_session` (defaults to
     db.connection.get_session) is called fresh for every write chunk.
+
+    Candidates are selected by stable keyset pagination (id > cursor), not
+    by "does this row still have an empty field" -- project_value is rarely
+    present in the source data and an emptiness filter on it never
+    converges, which is exactly why every run used to reselect the same
+    head-of-table rows. The cursor is self-tracked in pipeline_runs (see
+    _resolve_starting_cursor/_compute_next_cursor) so consecutive runs walk
+    forward through the table and wrap around once they reach the end.
+    `since_id`/`force` let a caller override the auto cursor explicitly.
     """
     if get_session is None:
         from db.connection import get_session as _default_get_session
@@ -250,7 +326,8 @@ def enrich_early_signal_events(
         get_session = _default_get_session
 
     # Phase 1: short read session -> plain candidate data, then close.
-    candidates = _fetch_candidates(read_session, limit=limit, force=force)
+    cursor = _resolve_starting_cursor(read_session, since_id=since_id, force=force)
+    candidates = _fetch_candidates(read_session, cursor=cursor, limit=limit)
     read_session.close()
 
     # Phase 2: external HTTP scraping. No DB session is open past this point.
@@ -265,11 +342,13 @@ def enrich_early_signal_events(
         external_failures = 0
         results: list[dict[str, Any] | None] = [None] * len(candidates)
         to_write: list[tuple[int, _Candidate, dict[str, str]]] = []
+        had_error_by_idx: dict[int, bool] = {}
 
         for idx, candidate in enumerate(candidates):
             payload, had_error = enrich_early_signal_event(
                 candidate, projects, http_session=http, fetch_details=fetch_details
             )
+            had_error_by_idx[idx] = had_error
             if had_error:
                 external_failures += 1
 
@@ -281,6 +360,7 @@ def enrich_early_signal_events(
                     "property_type": candidate.property_type,
                     "region": candidate.region,
                     "status": "no_match",
+                    "had_error": had_error,
                 }
                 continue
 
@@ -288,6 +368,14 @@ def enrich_early_signal_events(
             to_write.append((idx, candidate, payload))
     finally:
         http.close()
+
+    # A real external error must be retried on the very next run rather
+    # than waiting for the whole table to wrap back around -- computed here
+    # (not after Phase 3) because it depends only on what Phase 2 observed,
+    # regardless of whether persist=True actually writes anything.
+    next_cursor = _compute_next_cursor(
+        candidates, had_error_by_idx, requested_limit=limit
+    )
 
     # Phase 3: chunked, independently-committed writes. No external I/O past
     # this point, and no single chunk's DB session spans another chunk.
@@ -321,6 +409,7 @@ def enrich_early_signal_events(
                         "property_type": candidate.property_type,
                         "region": candidate.region,
                         "status": status,
+                        "had_error": had_error_by_idx.get(idx, False),
                         **payload,
                     }
             else:
@@ -332,6 +421,7 @@ def enrich_early_signal_events(
                         "property_type": candidate.property_type,
                         "region": candidate.region,
                         "status": "write_failed",
+                        "had_error": had_error_by_idx.get(idx, False),
                         **payload,
                     }
     else:
@@ -342,6 +432,7 @@ def enrich_early_signal_events(
                 "property_type": candidate.property_type,
                 "region": candidate.region,
                 "status": "not_persisted",
+                "had_error": had_error_by_idx.get(idx, False),
                 **payload,
             }
 
@@ -355,6 +446,7 @@ def enrich_early_signal_events(
         "external_failures": external_failures,
         "write_failures": write_failures,
         "committed_chunks": committed_chunks,
+        "next_cursor": next_cursor,
         "results": results,
     }
 
@@ -363,6 +455,7 @@ def run_early_signal_enrichment(
     *,
     limit: int | None = None,
     force: bool = False,
+    since_id: int | None = None,
     fetch_details: bool = True,
     persist: bool = True,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
@@ -376,6 +469,7 @@ def run_early_signal_enrichment(
             read_session,
             limit=limit,
             force=force,
+            since_id=since_id,
             fetch_details=fetch_details,
             persist=persist,
             chunk_size=chunk_size,

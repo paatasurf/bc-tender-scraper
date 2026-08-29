@@ -81,13 +81,13 @@ def test_enrich_early_signals_default_limit_preserves_existing_behavior():
             ) as fake_runner:
                 internal_api.enrich_early_signals(request, MagicMock(), None)
                 captured["worker"]()
-                fake_runner.assert_called_once_with(limit=None)
+                fake_runner.assert_called_once_with(limit=None, since_id=None)
 
     assert captured["run_id"] is None
 
 
 def test_enrich_early_signals_passes_validated_canary_limit_and_run_id():
-    """An authenticated canary body must thread limit into the runner and keep run_id findable."""
+    """An authenticated canary body must thread limit/since_id into the runner and keep run_id findable."""
     request = MagicMock()
     request.headers.get.return_value = "secret"
 
@@ -99,7 +99,7 @@ def test_enrich_early_signals_passes_validated_canary_limit_and_run_id():
         return {"status": "started"}
 
     body = internal_api.EnrichEarlySignalsRequest(
-        run_id="early-signal-canary-abc123", limit=25
+        run_id="early-signal-canary-abc123", limit=25, since_id=100
     )
 
     with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret"}, clear=False):
@@ -110,9 +110,14 @@ def test_enrich_early_signals_passes_validated_canary_limit_and_run_id():
             ) as fake_runner:
                 internal_api.enrich_early_signals(request, MagicMock(), body)
                 captured["worker"]()
-                fake_runner.assert_called_once_with(limit=25)
+                fake_runner.assert_called_once_with(limit=25, since_id=100)
 
     assert captured["run_id"] == "early-signal-canary-abc123"
+
+
+def test_enrich_early_signals_request_rejects_negative_since_id():
+    with pytest.raises(ValidationError):
+        internal_api.EnrichEarlySignalsRequest(since_id=-1)
 
 
 def test_enrich_early_signals_request_rejects_limit_above_25():

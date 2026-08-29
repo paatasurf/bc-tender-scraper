@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,7 +10,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from db.models import Base, EarlySignalEvent
+from db.models import Base, EarlySignalEvent, PipelineRun
 from scraper import vancouver_early_signal_enrichment as enrichment
 from scraper.shapeyourcity_development import (
     build_development_application_url,
@@ -32,7 +33,9 @@ def _session_factory():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(engine, tables=[EarlySignalEvent.__table__])
+    Base.metadata.create_all(
+        engine, tables=[EarlySignalEvent.__table__, PipelineRun.__table__]
+    )
     return sessionmaker(bind=engine)
 
 
@@ -40,6 +43,25 @@ def _seed(Session, rows: list[dict]) -> None:
     session = Session()
     for row in rows:
         session.add(EarlySignalEvent(**row))
+    session.commit()
+    session.close()
+
+
+def _persist_run(Session, counts: dict) -> None:
+    """Simulate what pipeline.runs.finish_run() does after a real
+    coordinator-driven call: write this run's returned counts (including
+    next_cursor) into a new pipeline_runs row, so the next
+    enrich_early_signal_events() call can read its cursor back -- exactly
+    how two separate production HTTP-triggered runs communicate."""
+    session = Session()
+    session.add(
+        PipelineRun(
+            run_id="test-run",
+            step="enrich-early-signals",
+            status="success",
+            counts_json=json.dumps(counts),
+        )
+    )
     session.commit()
     session.close()
 
@@ -491,9 +513,10 @@ def test_runner_forwards_canary_limit_to_core_function(monkeypatch):
         enrichment, "run_early_signal_enrichment", _fake_run_early_signal_enrichment
     )
 
-    run_vancouver_early_signal_enrichment_scraper(limit=25)
+    run_vancouver_early_signal_enrichment_scraper(limit=25, since_id=100)
 
     assert captured["limit"] == 25
+    assert captured["since_id"] == 100
     assert captured["force"] is False
     assert captured["fetch_details"] is True
     assert captured["persist"] is True
@@ -561,3 +584,218 @@ def test_http_session_is_closed_when_load_development_projects_raises(monkeypatc
         )
 
     fake_http.close.assert_called_once()
+
+
+# --- Keyset pagination and retry ---
+
+
+def test_consecutive_batches_select_different_candidate_ids(monkeypatch):
+    """Root-cause regression: the old emptiness-based WHERE clause never
+    converged because project_value is essentially never populated by the
+    source, so every batch reselected the same head-of-table rows. Keyset
+    pagination must make batch 2 see the NEXT page, not the same one."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(10)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    batch1 = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, limit=5, persist=True
+    )
+    _persist_run(Session, batch1)
+
+    batch2 = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, limit=5, persist=True
+    )
+
+    ids1 = {r["id"] for r in batch1["results"]}
+    ids2 = {r["id"] for r in batch2["results"]}
+
+    assert ids1 == {1, 2, 3, 4, 5}
+    assert ids2 == {6, 7, 8, 9, 10}
+    assert ids1.isdisjoint(ids2)
+
+
+def test_repeat_run_of_same_window_gives_no_new_values(monkeypatch):
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(5)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    first = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, since_id=0, limit=5, persist=True
+    )
+    assert first["enriched"] == 5
+
+    second = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, since_id=0, limit=5, persist=True
+    )
+    assert second["candidates"] == 5
+    assert second["enriched"] == 0
+    assert second["no_new_values"] == 5
+
+
+def test_apply_enrichment_fields_identical_payload_is_never_a_change():
+    row = EarlySignalEvent(
+        external_id="e1",
+        url_link="https://x",
+        region="",
+        property_type="",
+        address="123 Real St",
+        applicant="Acme",
+        project_value="$500",
+    )
+    payload = {
+        "url_link": "https://x",
+        "address": "123 Real St",
+        "applicant": "Acme",
+        "project_value": "$500",
+    }
+    assert enrichment._apply_enrichment_fields(row, payload) is False
+
+
+def test_partially_filled_record_only_changes_missing_fields():
+    row = EarlySignalEvent(
+        external_id="e1",
+        url_link="",
+        region="",
+        property_type="",
+        address="123 Real St",
+        applicant="",
+        project_value="",
+    )
+    payload = {
+        "url_link": "https://x",
+        "address": "123 Real St",
+        "applicant": "New Applicant",
+        "project_value": "",
+    }
+    changed = enrichment._apply_enrichment_fields(row, payload)
+    assert changed is True
+    assert row.address == "123 Real St"
+    assert row.applicant == "New Applicant"
+    assert row.url_link == "https://x"
+    assert row.project_value == ""
+
+
+def test_project_value_is_written_when_source_provides_it(monkeypatch):
+    Session = _session_factory()
+    _seed(
+        Session,
+        [{"external_id": "e1", "url_link": "", "region": "", "property_type": ""}],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": "1 Main St",
+                "applicant": "Acme",
+                "project_value": "$2,500,000",
+            },
+            False,
+        ),
+    )
+
+    read_session = Session()
+    result = enrichment.enrich_early_signal_events(
+        read_session, get_session=Session, persist=True
+    )
+    assert result["enriched"] == 1
+
+    verify = Session()
+    row = verify.scalars(select(EarlySignalEvent)).first()
+    verify.close()
+    assert row.project_value == "$2,500,000"
+
+
+def test_external_error_does_not_block_other_candidates_and_is_retried(monkeypatch):
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": "e1", "url_link": "", "region": "", "property_type": ""},
+            {"external_id": "e2", "url_link": "", "region": "", "property_type": ""},
+            {"external_id": "e3", "url_link": "", "region": "", "property_type": ""},
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+
+    def _fake_enrich(candidate, projects, *, http_session, fetch_details):
+        if candidate.id == 2:
+            return {"address": "", "applicant": "", "project_value": ""}, True
+        return (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        )
+
+    monkeypatch.setattr(enrichment, "enrich_early_signal_event", _fake_enrich)
+
+    read_session = Session()
+    result = enrichment.enrich_early_signal_events(
+        read_session, get_session=Session, limit=3, persist=True
+    )
+
+    assert result["external_failures"] == 1
+    statuses = {r["id"]: r["status"] for r in result["results"]}
+    assert statuses[1] == "enriched"
+    assert statuses[3] == "enriched"
+    assert statuses[2] == "no_new_values"
+    # next_cursor stops just before the failed id so it (and anything after
+    # it) is retried on the very next run, not after a full wraparound.
+    assert result["next_cursor"] == 1
