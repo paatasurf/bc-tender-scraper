@@ -320,13 +320,7 @@ jobs:
       - name: Run database migrations (fresh CI Postgres -- never production)
         run: |
           set -euo pipefail
-          python -c "
-          from db.connection import init_db
-          ok = init_db(raise_on_failure=True)
-          print('migrations applied ok' if ok else 'init_db reported degraded (unexpected on a fresh CI database)')
-          if not ok:
-              raise SystemExit(1)
-          "
+          python scripts/ci_apply_all_migrations.py
 
       - name: Syntax check (compileall)
         run: |
@@ -454,7 +448,7 @@ jobs:
       - name: Run database migrations (fresh CI Postgres -- never production)
         run: |
           set -euo pipefail
-          python -c "from db.connection import init_db; init_db(raise_on_failure=True)"
+          python scripts/ci_apply_all_migrations.py
 
       - name: Start API server
         run: |
