@@ -12,10 +12,16 @@ import scripts.run_surrey_applicant_recovery_full as runner
 from db.models import Permit
 from pipeline.surrey_applicant_recovery import compute_recovery_digest
 from tests.db_test_safety import require_local_test_database
+from tests.db_transactional_fixture import transactional_session
 
 
 @pytest.fixture()
 def db_session():
+    """runner.execute_full_recovery() itself calls session.rollback() on
+    any failure (it owns the transaction by design). A plain outer
+    transaction is not enough to protect this test's own setup rows from
+    that rollback; see tests/db_transactional_fixture.py.
+    """
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
@@ -24,17 +30,10 @@ def db_session():
     except Exception:
         pytest.skip("Local Postgres unavailable")
 
-    conn = engine.connect()
-    outer = conn.begin()
-    conn.execute(text("SET LOCAL lock_timeout = '10s'"))
-    session = Session(bind=conn)
     try:
-        yield session
+        with transactional_session(engine) as session:
+            yield session
     finally:
-        session.close()
-        if outer.is_active:
-            outer.rollback()
-        conn.close()
         engine.dispose()
 
 
@@ -56,6 +55,9 @@ def _make_permit(index: int) -> tuple[Permit, str, str]:
 
 
 def test_full_recovery_updates_exact_rowcount_and_only_applicant(db_session):
+    companies_before = (
+        db_session.connection().execute(text("SELECT COUNT(*) FROM companies")).scalar()
+    )
     permits_and_evidence = [_make_permit(i) for i in range(3)]
     for permit, _source_id, _applicant in permits_and_evidence:
         db_session.add(permit)
@@ -98,10 +100,10 @@ def test_full_recovery_updates_exact_rowcount_and_only_applicant(db_session):
         assert row.applicant == expected_applicant
         assert row.company_id is None
 
-    companies_count = (
+    companies_after = (
         db_session.connection().execute(text("SELECT COUNT(*) FROM companies")).scalar()
     )
-    assert companies_count == 0
+    assert companies_after == companies_before
 
 
 def test_full_recovery_rejects_and_does_not_write_on_partial_source_mismatch(
@@ -113,7 +115,13 @@ def test_full_recovery_rejects_and_does_not_write_on_partial_source_mismatch(
     permits_and_evidence = [_make_permit(i) for i in range(2)]
     for permit, _source_id, _applicant in permits_and_evidence:
         db_session.add(permit)
-    db_session.flush()
+    # commit (not flush): execute_full_recovery rolls back on failure, and
+    # under join_transaction_mode="create_savepoint" a rollback only
+    # undoes the current savepoint -- committing here releases it and
+    # opens a fresh one, so this setup survives that internal rollback
+    # while still living entirely inside the fixture's own outer
+    # transaction (never touches real data; rolled back at teardown).
+    db_session.commit()
 
     entries = [
         (int(permit.id), source_id, applicant)
@@ -161,7 +169,7 @@ def test_full_recovery_rolls_back_with_no_partial_rows_when_live_eligible_count_
     permits_and_evidence = [_make_permit(i) for i in range(3)]
     for permit, _source_id, _applicant in permits_and_evidence:
         db_session.add(permit)
-    db_session.flush()
+    db_session.commit()  # see comment in the previous test for why commit, not flush
     permits_and_evidence.sort(key=lambda pe: int(pe[0].id))
 
     entries_all = [
