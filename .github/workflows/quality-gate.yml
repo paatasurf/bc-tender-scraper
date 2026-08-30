@@ -269,13 +269,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
+          # Semgrep's human-readable "Scan Status"/"Scan Summary" (including
+          # the "Findings: N" / "Ran N rules on N files: N findings." lines
+          # the Advisory summary step below greps for) go to stderr, not
+          # stdout -- `2>&1` before the pipe merges both streams into
+          # reports/semgrep.txt so it's no longer silently empty (the SARIF
+          # file was always complete; only this human-readable capture was
+          # affected). `pipefail` (set above) still propagates semgrep's own
+          # exit code through `tee`, unaffected by the stream merge.
           semgrep scan \
             --config p/security-audit \
             --config p/secrets \
             --config p/python \
             --sarif --output reports/semgrep.sarif \
             --error \
-            . | tee reports/semgrep.txt
+            . 2>&1 | tee reports/semgrep.txt
 
       - name: Upload Semgrep report
         if: always()
