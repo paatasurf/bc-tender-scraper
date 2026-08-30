@@ -500,11 +500,27 @@ def test_zero_matches_fixture_via_real_db(db_session):
 
 
 def test_ambiguous_fixture_via_real_db(db_session):
-    """Two distinct Company rows sharing the exact same name must fail
-    closed as ambiguous, never guessing one of them."""
+    """Two distinct Company rows both matching the same identity string
+    must fail closed as ambiguous, never guessing one of them.
+
+    resolve_company_by_exact_identity() matches on
+    ``Company.name == identity OR Company.display_name == identity`` (see
+    its docstring); companies.name has a real unique constraint
+    (companies_name_key), so two rows can never legitimately share a
+    name. Two DIFFERENT names that both resolve to the same identity via
+    the name/display_name OR is exactly the ambiguity this resolver
+    exists to catch, and is what real duplicate-identity data actually
+    looks like -- one row matches via .name, the other via
+    .display_name, which is a strictly more faithful exercise of the OR
+    than the original always-same-name fixture (which could never
+    actually reach the .display_name branch)."""
     shared_name = f"Duplicate Firm Name {uuid.uuid4().hex[:8]}"
     _make_company(db_session, name=shared_name)
-    _make_company(db_session, name=shared_name)
+    _make_company(
+        db_session,
+        name=f"Other Legal Name {uuid.uuid4().hex[:8]}",
+        display_name=shared_name,
+    )
 
     aggregate, evidence = build_lineage_diagnostic(db_session, identity=shared_name)
 
