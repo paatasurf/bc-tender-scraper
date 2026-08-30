@@ -1,0 +1,6364 @@
+{
+  "components": {
+    "schemas": {
+      "AIMatchingRequest": {
+        "properties": {
+          "company_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "companies.id or arch_companies.id. Required when sync=true.",
+            "title": "Company Id"
+          },
+          "kind": {
+            "default": "architecture",
+            "description": "Company type: architecture or construction.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 5,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "max_companies": {
+            "default": 10,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Companies",
+            "type": "integer"
+          },
+          "max_tenders": {
+            "default": 50,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Max Tenders",
+            "type": "integer"
+          },
+          "min_score": {
+            "default": 65,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Min Score",
+            "type": "integer"
+          },
+          "sync": {
+            "default": false,
+            "description": "When true with company_id, run matcher+scorer inline and return ranked matches.",
+            "title": "Sync",
+            "type": "boolean"
+          }
+        },
+        "title": "AIMatchingRequest",
+        "type": "object"
+      },
+      "AdminRunRequest": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional shared run id for grouping steps in n8n orchestration.",
+            "title": "Run Id"
+          }
+        },
+        "title": "AdminRunRequest",
+        "type": "object"
+      },
+      "AnalyticsQuerySpec": {
+        "properties": {
+          "date_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Field"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Fields",
+            "type": "array"
+          },
+          "filters": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Filters",
+            "type": "object"
+          },
+          "geography": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geography"
+          },
+          "group_by": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Group By",
+            "type": "array"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "lookback_days": {
+            "anyOf": [
+              {
+                "maximum": 3650.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lookback Days"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Metrics",
+            "type": "array"
+          },
+          "operation": {
+            "default": "aggregate",
+            "title": "Operation",
+            "type": "string"
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order By"
+          },
+          "province": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Province-level scope (currently only 'BC' is meaningful).",
+            "title": "Province"
+          }
+        },
+        "required": [
+          "domain"
+        ],
+        "title": "AnalyticsQuerySpec",
+        "type": "object"
+      },
+      "ConstructionTiersRequest": {
+        "properties": {
+          "company_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional company ids; default all canonical + standalone rows.",
+            "title": "Company Ids"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "title": "ConstructionTiersRequest",
+        "type": "object"
+      },
+      "EnrichEarlySignalsRequest": {
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 25.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional operational canary cap on candidates processed this run (1-25). Omitting it preserves the normal scheduled/n8n behavior (no limit, full backlog).",
+            "title": "Limit"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional shared run id for grouping steps in n8n orchestration.",
+            "title": "Run Id"
+          }
+        },
+        "title": "EnrichEarlySignalsRequest",
+        "type": "object"
+      },
+      "GoogleEnrichmentRunRequest": {
+        "properties": {
+          "batch_size": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override GOOGLE_ENRICHMENT_BATCH_SIZE for this run.",
+            "title": "Batch Size"
+          },
+          "company_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional explicit company ids (useful for dry_run smoke tests).",
+            "title": "Company Ids"
+          },
+          "dry_run": {
+            "default": false,
+            "description": "When true, perform lookups and matching but do not write companies or reviews.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional shared run id for pipeline_runs grouping.",
+            "title": "Run Id"
+          }
+        },
+        "title": "GoogleEnrichmentRunRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InternalRunRequest": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional shared run id for grouping steps in n8n orchestration.",
+            "title": "Run Id"
+          }
+        },
+        "title": "InternalRunRequest",
+        "type": "object"
+      },
+      "MorningBriefRequest": {
+        "properties": {
+          "company_id": {
+            "description": "companies.id for the brief target",
+            "minimum": 1.0,
+            "title": "Company Id",
+            "type": "integer"
+          },
+          "email": {
+            "description": "Recipient email address",
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "company_id",
+          "email"
+        ],
+        "title": "MorningBriefRequest",
+        "type": "object"
+      },
+      "OdbusImportRequest": {
+        "properties": {
+          "csv_path": {
+            "description": "Path to ODBus_v1.csv",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Csv Path",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "csv_path"
+        ],
+        "title": "OdbusImportRequest",
+        "type": "object"
+      },
+      "OrgbookImportRequest": {
+        "properties": {
+          "path": {
+            "description": "Path to OrgBook CSV or JSONL export.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "OrgbookImportRequest",
+        "type": "object"
+      },
+      "RecordOutcomeRequest": {
+        "properties": {
+          "award_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Award Amount"
+          },
+          "bid_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Amount"
+          },
+          "company_id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Company Id",
+            "type": "integer"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "outcome": {
+            "enum": [
+              "won",
+              "lost",
+              "withdrew",
+              "pending"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "tender_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Tender Id",
+            "type": "string"
+          },
+          "tender_title": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Title"
+          }
+        },
+        "required": [
+          "company_id",
+          "tender_id",
+          "outcome"
+        ],
+        "title": "RecordOutcomeRequest",
+        "type": "object"
+      },
+      "RegistryVerificationMatchRequest": {
+        "properties": {
+          "company_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional canonical company ids; default all canonical rows.",
+            "title": "Company Ids"
+          },
+          "include_review_tiers": {
+            "default": false,
+            "description": "When true, include T4 family and T5 fuzzy matches as review_pending links.",
+            "title": "Include Review Tiers",
+            "type": "boolean"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider source keys; default all registered providers.",
+            "title": "Sources"
+          }
+        },
+        "title": "RegistryVerificationMatchRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VerificationHubImportRequest": {
+        "properties": {
+          "path": {
+            "description": "Path to provider reference export.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "source": {
+            "description": "Provider source key (odbus, orgbook).",
+            "maxLength": 30,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "path"
+        ],
+        "title": "VerificationHubImportRequest",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "API for tenders, permits, Reddit signals, and jobs in British Columbia",
+    "title": "BC Construction Data API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/admin/bulk-prescore": {
+      "get": {
+        "description": "Pre-score construction companies into tender_matches using Discover hybrid matching.",
+        "operationId": "bulk_prescore_api_admin_bulk_prescore_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "batch_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Batch Size",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional cap on batches per request (default: run until no pending companies).",
+            "in": "query",
+            "name": "max_batches",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional cap on batches per request (default: run until no pending companies).",
+              "title": "Max Batches"
+            }
+          },
+          {
+            "description": "Blocking mode — waits until all batches finish (or max_batches is reached).",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Blocking mode — waits until all batches finish (or max_batches is reached).",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AdminRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Bulk Prescore Api Admin Bulk Prescore Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Prescore",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Pre-score construction companies into tender_matches using Discover hybrid matching.",
+        "operationId": "bulk_prescore_api_admin_bulk_prescore_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "batch_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Batch Size",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional cap on batches per request (default: run until no pending companies).",
+            "in": "query",
+            "name": "max_batches",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional cap on batches per request (default: run until no pending companies).",
+              "title": "Max Batches"
+            }
+          },
+          {
+            "description": "Blocking mode — waits until all batches finish (or max_batches is reached).",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Blocking mode — waits until all batches finish (or max_batches is reached).",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AdminRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Bulk Prescore Api Admin Bulk Prescore Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Prescore",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/ai-matching": {
+      "post": {
+        "operationId": "trigger_ai_matching_api_ai_matching_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AIMatchingRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Trigger Ai Matching Api Ai Matching Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Ai Matching"
+      }
+    },
+    "/api/analytics/query": {
+      "post": {
+        "operationId": "analytics_query_api_analytics_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyticsQuerySpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Analytics Query Api Analytics Query Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Analytics Query",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/arch-companies": {
+      "get": {
+        "operationId": "list_arch_companies_api_arch_companies_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 300,
+              "title": "Search",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Arch Companies Api Arch Companies Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Arch Companies"
+      }
+    },
+    "/api/arch-companies/id/{company_id}/competitive-intelligence": {
+      "get": {
+        "operationId": "arch_company_competitive_intelligence_api_arch_companies_id__company_id__competitive_intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "peer_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Peer Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh_cip",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Cip",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Competitive Intelligence Api Arch Companies Id  Company Id  Competitive Intelligence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Competitive Intelligence"
+      }
+    },
+    "/api/arch-companies/id/{company_id}/tender-match/{tender_id}": {
+      "get": {
+        "operationId": "arch_company_tender_match_by_id_api_arch_companies_id__company_id__tender_match__tender_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tender_id",
+            "required": true,
+            "schema": {
+              "title": "Tender Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Tender Match By Id Api Arch Companies Id  Company Id  Tender Match  Tender Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Tender Match By Id"
+      }
+    },
+    "/api/arch-companies/{company_id}/bd-intelligence": {
+      "get": {
+        "operationId": "arch_company_bd_intelligence_api_arch_companies__company_id__bd_intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "active_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Active Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pipeline_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Pipeline Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "intel_limit",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Intel Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "relationship_limit",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Relationship Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "growth_limit",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "maximum": 5,
+              "minimum": 0,
+              "title": "Growth Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh_profile",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Profile",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_rejections",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Rejections",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 95,
+                  "minimum": 50,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Bd Intelligence Api Arch Companies  Company Id  Bd Intelligence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Bd Intelligence"
+      }
+    },
+    "/api/arch-companies/{company_id}/capability-profile": {
+      "get": {
+        "operationId": "arch_company_capability_profile_api_arch_companies__company_id__capability_profile_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Capability Profile Api Arch Companies  Company Id  Capability Profile Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Capability Profile"
+      }
+    },
+    "/api/arch-companies/{company_id}/competitive-intelligence": {
+      "get": {
+        "operationId": "arch_company_competitive_intelligence_api_arch_companies__company_id__competitive_intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "peer_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Peer Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh_cip",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Cip",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Competitive Intelligence Api Arch Companies  Company Id  Competitive Intelligence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Competitive Intelligence"
+      }
+    },
+    "/api/arch-companies/{company_id}/opportunities": {
+      "get": {
+        "operationId": "arch_company_opportunities_api_arch_companies__company_id__opportunities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_score",
+            "required": false,
+            "schema": {
+              "default": 40,
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Min Score",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 15,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_closed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Closed",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Opportunities Api Arch Companies  Company Id  Opportunities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Opportunities"
+      }
+    },
+    "/api/arch-companies/{name}": {
+      "get": {
+        "operationId": "get_arch_company_api_arch_companies__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Arch Company Api Arch Companies  Name  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Arch Company"
+      }
+    },
+    "/api/arch-companies/{name}/tender-match/{tender_id}": {
+      "get": {
+        "operationId": "arch_company_tender_match_api_arch_companies__name__tender_match__tender_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tender_id",
+            "required": true,
+            "schema": {
+              "title": "Tender Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Tender Match Api Arch Companies  Name  Tender Match  Tender Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Tender Match"
+      }
+    },
+    "/api/arch-tenders": {
+      "get": {
+        "operationId": "list_arch_tenders_api_arch_tenders_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Arch Tenders Api Arch Tenders Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Arch Tenders"
+      }
+    },
+    "/api/client-profile": {
+      "get": {
+        "operationId": "get_client_profile_api_client_profile_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Client Profile Api Client Profile Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Client Profile"
+      }
+    },
+    "/api/commercial-tenders": {
+      "get": {
+        "operationId": "list_commercial_tenders_api_commercial_tenders_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Commercial Tenders Api Commercial Tenders Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Commercial Tenders"
+      }
+    },
+    "/api/companies": {
+      "get": {
+        "operationId": "list_companies_api_companies_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 300,
+              "title": "Search",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated construction tiers (A–E). Use ALL for no tier filter.",
+            "in": "query",
+            "name": "tiers",
+            "required": false,
+            "schema": {
+              "default": "A,B",
+              "description": "Comma-separated construction tiers (A–E). Use ALL for no tier filter.",
+              "maxLength": 50,
+              "title": "Tiers",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Minimum construction_score (inclusive).",
+            "in": "query",
+            "name": "min_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum construction_score (inclusive).",
+              "title": "Min Score"
+            }
+          },
+          {
+            "description": "Maximum construction_score (inclusive).",
+            "in": "query",
+            "name": "max_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum construction_score (inclusive).",
+              "title": "Max Score"
+            }
+          },
+          {
+            "description": "Sort field for company list.",
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "construction_score",
+              "description": "Sort field for company list.",
+              "enum": [
+                "construction_score",
+                "total_value"
+              ],
+              "title": "Sort By",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Companies Api Companies Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Companies"
+      }
+    },
+    "/api/companies/id/{company_id}": {
+      "get": {
+        "operationId": "get_company_by_id_api_companies_id__company_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Company By Id Api Companies Id  Company Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Company By Id"
+      }
+    },
+    "/api/companies/id/{company_id}/competitive-intelligence": {
+      "get": {
+        "operationId": "company_competitive_intelligence_api_companies_id__company_id__competitive_intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "peer_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Peer Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh_cip",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Cip",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Competitive Intelligence Api Companies Id  Company Id  Competitive Intelligence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Competitive Intelligence"
+      }
+    },
+    "/api/companies/id/{company_id}/contacts": {
+      "get": {
+        "operationId": "company_project_contacts_api_companies_id__company_id__contacts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "architect",
+                    "gc",
+                    "developer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Project Contacts Api Companies Id  Company Id  Contacts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Project Contacts"
+      }
+    },
+    "/api/companies/id/{company_id}/tender-match/{tender_id}": {
+      "get": {
+        "operationId": "company_tender_match_by_id_api_companies_id__company_id__tender_match__tender_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tender_id",
+            "required": true,
+            "schema": {
+              "title": "Tender Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Tender Match By Id Api Companies Id  Company Id  Tender Match  Tender Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Tender Match By Id"
+      }
+    },
+    "/api/companies/{company_id}/bd-intelligence": {
+      "get": {
+        "operationId": "company_bd_intelligence_api_companies__company_id__bd_intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "construction",
+              "enum": [
+                "construction",
+                "architecture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "active_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Active Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pipeline_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Pipeline Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "intel_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Intel Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "relationship_limit",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "maximum": 10,
+              "minimum": 0,
+              "title": "Relationship Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "growth_limit",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "maximum": 5,
+              "minimum": 0,
+              "title": "Growth Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh_profile",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Profile",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_rejections",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Rejections",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 95,
+                  "minimum": 50,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Bd Intelligence Api Companies  Company Id  Bd Intelligence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Bd Intelligence"
+      }
+    },
+    "/api/companies/{company_id}/capability-profile": {
+      "get": {
+        "operationId": "company_capability_profile_api_companies__company_id__capability_profile_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "construction",
+              "enum": [
+                "construction",
+                "architecture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Capability Profile Api Companies  Company Id  Capability Profile Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Capability Profile"
+      }
+    },
+    "/api/companies/{company_id}/competitive-intelligence": {
+      "get": {
+        "operationId": "company_competitive_intelligence_api_companies__company_id__competitive_intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "peer_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Peer Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh_cip",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Cip",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Competitive Intelligence Api Companies  Company Id  Competitive Intelligence Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Competitive Intelligence"
+      }
+    },
+    "/api/companies/{company_id}/contacts": {
+      "get": {
+        "operationId": "company_project_contacts_api_companies__company_id__contacts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "architect",
+                    "gc",
+                    "developer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Project Contacts Api Companies  Company Id  Contacts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Project Contacts"
+      }
+    },
+    "/api/companies/{company_id}/geographic-footprint": {
+      "get": {
+        "description": "Return event-time activity by city for a canonical company.",
+        "operationId": "company_geographic_footprint_api_companies__company_id__geographic_footprint_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lookback_days",
+            "required": false,
+            "schema": {
+              "default": 180,
+              "maximum": 3650,
+              "minimum": 1,
+              "title": "Lookback Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Geographic Footprint Api Companies  Company Id  Geographic Footprint Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Geographic Footprint"
+      }
+    },
+    "/api/companies/{company_id}/opportunities": {
+      "get": {
+        "operationId": "company_opportunities_api_companies__company_id__opportunities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "construction",
+              "enum": [
+                "construction",
+                "architecture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_score",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Min Score",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 15,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_closed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Closed",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Opportunities Api Companies  Company Id  Opportunities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Opportunities"
+      }
+    },
+    "/api/companies/{company_id}/opportunities/unified": {
+      "get": {
+        "operationId": "company_opportunities_unified_api_companies__company_id__opportunities_unified_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "construction",
+              "enum": [
+                "construction",
+                "architecture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_closed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Closed",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Opportunities Unified Api Companies  Company Id  Opportunities Unified Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Opportunities Unified"
+      }
+    },
+    "/api/companies/{name}": {
+      "get": {
+        "operationId": "get_company_api_companies__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Company Api Companies  Name  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Company"
+      }
+    },
+    "/api/companies/{name}/tender-match/{tender_id}": {
+      "get": {
+        "operationId": "company_tender_match_api_companies__name__tender_match__tender_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tender_id",
+            "required": true,
+            "schema": {
+              "title": "Tender Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Tender Match Api Companies  Name  Tender Match  Tender Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Tender Match"
+      }
+    },
+    "/api/company-wiki/{company_id}": {
+      "get": {
+        "description": "Return the stored AI wiki for a company. 404 if no wiki has been generated yet.",
+        "operationId": "get_company_wiki_api_company_wiki__company_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "construction",
+              "enum": [
+                "construction",
+                "architecture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Company Wiki Api Company Wiki  Company Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Company Wiki"
+      }
+    },
+    "/api/competitive-intelligence/competitor-activity": {
+      "get": {
+        "operationId": "competitive_intelligence_competitor_activity_api_competitive_intelligence_competitor_activity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "peer_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 5,
+              "minimum": 3,
+              "title": "Peer Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Competitive Intelligence Competitor Activity Api Competitive Intelligence Competitor Activity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Competitive Intelligence Competitor Activity"
+      }
+    },
+    "/api/competitive-intelligence/missed-opportunities": {
+      "get": {
+        "operationId": "competitive_intelligence_missed_opportunities_api_competitive_intelligence_missed_opportunities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Company Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "peer_limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 5,
+              "minimum": 3,
+              "title": "Peer Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Competitive Intelligence Missed Opportunities Api Competitive Intelligence Missed Opportunities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Competitive Intelligence Missed Opportunities"
+      }
+    },
+    "/api/contract-awards": {
+      "get": {
+        "operationId": "list_contract_awards_api_contract_awards_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "description": "Filter by company match status",
+            "in": "query",
+            "name": "matched",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by company match status",
+              "title": "Matched"
+            }
+          },
+          {
+            "in": "query",
+            "name": "company_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Company Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Contract Awards Api Contract Awards Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Contract Awards"
+      }
+    },
+    "/api/contract-awards/summary": {
+      "get": {
+        "operationId": "contract_awards_summary_api_contract_awards_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Contract Awards Summary Api Contract Awards Summary Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Contract Awards Summary"
+      }
+    },
+    "/api/contract-awards/top-vendors": {
+      "get": {
+        "description": "Leaderboard of contract-award vendors.\n\nRead-side aggregation only -- does not resolve unmatched vendors or\nperson/company ambiguity, and does not alter canonical company\nrecords, matching decisions, or historical award data (see\nContractAward.company_id / match_method / match_confidence, written\nelsewhere by db/import_contract_awards.py).\n\nMatched awards (company_id IS NOT NULL) are grouped by company_id and\njoined to Company so the same real company is one row regardless of\nhow many raw winner_company spellings it has in the source data.\nUnmatched awards (company_id IS NULL) remain their own rows, grouped\nby the raw winner_company string, with matched=false -- never\nblended into a matched company's totals. Every item still carries\nvendor/award_count/total_value/company_id/matched (the pre-existing\ncontract); company_name is added only for matched rows.",
+        "operationId": "contract_awards_top_vendors_api_contract_awards_top_vendors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Contract Awards Top Vendors Api Contract Awards Top Vendors Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Contract Awards Top Vendors"
+      }
+    },
+    "/api/early-signals": {
+      "get": {
+        "operationId": "early_signals_api_early_signals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "company_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Company Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "construction",
+              "enum": [
+                "construction",
+                "architecture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lookback_days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Lookback Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_value",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Value"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_value",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Value"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_score",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Min Score",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 15,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "City"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Early Signals Api Early Signals Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Early Signals"
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": "Response Health Api Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Jobs Api Jobs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs"
+      }
+    },
+    "/api/market/company-activity/growth": {
+      "get": {
+        "description": "Compare equal event-time windows; never rank solely by percentage growth.",
+        "operationId": "company_activity_growth_api_market_company_activity_growth_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "geography",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Geography",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lookback_days",
+            "required": false,
+            "schema": {
+              "default": 90,
+              "maximum": 3650,
+              "minimum": 1,
+              "title": "Lookback Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "minimum_activity",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "maximum": 100,
+              "minimum": 2,
+              "title": "Minimum Activity",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Activity Growth Api Market Company Activity Growth Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fastest-growing Recent Company Activity"
+      }
+    },
+    "/api/market/company-ranking": {
+      "get": {
+        "description": "Ranks companies by recently observed, linked permit and award activity. This is not an absolute market-wide activity ranking while tenders and early signals lack reliable company attribution.",
+        "operationId": "market_company_ranking_api_market_company_ranking_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Geography"
+            }
+          },
+          {
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "City"
+            }
+          },
+          {
+            "in": "query",
+            "name": "region",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Region"
+            }
+          },
+          {
+            "in": "query",
+            "name": "province",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Province"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lookback_days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 3650,
+              "minimum": 1,
+              "title": "Lookback Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 20,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Market Company Ranking Api Market Company Ranking Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recent Company Activity Ranking"
+      }
+    },
+    "/api/ops/incidents": {
+      "get": {
+        "description": "No incidents table exists yet in M1 -- this is an honest\ncapability/status placeholder, not a fabricated empty success. See\ndocs/architecture/MISSION_CONTROL_M1_READONLY_API.md's M2 plan for\nwhat persisting real incidents would require.",
+        "operationId": "ops_incidents_api_ops_incidents_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Incidents Api Ops Incidents Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ops Incidents",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/ops/jobs": {
+      "get": {
+        "operationId": "ops_jobs_api_ops_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "job_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Jobs Api Ops Jobs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ops Jobs",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/ops/jobs/{run_id}": {
+      "get": {
+        "operationId": "ops_job_detail_api_ops_jobs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Job Detail Api Ops Jobs  Run Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ops Job Detail",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/ops/runs": {
+      "get": {
+        "operationId": "ops_runs_api_ops_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Runs Api Ops Runs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ops Runs",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/ops/runs/{run_id}": {
+      "get": {
+        "operationId": "ops_run_detail_api_ops_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Run Detail Api Ops Runs  Run Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ops Run Detail",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/ops/sources": {
+      "get": {
+        "operationId": "ops_sources_api_ops_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Sources Api Ops Sources Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ops Sources",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/ops/summary": {
+      "get": {
+        "operationId": "ops_summary_api_ops_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Summary Api Ops Summary Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ops Summary",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/api/permits": {
+      "get": {
+        "operationId": "list_permits_api_permits_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "City"
+            }
+          },
+          {
+            "in": "query",
+            "name": "applicant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Applicant"
+            }
+          },
+          {
+            "description": "When true, include stale/completed/cancelled permits (full archive).",
+            "in": "query",
+            "name": "include_inactive",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, include stale/completed/cancelled permits (full archive).",
+              "title": "Include Inactive",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Permits Api Permits Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Permits"
+      }
+    },
+    "/api/pipeline/run": {
+      "post": {
+        "operationId": "trigger_pipeline_api_pipeline_run_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Trigger Pipeline Api Pipeline Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trigger Pipeline",
+        "tags": [
+          "pipeline"
+        ]
+      }
+    },
+    "/api/pipeline/run-ai-scoring": {
+      "post": {
+        "operationId": "trigger_ai_scoring_api_pipeline_run_ai_scoring_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Trigger Ai Scoring Api Pipeline Run Ai Scoring Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trigger Ai Scoring",
+        "tags": [
+          "pipeline"
+        ]
+      }
+    },
+    "/api/pipeline/run-google-places": {
+      "post": {
+        "operationId": "trigger_google_places_api_pipeline_run_google_places_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Trigger Google Places Api Pipeline Run Google Places Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trigger Google Places",
+        "tags": [
+          "pipeline"
+        ]
+      }
+    },
+    "/api/pipeline/status": {
+      "get": {
+        "operationId": "pipeline_status_api_pipeline_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Pipeline Status Api Pipeline Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pipeline Status",
+        "tags": [
+          "pipeline"
+        ]
+      }
+    },
+    "/api/project-contacts": {
+      "get": {
+        "operationId": "project_contacts_api_project_contacts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Project Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "tender",
+                "permit",
+                "early_signal"
+              ],
+              "title": "Project Type",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Project Contacts Api Project Contacts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Project Contacts"
+      }
+    },
+    "/api/projects/{project_type}/{project_id}/contacts": {
+      "get": {
+        "operationId": "project_team_contacts_api_projects__project_type___project_id__contacts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "tender",
+                "permit",
+                "early_signal"
+              ],
+              "title": "Project Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Project Team Contacts Api Projects  Project Type   Project Id  Contacts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Project Team Contacts"
+      }
+    },
+    "/api/reddit": {
+      "get": {
+        "operationId": "list_reddit_api_reddit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Reddit Api Reddit Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Reddit"
+      }
+    },
+    "/api/scrape/burnaby-permits": {
+      "get": {
+        "operationId": "scrape_burnaby_permits_route_api_scrape_burnaby_permits_get",
+        "parameters": [
+          {
+            "description": "Incremental window in days; omit for full historical load",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 365,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Incremental window in days; omit for full historical load",
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Burnaby Permits Route Api Scrape Burnaby Permits Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Burnaby Permits Route"
+      }
+    },
+    "/api/scrape/surrey-permits": {
+      "get": {
+        "operationId": "scrape_surrey_permits_route_api_scrape_surrey_permits_get",
+        "parameters": [
+          {
+            "description": "Incremental window in days; omit for full historical load",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 365,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Incremental window in days; omit for full historical load",
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Surrey Permits Route Api Scrape Surrey Permits Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Surrey Permits Route"
+      }
+    },
+    "/api/signals": {
+      "get": {
+        "operationId": "list_signals_api_signals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Signals Api Signals Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Signals"
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "operationId": "stats_api_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Stats Api Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stats"
+      }
+    },
+    "/api/tenders": {
+      "get": {
+        "operationId": "list_tenders_api_tenders_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Tenders Api Tenders Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tenders"
+      }
+    },
+    "/api/win-loss": {
+      "post": {
+        "description": "Record or update a tender outcome (upsert on company_id + tender_id).",
+        "operationId": "record_outcome_api_win_loss_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordOutcomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Record Outcome Api Win Loss Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Outcome",
+        "tags": [
+          "win-loss"
+        ]
+      }
+    },
+    "/api/win-loss/{company_id}": {
+      "get": {
+        "description": "Full outcome history for a company, most recent first.",
+        "operationId": "list_outcomes_api_win_loss__company_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Outcomes Api Win Loss  Company Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outcomes",
+        "tags": [
+          "win-loss"
+        ]
+      }
+    },
+    "/api/win-loss/{company_id}/stats": {
+      "get": {
+        "description": "Aggregate win/loss statistics for a company.",
+        "operationId": "outcome_stats_api_win_loss__company_id__stats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "title": "Company Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Outcome Stats Api Win Loss  Company Id  Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Outcome Stats",
+        "tags": [
+          "win-loss"
+        ]
+      }
+    },
+    "/internal/ai-scoring": {
+      "post": {
+        "operationId": "ai_scoring_internal_ai_scoring_post",
+        "parameters": [
+          {
+            "description": "When true, run to completion and return counts instead of starting a background job.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run to completion and return counts instead of starting a background job.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ai Scoring Internal Ai Scoring Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ai Scoring",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/arch-company-intelligence": {
+      "post": {
+        "operationId": "arch_company_intelligence_internal_arch_company_intelligence_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Arch Company Intelligence Internal Arch Company Intelligence Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arch Company Intelligence",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/company-intelligence": {
+      "post": {
+        "operationId": "company_intelligence_internal_company_intelligence_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Company Intelligence Internal Company Intelligence Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company Intelligence",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/construction-tiers": {
+      "post": {
+        "operationId": "construction_tiers_internal_construction_tiers_post",
+        "parameters": [
+          {
+            "description": "When true, run tier computation synchronously and return counts.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run tier computation synchronously and return counts.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ConstructionTiersRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Construction Tiers Internal Construction Tiers Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Construction Tiers",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/deadline-alerts": {
+      "post": {
+        "description": "For each client profile with alerts enabled:\n- load tender_matches for the company\n- email Resend alerts when a matched tender closes in 1, 3, or 7 days",
+        "operationId": "deadline_alerts_internal_deadline_alerts_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Deadline Alerts Internal Deadline Alerts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Deadline Alerts",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/enrich-early-signals": {
+      "post": {
+        "operationId": "enrich_early_signals_internal_enrich_early_signals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EnrichEarlySignalsRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enrich Early Signals Internal Enrich Early Signals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enrich Early Signals",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/google-enrichment/metrics": {
+      "get": {
+        "description": "Aggregated Google enrichment inventory + ops health (internal monitoring only).",
+        "operationId": "google_enrichment_metrics_internal_google_enrichment_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Google Enrichment Metrics Internal Google Enrichment Metrics Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Google Enrichment Metrics",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/google-enrichment/run": {
+      "post": {
+        "description": "Run Google enrichment batch (n8n daily trigger or manual dry_run).",
+        "operationId": "google_enrichment_run_internal_google_enrichment_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/GoogleEnrichmentRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Google Enrichment Run Internal Google Enrichment Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Enrichment Run",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/import": {
+      "post": {
+        "operationId": "import_csvs_internal_import_post",
+        "parameters": [
+          {
+            "description": "When true, run import synchronously and return counts.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run import synchronously and return counts.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Csvs Internal Import Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Csvs",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/import/contract-awards": {
+      "post": {
+        "operationId": "import_contract_awards_route_internal_import_contract_awards_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Contract Awards Route Internal Import Contract Awards Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Contract Awards Route",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/import/odbus": {
+      "post": {
+        "operationId": "import_odbus_reference_internal_import_odbus_post",
+        "parameters": [
+          {
+            "description": "When true, run import synchronously and return counts.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run import synchronously and return counts.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OdbusImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Odbus Reference Internal Import Odbus Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Odbus Reference",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/import/orgbook": {
+      "post": {
+        "operationId": "import_orgbook_reference_internal_import_orgbook_post",
+        "parameters": [
+          {
+            "description": "When true, run import synchronously and return counts.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run import synchronously and return counts.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgbookImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Orgbook Reference Internal Import Orgbook Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Orgbook Reference",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/kg/populate-award-companies": {
+      "post": {
+        "description": "Award population cycle for P2 shadow validation (X-Internal-Key required).",
+        "operationId": "kg_populate_award_companies_internal_kg_populate_award_companies_post",
+        "parameters": [
+          {
+            "description": "When true, no company inserts (shadow-safe).",
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "When true, no company inserts (shadow-safe).",
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Must be true; sync run for staging validation.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Must be true; sync run for staging validation.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 36,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Kg Populate Award Companies Internal Kg Populate Award Companies Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Kg Populate Award Companies",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/kg/validation-snapshot": {
+      "get": {
+        "description": "Read-only P1/P2 staging gate metrics (X-Internal-Key required).",
+        "operationId": "kg_validation_snapshot_internal_kg_validation_snapshot_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Kg Validation Snapshot Internal Kg Validation Snapshot Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Kg Validation Snapshot",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/lifecycle/backfill-closing-at": {
+      "post": {
+        "description": "One-time/idempotent backfill of closing_at from deadline strings (P2-06).",
+        "operationId": "backfill_closing_at_internal_lifecycle_backfill_closing_at_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Backfill Closing At Internal Lifecycle Backfill Closing At Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Backfill Closing At",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/lifecycle/backfill-permit-status": {
+      "post": {
+        "description": "Reserved for future true lifecycle status backfill (PLPOS backlog; currently no-op).",
+        "operationId": "backfill_permit_status_internal_lifecycle_backfill_permit_status_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Backfill Permit Status Internal Lifecycle Backfill Permit Status Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Backfill Permit Status",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/lifecycle/reconcile-awards": {
+      "post": {
+        "description": "Match closed tenders to contract_awards (P2-03). Nightly n8n trigger after resolver.",
+        "operationId": "reconcile_awards_route_internal_lifecycle_reconcile_awards_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reconcile Awards Route Internal Lifecycle Reconcile Awards Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reconcile Awards Route",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/lifecycle/resolve": {
+      "post": {
+        "description": "Apply deterministic lifecycle transitions (P2-02). Nightly n8n trigger.",
+        "operationId": "resolve_lifecycle_internal_lifecycle_resolve_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Lifecycle Internal Lifecycle Resolve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Resolve Lifecycle",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/lifecycle/resolve-companies": {
+      "post": {
+        "description": "Apply company lifecycle rules. Nightly n8n uses background=true to avoid edge timeouts.",
+        "operationId": "resolve_company_lifecycle_route_internal_lifecycle_resolve_companies_post",
+        "parameters": [
+          {
+            "description": "When true, return immediately and resolve in a background task.",
+            "in": "query",
+            "name": "background",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, return immediately and resolve in a background task.",
+              "title": "Background",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Company Lifecycle Route Internal Lifecycle Resolve Companies Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Company Lifecycle Route",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/lifecycle/resolve-permits": {
+      "post": {
+        "description": "Apply permit lifecycle rules. Nightly n8n uses background=true to avoid edge timeouts.",
+        "operationId": "resolve_permit_lifecycle_route_internal_lifecycle_resolve_permits_post",
+        "parameters": [
+          {
+            "description": "When true, return immediately and resolve in a background task.",
+            "in": "query",
+            "name": "background",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, return immediately and resolve in a background task.",
+              "title": "Background",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Permit Lifecycle Route Internal Lifecycle Resolve Permits Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Permit Lifecycle Route",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/morning-brief": {
+      "post": {
+        "description": "1. Call voice-n8n-agent /api/chat for the morning brief narrative.\n2. Format as a dark-themed HTML email.\n3. Send via Resend.",
+        "operationId": "morning_brief_internal_morning_brief_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MorningBriefRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Morning Brief Internal Morning Brief Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Morning Brief",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/pipeline/tender-data": {
+      "post": {
+        "description": "Run tender scrapers → CSV verify → import → DB verify in strict order.",
+        "operationId": "run_tender_data_pipeline_route_internal_pipeline_tender_data_post",
+        "parameters": [
+          {
+            "description": "Run the full deterministic tender-data pipeline synchronously.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Run the full deterministic tender-data pipeline synchronously.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Tender Data Pipeline Route Internal Pipeline Tender Data Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Tender Data Pipeline Route",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/populate-project-contacts": {
+      "post": {
+        "operationId": "populate_project_contacts_internal_populate_project_contacts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Populate Project Contacts Internal Populate Project Contacts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Populate Project Contacts",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/registry-verification/match": {
+      "post": {
+        "operationId": "registry_verification_match_internal_registry_verification_match_post",
+        "parameters": [
+          {
+            "description": "When true, run matching synchronously and return counts.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run matching synchronously and return counts.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RegistryVerificationMatchRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Registry Verification Match Internal Registry Verification Match Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Registry Verification Match",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/runs": {
+      "get": {
+        "operationId": "list_pipeline_runs_internal_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "step",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Pipeline Runs Internal Runs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pipeline Runs",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/runs/{run_id}": {
+      "get": {
+        "operationId": "get_runs_for_id_internal_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Runs For Id Internal Runs  Run Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Runs For Id",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/building-permits": {
+      "post": {
+        "operationId": "scrape_building_permits_internal_scrape_building_permits_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Building Permits Internal Scrape Building Permits Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Building Permits",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/commercial": {
+      "post": {
+        "operationId": "scrape_commercial_internal_scrape_commercial_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Commercial Internal Scrape Commercial Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Commercial",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/contract-awards": {
+      "post": {
+        "description": "Legacy alias for import-contract-awards.",
+        "operationId": "scrape_contract_awards_internal_scrape_contract_awards_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Contract Awards Internal Scrape Contract Awards Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Contract Awards",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/federal": {
+      "post": {
+        "operationId": "scrape_federal_internal_scrape_federal_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Federal Internal Scrape Federal Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Federal",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/linkedin": {
+      "post": {
+        "operationId": "scrape_linkedin_internal_scrape_linkedin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Linkedin Internal Scrape Linkedin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Linkedin",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/merx": {
+      "post": {
+        "description": "Refresh MERX BC open tenders and merge with existing federal rows in tenders.csv.",
+        "operationId": "scrape_merx_internal_scrape_merx_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Merx Internal Scrape Merx Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Merx",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/merx-arch": {
+      "post": {
+        "operationId": "scrape_merx_arch_internal_scrape_merx_arch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Merx Arch Internal Scrape Merx Arch Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Merx Arch",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/news": {
+      "post": {
+        "operationId": "scrape_news_internal_scrape_news_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape News Internal Scrape News Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape News",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/scrape/reddit": {
+      "post": {
+        "operationId": "scrape_reddit_internal_scrape_reddit_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InternalRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scrape Reddit Internal Scrape Reddit Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scrape Reddit",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/send-alerts": {
+      "post": {
+        "description": "Generate and send personalized email digests for all client profiles\nwith alerts_enabled=true.  Sends Telegram notification when batch completes.",
+        "operationId": "send_alerts_internal_send_alerts_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Send Alerts Internal Send Alerts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Send Alerts",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/steps/{pipeline_run_id}": {
+      "get": {
+        "description": "Poll a single pipeline step by database id (returned as pipeline_run_id from POST).",
+        "operationId": "get_pipeline_step_status_internal_steps__pipeline_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipeline_run_id",
+            "required": true,
+            "schema": {
+              "title": "Pipeline Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Pipeline Step Status Internal Steps  Pipeline Run Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pipeline Step Status",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/internal/verification-hub/import": {
+      "post": {
+        "operationId": "verification_hub_import_internal_verification_hub_import_post",
+        "parameters": [
+          {
+            "description": "When true, run import synchronously and return counts.",
+            "in": "query",
+            "name": "sync",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "When true, run import synchronously and return counts.",
+              "title": "Sync",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationHubImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Verification Hub Import Internal Verification Hub Import Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verification Hub Import",
+        "tags": [
+          "internal"
+        ]
+      }
+    }
+  }
+}

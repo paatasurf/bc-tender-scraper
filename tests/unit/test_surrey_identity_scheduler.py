@@ -15,6 +15,7 @@ from pipeline.surrey_identity_scheduler import (
     run_surrey_identity_import_once,
     surrey_scheduler_enabled,
 )
+from tests.db_schema_test_helpers import temporarily_drop_unique_index
 
 # --- feature flag ------------------------------------------------------
 
@@ -346,10 +347,17 @@ def test_run_once_uses_the_same_session_for_planning_and_applying(monkeypatch):
 
 @pytest.fixture()
 def db_session():
+    """run_surrey_identity_import_once() itself calls session.rollback()
+    (blocked path) and session.commit() (success path) -- it owns the
+    transaction by design. A plain outer transaction is not enough to
+    protect this fixture's own setup rows from that internal
+    rollback/commit; see tests/db_transactional_fixture.py for the
+    SAVEPOINT-based session this requires.
+    """
     from sqlalchemy import create_engine, text
-    from sqlalchemy.orm import Session as RealSession
 
     from tests.db_test_safety import require_local_test_database
+    from tests.db_transactional_fixture import transactional_session
 
     database_url = require_local_test_database()
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
@@ -359,17 +367,10 @@ def db_session():
     except Exception:
         pytest.skip("Local Postgres unavailable")
 
-    conn = engine.connect()
-    outer = conn.begin()
-    conn.execute(text("SET LOCAL lock_timeout = '10s'"))
-    session = RealSession(bind=conn)
     try:
-        yield session
+        with transactional_session(engine) as session:
+            yield session
     finally:
-        session.close()
-        if outer.is_active:
-            outer.rollback()
-        conn.close()
         engine.dispose()
 
 
@@ -458,8 +459,17 @@ def test_run_once_ambiguous_match_blocks_real_batch_with_zero_writes(db_session)
         external_id=ambiguous_legacy,
         official_source_id=None,
     )
-    db_session.add_all([first, second])
-    db_session.flush()
+    # ix_permits_source_external_id now forbids two permits sharing a
+    # non-empty external_id at the DB level -- exactly the legacy-data
+    # shape this fixture models predates that constraint. Dropping the
+    # index for the rest of THIS test's own never-committed transaction
+    # only (rolled back at fixture teardown, never visible to any other
+    # session) lets the ambiguous-match code path this test exists to
+    # exercise still run against real rows, without weakening the schema
+    # for real. See tests/db_schema_test_helpers.py.
+    with temporarily_drop_unique_index(db_session, "ix_permits_source_external_id"):
+        db_session.add_all([first, second])
+        db_session.flush()
 
     good_number = f"{_legacy_id('46', 1)}/CC"
     rows = [

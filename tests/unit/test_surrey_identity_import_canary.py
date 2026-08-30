@@ -19,6 +19,7 @@ from pipeline.surrey_identity_import_canary import (
     compute_plan_digest,
     plan_surrey_identity_import,
 )
+from tests.db_schema_test_helpers import temporarily_drop_unique_index
 
 
 class _Result:
@@ -305,11 +306,16 @@ def db_session():
 
 
 def _run_marker() -> str:
-    """A 4-digit marker, constant across every permit/row a single test
+    """An 8-digit marker, constant across every permit/row a single test
     creates, so that appending a 2-digit zero-padded index to it yields a
-    legacy id whose lexicographic order matches the index order -- while
-    still being unique enough across separate test invocations."""
-    return f"{uuid.uuid4().int % 10_000:04d}"
+    legacy id whose lexicographic order matches the index order.
+
+    Widened from 4 to 8 digits (10,000 -> 100,000,000 possible values):
+    a 4-digit marker collided in CI once the whole suite started actually
+    running these DB-integration tests together in one session (they were
+    previously always silently skipped) -- see PR history for the exact
+    repro."""
+    return f"{uuid.uuid4().int % 100_000_000:08d}"
 
 
 def _make_update_permit(db_session, run_marker: str, index: int):
@@ -548,8 +554,19 @@ def test_apply_canary_fails_closed_on_full_plan_digest_drift(db_session):
         external_id=f"other-{uuid.uuid4().hex[:8]}",
         official_source_id=official_number,
     )
-    db_session.add(confounder)
-    db_session.flush()
+    # ux_permits_source_official_source_id (migration 031) now forbids two
+    # permits sharing an official_source_id at the DB level -- exactly the
+    # legacy-data shape this fixture models predates that constraint.
+    # Dropping the index for the rest of THIS test's own never-committed
+    # transaction only (rolled back at fixture teardown, never visible to
+    # any other session) lets the ambiguity-detection code path this test
+    # exists to exercise still run against real rows, without weakening
+    # the schema for real. See tests/db_schema_test_helpers.py.
+    with temporarily_drop_unique_index(
+        db_session, "ux_permits_source_official_source_id"
+    ):
+        db_session.add(confounder)
+        db_session.flush()
 
     with pytest.raises(SurreyIdentityImportCanaryError, match="candidate set changed"):
         apply_surrey_identity_import_canary(
@@ -699,8 +716,12 @@ def test_apply_full_fails_closed_on_full_plan_digest_drift(db_session):
         external_id=f"other-{uuid.uuid4().hex[:8]}",
         official_source_id=official_number,
     )
-    db_session.add(confounder)
-    db_session.flush()
+    # See the identical comment in test_apply_canary_fails_closed_on_full_plan_digest_drift.
+    with temporarily_drop_unique_index(
+        db_session, "ux_permits_source_official_source_id"
+    ):
+        db_session.add(confounder)
+        db_session.flush()
 
     with pytest.raises(SurreyIdentityImportCanaryError, match="candidate set changed"):
         apply_surrey_identity_import_full(
