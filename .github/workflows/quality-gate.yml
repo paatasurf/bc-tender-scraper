@@ -160,12 +160,145 @@ jobs:
           pip-audit --requirement=requirements.txt --requirement=requirements-dev.txt
 
   # ---------------------------------------------------------------------------
+  # Stage 1.6 — New quality scanners (Phase 1 hardening)
+  #
+  # These three jobs are new to this repo. Each runs for real (no
+  # continue-on-error) and its pass/fail is visible in the PR checks list,
+  # but NONE of them is in quality-gate's `needs:` below yet -- that is a
+  # deliberate, separate decision. mypy alone currently reports 268
+  # pre-existing findings across 79 files; making any of these blocking on
+  # day one would immediately red every future PR on debt this pass merely
+  # discovered, not introduced. Promote each to blocking (add to
+  # quality-gate's `needs:`) individually, once its first-run findings have
+  # been triaged. Gitleaks is the strongest immediate candidate: secret
+  # detection has a much lower false-positive rate than a fresh type/lint
+  # pass on a large existing codebase.
+  # ---------------------------------------------------------------------------
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Type check (mypy.ini -- Phase 1 narrow ruleset, see file comment)
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          python -m mypy --config-file mypy.ini api db pipeline scraper | tee reports/mypy.txt
+
+      - name: Upload mypy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-report-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Semgrep
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Semgrep scan (community rulesets -- no SEMGREP_APP_TOKEN needed)
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          semgrep scan \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/python \
+            --sarif --output reports/semgrep.sarif \
+            --error \
+            . | tee reports/semgrep.txt
+
+      - name: Upload Semgrep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history so Gitleaks can resolve commit ranges)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
   # Stage 2 — Test suite
   # ---------------------------------------------------------------------------
   pytest:
     name: pytest
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Fresh, disposable Postgres service scoped to THIS job only -- no other
+    # job (ruff/black/pip-audit/mypy/semgrep/gitleaks/opencode-review/deploy)
+    # gets a database, and this service never touches production data. A
+    # brand-new container every run, destroyed when the job ends.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tenderscope_ci
+          POSTGRES_PASSWORD: tenderscope_ci
+          POSTGRES_DB: tenderscope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tenderscope_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Overrides the workflow-level empty DATABASE_URL for this job only,
+      # pointing at the fresh service container above -- never production.
+      # CI_DATABASE_URL is the explicit opt-in tests/db_test_safety.py
+      # checks before running any DB-integration test on CI (see that
+      # file's _ci_skips_db_integration()); without it those tests skip.
+      DATABASE_URL: postgresql://tenderscope_ci:tenderscope_ci@localhost:5432/tenderscope_test
+      CI_DATABASE_URL: postgresql://tenderscope_ci:tenderscope_ci@localhost:5432/tenderscope_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -183,6 +316,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+
+      - name: Run database migrations (fresh CI Postgres -- never production)
+        run: |
+          set -euo pipefail
+          python scripts/ci_apply_all_migrations.py
 
       - name: Syntax check (compileall)
         run: |
@@ -222,11 +360,33 @@ jobs:
           pytest tests/unit \
             -v \
             --tb=short \
-            --cov=api --cov=db --cov=pipeline --cov=intelligence \
+            --cov=api --cov=db --cov=pipeline --cov=intelligence --cov=scraper \
             --cov-report=term-missing:skip-covered \
             --cov-report=xml:reports/coverage.xml \
             --junitxml=reports/unit-junit.xml \
             | tee reports/pytest-unit.txt
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f reports/coverage.xml ]; then
+            echo "No coverage.xml produced (test run failed before writing it)."
+            exit 0
+          fi
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("reports/coverage.xml").getroot()
+          line_rate = float(root.attrib.get("line-rate", "0")) * 100
+          branch_rate = float(root.attrib.get("branch-rate", "0")) * 100
+          lines_covered = root.attrib.get("lines-covered", "?")
+          lines_valid = root.attrib.get("lines-valid", "?")
+          print("## Coverage summary")
+          print(f"- Line coverage: **{line_rate:.1f}%** ({lines_covered}/{lines_valid} lines)")
+          print(f"- Branch coverage: **{branch_rate:.1f}%**")
+          print("- Full report: `reports/coverage.xml` (see uploaded artifact)")
+          PY
 
       - name: Upload pytest reports
         if: always()
@@ -236,6 +396,139 @@ jobs:
           path: reports/
           if-no-files-found: ignore
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Stage 2.5 — API contract checks (Phase 1 hardening; reporting only, see
+  # the note on the mypy/semgrep/gitleaks jobs above for why nothing new in
+  # this PR is wired into quality-gate's `needs:` yet)
+  # ---------------------------------------------------------------------------
+  schemathesis:
+    name: Schemathesis (OpenAPI, GET-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tenderscope_ci
+          POSTGRES_PASSWORD: tenderscope_ci
+          POSTGRES_DB: tenderscope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tenderscope_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://tenderscope_ci:tenderscope_ci@localhost:5432/tenderscope_test
+      SCHEDULER_ENABLED: "false"
+      # INTERNAL_API_KEY is deliberately left UNSET: every /internal/* route
+      # must 403 a Schemathesis probe rather than execute real logic, since
+      # several of those routes trigger live external HTTP scraping. Do not
+      # set this secret in this job.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install schemathesis uvicorn
+
+      - name: Run database migrations (fresh CI Postgres -- never production)
+        run: |
+          set -euo pipefail
+          python scripts/ci_apply_all_migrations.py
+
+      - name: Start API server
+        run: |
+          set -euo pipefail
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 \
+            > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health > /dev/null 2>&1; then
+              echo "server_ready=ok"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API server did not become ready"
+          cat server.log
+          exit 1
+
+      - name: Schemathesis (GET-only, positive-mode -- safe reporting run)
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          schemathesis run \
+            http://127.0.0.1:8000/openapi.json \
+            --url http://127.0.0.1:8000 \
+            --include-method GET \
+            --mode positive \
+            --max-examples 10 \
+            --checks not_a_server_error \
+            --report junit \
+            --report-dir reports/schemathesis \
+            --no-color \
+            | tee reports/schemathesis.txt
+
+      - name: Server log
+        if: always()
+        run: cat server.log || true
+
+      - name: Upload Schemathesis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemathesis-report-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  openapi-contract:
+    name: OpenAPI contract (cross-repo consumers, e.g. voice-n8n-agent)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Diff live schema against contracts/openapi-baseline.json
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          python scripts/check_openapi_contract.py | tee reports/openapi-contract.txt
+
+      - name: Upload contract report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-contract-report-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 30
 
   # ---------------------------------------------------------------------------
   # Stage 3 — Optional AI code review
