@@ -63,8 +63,12 @@ def test_state_survives_a_brand_new_session_and_connection(coordinator_db) -> No
     coordinator.begin_tender_scrape("restart-run")
     coordinator.mark_tender_scrape_step("restart-run", "scrape-federal")
 
+    # str(coordinator_db.url) masks the password ('***') by SQLAlchemy's own
+    # design (URL.__str__ hides credentials by default) -- pass the URL
+    # object directly instead, which create_engine accepts and which never
+    # renders the password to a string at all.
     fresh_engine = create_engine(
-        str(coordinator_db.url), connect_args={"connect_timeout": 3}
+        coordinator_db.url, connect_args={"connect_timeout": 3}
     )
     try:
         with fresh_engine.connect() as conn:
