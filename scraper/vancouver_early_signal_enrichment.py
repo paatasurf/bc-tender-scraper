@@ -158,11 +158,26 @@ def _resolve_starting_cursor(
     Priority: an explicit `since_id` always wins (manual override). A
     `force` run always starts at 0 (a deliberate full sweep from the top,
     matching the pre-existing force=True contract). Otherwise, the cursor
-    is read back from the most recent enrich-early-signals pipeline_runs
-    row's own `next_cursor` -- each run persists where it left off so the
-    next run (a separate process/request) can continue the same rotation
-    without any new schema, coordinator, or caller changes. Never raises:
-    a missing/malformed prior counts_json degrades to cursor 0.
+    is read back from the most recent FINISHED enrich-early-signals
+    pipeline_runs row's own `next_cursor` -- each run persists where it
+    left off so the next run (a separate process/request) can continue the
+    same rotation without any new schema, coordinator, or caller changes.
+
+    Deliberately excludes rows still `status == "running"`: in the real
+    async/HTTP-triggered flow (api/internal.py's `_enqueue_step`), THIS
+    run's own PipelineRun row is inserted with status="running" and no
+    counts_json synchronously, before the worker (and therefore this very
+    function) ever executes -- so without this filter, "the most recent
+    row for this step" is always the current run's own not-yet-finished
+    row, and the cursor silently resets to 0 on every single run. This was
+    confirmed in a staged production validation: two genuinely separate,
+    sequential HTTP-triggered batches both processed the exact same id
+    range instead of advancing. A stuck/crashed prior run left permanently
+    at status="running" is also correctly skipped past by this filter,
+    which is strictly more correct than reading its (nonexistent) counts.
+
+    Never raises: a missing/malformed prior counts_json degrades to
+    cursor 0.
     """
     if since_id is not None:
         return max(since_id, 0)
@@ -171,7 +186,10 @@ def _resolve_starting_cursor(
 
     last_run = read_session.scalars(
         select(PipelineRun)
-        .where(PipelineRun.step == "enrich-early-signals")
+        .where(
+            PipelineRun.step == "enrich-early-signals",
+            PipelineRun.status != "running",
+        )
         .order_by(PipelineRun.id.desc())
         .limit(1)
     ).first()

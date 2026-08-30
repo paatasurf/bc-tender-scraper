@@ -66,6 +66,39 @@ def _persist_run(Session, counts: dict) -> None:
     session.close()
 
 
+def _start_running_placeholder(Session, run_id: str) -> int:
+    """Simulate exactly what api/internal.py's `_enqueue_step` ->
+    pipeline.runs.start_run() does BEFORE the worker (and therefore
+    enrich_early_signal_events/_resolve_starting_cursor) ever executes:
+    insert a PipelineRun row with status="running" and no counts_json,
+    synchronously, ahead of the actual work. Returns the row's id so the
+    caller can later "finish" this exact row via _finish_running_row."""
+    session = Session()
+    row = PipelineRun(run_id=run_id, step="enrich-early-signals", status="running")
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    row_id = row.id
+    session.close()
+    return row_id
+
+
+def _finish_running_row(
+    Session, row_id: int, counts: dict, *, status: str = "success"
+) -> None:
+    """Simulate pipeline.runs.finish_run(): update the SAME row a prior
+    _start_running_placeholder() call created, in place, exactly how a
+    real run's own PipelineRun row transitions from "running" to
+    terminal -- never a second, brand-new row (that's what _persist_run
+    is for, and it does not reproduce the running-placeholder race)."""
+    session = Session()
+    row = session.get(PipelineRun, row_id)
+    row.status = status
+    row.counts_json = json.dumps(counts)
+    session.commit()
+    session.close()
+
+
 def test_extract_reference_number_from_project_name():
     name = "3075 Arbutus St and 2115 W 15th Ave (DP-2026-00404) development application"
     assert extract_reference_number(name) == "DP-2026-00404"
@@ -706,6 +739,110 @@ def test_consecutive_batches_select_different_candidate_ids(monkeypatch):
     assert ids1 == {1, 2, 3, 4, 5}
     assert ids2 == {6, 7, 8, 9, 10}
     assert ids1.isdisjoint(ids2)
+
+
+def test_resolve_starting_cursor_skips_the_current_running_placeholder_row():
+    """Production regression, confirmed in a staged validation: two
+    genuinely separate, sequential HTTP-triggered batches both processed
+    the exact same id range instead of advancing, because
+    api/internal.py's _enqueue_step (via pipeline.runs.start_run) inserts
+    THIS run's own PipelineRun row with status="running" and no
+    counts_json synchronously, before the worker -- and therefore
+    _resolve_starting_cursor -- ever executes. "The most recent row for
+    this step" was always that not-yet-finished row, so the cursor
+    silently reset to 0 every single run. This is the minimal, direct
+    reproduction: a finished prior run with a real next_cursor, PLUS a
+    running placeholder row (inserted after it, so it has the highest id)
+    for the current invocation -- _resolve_starting_cursor must skip the
+    running row and read the finished one's cursor."""
+    Session = _session_factory()
+
+    _persist_run(Session, {"next_cursor": 50})
+    _start_running_placeholder(Session, run_id="current-run")
+
+    cursor = enrichment._resolve_starting_cursor(Session(), since_id=None, force=False)
+
+    assert cursor == 50
+
+
+def test_consecutive_http_triggered_batches_advance_the_cursor_despite_running_placeholder(
+    monkeypatch,
+):
+    """End-to-end reproduction of the real production sequence (not just
+    the unit-level _resolve_starting_cursor call above): each simulated
+    HTTP-triggered run inserts its own "running" PipelineRun row BEFORE
+    calling enrich_early_signal_events -- exactly what
+    api/internal.py's _enqueue_step does -- and only updates that same
+    row to "success" with real counts AFTER the call returns, exactly
+    what pipeline.runs.finish_run does. Batch 2's own running row exists
+    in the table (with the highest id) at the moment batch 2 resolves its
+    starting cursor, mirroring the exact race that silently reset the
+    cursor to 0 on every real production run before this fix."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(60)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    # Batch 1: insert the running placeholder first, exactly like
+    # _enqueue_step, then run, then finish that same row.
+    row1_id = _start_running_placeholder(Session, run_id="http-batch-1")
+    batch1 = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, limit=25, persist=True
+    )
+    _finish_running_row(Session, row1_id, batch1)
+
+    ids1 = {r["id"] for r in batch1["results"]}
+    assert ids1 == set(range(1, 26))
+    assert batch1["next_cursor"] == 25
+
+    # Batch 2: a genuinely separate HTTP trigger. Its own running
+    # placeholder is inserted (highest id in the table) BEFORE this call,
+    # exactly reproducing the real race.
+    row2_id = _start_running_placeholder(Session, run_id="http-batch-2")
+    batch2 = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, limit=25, persist=True
+    )
+    _finish_running_row(Session, row2_id, batch2)
+
+    ids2 = {r["id"] for r in batch2["results"]}
+    assert ids2 == set(range(26, 51))
+    assert ids1.isdisjoint(ids2)
+    assert batch2["next_cursor"] == 50
+
+    # Batch 3: only 10 rows remain (51-60) -- fewer than the requested
+    # limit=25, so this page reaches the true end and wraps to 0.
+    row3_id = _start_running_placeholder(Session, run_id="http-batch-3")
+    batch3 = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, limit=25, persist=True
+    )
+    _finish_running_row(Session, row3_id, batch3)
+
+    ids3 = {r["id"] for r in batch3["results"]}
+    assert ids3 == set(range(51, 61))
+    assert ids1.isdisjoint(ids3)
+    assert ids2.isdisjoint(ids3)
+    assert batch3["next_cursor"] == 0
 
 
 def test_repeat_run_of_same_window_gives_no_new_values(monkeypatch):
