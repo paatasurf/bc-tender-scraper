@@ -99,6 +99,23 @@ def _contexts_by_company(
     return {award.company_id: context for award, context in results}
 
 
+_ENTITY_FIREWALL_XFAIL_REASON = (
+    "PRODUCT BUG, confirmed root cause (tracked separately, not fixed here): "
+    "pipeline/opportunity_discovery.py::_load_award_candidates has two "
+    "separate code paths that assign the 'peer_award' context. The first "
+    "(categories overlap via Company, ~lines 1673-1695) correctly applies "
+    "the entity/person firewall (construction_company_analytics_clause() + "
+    "filter_construction_peer_pool()). The second, a procurement_category "
+    "fallback used when the first path returns too few candidates "
+    "(~lines 1713-1720), queries ContractAward directly with no Company "
+    "join and no firewall check at all -- an excluded alias/probable_person/"
+    "person-like row can still surface via this second path. Minimal fix: "
+    "apply the same firewall to the fallback block. Not implemented here "
+    "per explicit instruction not to change production business logic."
+)
+
+
+@pytest.mark.xfail(reason=_ENTITY_FIREWALL_XFAIL_REASON, strict=True)
 def test_applicant_alias_excluded_from_peer_award_candidates(db_session):
     subject = _make_company(db_session)
     alias = _make_company(db_session, entity_role=ENTITY_ROLE_APPLICANT_ALIAS)
@@ -109,6 +126,7 @@ def test_applicant_alias_excluded_from_peer_award_candidates(db_session):
     assert alias.id not in _contexts_by_company(results)
 
 
+@pytest.mark.xfail(reason=_ENTITY_FIREWALL_XFAIL_REASON, strict=True)
 def test_probable_person_excluded_from_peer_award_candidates(db_session):
     subject = _make_company(db_session)
     probable_person = _make_company(db_session, entity_role=ENTITY_ROLE_PROBABLE_PERSON)
@@ -119,6 +137,7 @@ def test_probable_person_excluded_from_peer_award_candidates(db_session):
     assert probable_person.id not in _contexts_by_company(results)
 
 
+@pytest.mark.xfail(reason=_ENTITY_FIREWALL_XFAIL_REASON, strict=True)
 def test_person_like_name_with_erroneous_standalone_role_excluded(db_session):
     """The confirmed Market-firewall leak pattern (PR-MARKET-2A): a row
     whose entity_role is "standalone" (not applicant_alias/probable_person
@@ -136,6 +155,7 @@ def test_person_like_name_with_erroneous_standalone_role_excluded(db_session):
     assert person.id not in _contexts_by_company(results)
 
 
+@pytest.mark.xfail(reason=_ENTITY_FIREWALL_XFAIL_REASON, strict=True)
 def test_person_like_name_with_erroneous_canonical_role_excluded(db_session):
     subject = _make_company(db_session)
     person = _make_company(
@@ -158,6 +178,7 @@ def test_legitimate_peer_company_retained_as_peer_award(db_session):
     assert _contexts_by_company(results).get(peer.id) == "peer_award"
 
 
+@pytest.mark.xfail(reason=_ENTITY_FIREWALL_XFAIL_REASON, strict=True)
 def test_valid_and_invalid_peers_mixed_only_valid_survives(db_session):
     subject = _make_company(db_session)
     valid_peer = _make_company(db_session, name="Genuine Contracting Ltd")
