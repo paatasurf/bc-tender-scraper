@@ -37,6 +37,7 @@ from pipeline.competitive_intel.tender_activity import (
     get_missed_opportunities,
 )
 from pipeline.competitive_intel.types import TopCompetitor
+from tests.db_schema_test_helpers import temporarily_drop_unique_index
 from tests.db_test_safety import require_local_test_database
 
 AS_OF = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
@@ -44,6 +45,19 @@ AS_OF = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
 # used to prove the lookback window is anchored to the injected as_of, not
 # to wall-clock "now".
 FIXED_HISTORICAL_AS_OF = datetime(2020, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def _test_company_id() -> int:
+    """A test-scoped, effectively-unique company_id. TenderMatch.company_id
+    carries no FK constraint (see db/models.py), but
+    ix_tender_matches_company_kind_tender is a real unique index on
+    (company_kind, company_id, tender_source, tender_id) -- a hardcoded
+    literal id can collide with a row a previous run against the same
+    (persistent, shared) database already committed. This alone is NOT
+    enough for the three tests below that legitimately need two raw
+    TenderMatch rows for the SAME (company, tender) pair -- see
+    temporarily_drop_unique_index() there."""
+    return uuid.uuid4().int % 1_000_000_000 + 1
 
 
 def _peer(company_id: int, name: str, threat: int = 70) -> TopCompetitor:
@@ -1125,13 +1139,34 @@ def test_competitor_activity_duplicate_raw_rows_count_raw_but_dedupe_value(db_se
     value must only be added to total_tender_value once --
     unique_tender_match_count reflects the deduped count."""
     tender = _make_tender(db_session, is_open=False, estimated_value_numeric=100_000.0)
-    peers = [_peer(2, "Alpha", 60)]
-    _recent_match(
-        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
-    )
-    _recent_match(
-        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=80
-    )
+    alpha_id = _test_company_id()
+    peers = [_peer(alpha_id, "Alpha", 60)]
+    # ix_tender_matches_company_kind_tender is a real, unconditional
+    # unique index on (company_kind, company_id, tender_source,
+    # tender_id) -- this test's own point is that two RAW rows for the
+    # exact same (company, tender) pair exist in the cache, which the
+    # constraint forbids outright. Dropping it for the rest of THIS
+    # test's own never-committed transaction only (rolled back at
+    # fixture teardown, never visible to any other session) models the
+    # pre-dedup cache-write path this scenario is about, without
+    # weakening the schema for real. See tests/db_schema_test_helpers.py.
+    with temporarily_drop_unique_index(
+        db_session, "ix_tender_matches_company_kind_tender"
+    ):
+        _recent_match(
+            db_session,
+            company_id=alpha_id,
+            tender_source="federal",
+            tender_id=tender.id,
+            score=90,
+        )
+        _recent_match(
+            db_session,
+            company_id=alpha_id,
+            tender_source="federal",
+            tender_id=tender.id,
+            score=80,
+        )
 
     with _patched(peers):
         result = get_competitor_tender_activity(db_session, company_id=1)
@@ -1145,13 +1180,27 @@ def test_competitor_activity_duplicate_raw_rows_count_raw_but_dedupe_value(db_se
 
 def test_competitor_activity_match_count_equals_raw_match_count(db_session):
     tender = _make_tender(db_session, is_open=False, estimated_value_numeric=10_000.0)
-    peers = [_peer(2, "Alpha", 60)]
-    _recent_match(
-        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=90
-    )
-    _recent_match(
-        db_session, company_id=2, tender_source="federal", tender_id=tender.id, score=80
-    )
+    alpha_id = _test_company_id()
+    peers = [_peer(alpha_id, "Alpha", 60)]
+    # See the identical comment in
+    # test_competitor_activity_duplicate_raw_rows_count_raw_but_dedupe_value.
+    with temporarily_drop_unique_index(
+        db_session, "ix_tender_matches_company_kind_tender"
+    ):
+        _recent_match(
+            db_session,
+            company_id=alpha_id,
+            tender_source="federal",
+            tender_id=tender.id,
+            score=90,
+        )
+        _recent_match(
+            db_session,
+            company_id=alpha_id,
+            tender_source="federal",
+            tender_id=tender.id,
+            score=80,
+        )
 
     with _patched(peers):
         result = get_competitor_tender_activity(db_session, company_id=1)
@@ -1171,25 +1220,33 @@ def test_competitor_activity_sorted_by_unique_tender_match_count_not_raw(db_sess
     tender_shared = _make_tender(db_session, is_open=False, estimated_value_numeric=1.0)
     tender_b1 = _make_tender(db_session, is_open=False, estimated_value_numeric=1.0)
     tender_b2 = _make_tender(db_session, is_open=False, estimated_value_numeric=1.0)
-    peers = [_peer(2, "Alpha", 60), _peer(3, "Beta", 55)]
-    for score in (90, 85, 80):
-        _recent_match(
-            db_session,
-            company_id=2,
-            tender_source="federal",
-            tender_id=tender_shared.id,
-            score=score,
-        )
+    alpha_id = _test_company_id()
+    beta_id = _test_company_id()
+    peers = [_peer(alpha_id, "Alpha", 60), _peer(beta_id, "Beta", 55)]
+    # See the identical comment in
+    # test_competitor_activity_duplicate_raw_rows_count_raw_but_dedupe_value
+    # -- Alpha's three rows deliberately share one (company, tender) pair.
+    with temporarily_drop_unique_index(
+        db_session, "ix_tender_matches_company_kind_tender"
+    ):
+        for score in (90, 85, 80):
+            _recent_match(
+                db_session,
+                company_id=alpha_id,
+                tender_source="federal",
+                tender_id=tender_shared.id,
+                score=score,
+            )
     _recent_match(
         db_session,
-        company_id=3,
+        company_id=beta_id,
         tender_source="federal",
         tender_id=tender_b1.id,
         score=90,
     )
     _recent_match(
         db_session,
-        company_id=3,
+        company_id=beta_id,
         tender_source="federal",
         tender_id=tender_b2.id,
         score=85,

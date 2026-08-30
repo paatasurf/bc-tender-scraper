@@ -16,6 +16,7 @@ from db.surrey_permit_import import (
     upsert_surrey_permit_identity_aware,
     upsert_surrey_permits_identity_aware,
 )
+from tests.db_schema_test_helpers import temporarily_drop_unique_index
 from tests.db_test_safety import require_local_test_database
 
 # --- pure-logic unit tests (no DB) -------------------------------------
@@ -263,8 +264,17 @@ def test_ambiguous_legacy_match_fails_closed_and_batch_rolls_back(db_session):
         external_id=legacy_id,
         official_source_id=None,
     )
-    db_session.add_all([first, second])
-    db_session.flush()
+    # ix_permits_source_external_id now forbids two permits sharing a
+    # non-empty external_id at the DB level -- exactly the legacy-data
+    # shape this fixture models predates that constraint. Dropping the
+    # index for the rest of THIS test's own never-committed transaction
+    # only (rolled back at fixture teardown, never visible to any other
+    # session) lets the ambiguous-legacy-match code path this test exists
+    # to exercise still run against real rows, without weakening the
+    # schema for real. See tests/db_schema_test_helpers.py.
+    with temporarily_drop_unique_index(db_session, "ix_permits_source_external_id"):
+        db_session.add_all([first, second])
+        db_session.flush()
 
     with pytest.raises(SurreyIdentityImportError, match="ambiguous legacy match"):
         upsert_surrey_permit_identity_aware(
