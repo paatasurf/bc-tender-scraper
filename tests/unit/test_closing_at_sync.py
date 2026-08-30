@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from api import internal as internal_api
+from db.closing_at_parser import VANCOUVER_TZ
 from db.closing_at_sync import sync_closing_at_from_deadline
 from db.models import Tender
 from db.tender_presence import TENDER_CONTENT_COLUMNS, upsert_with_presence
@@ -19,13 +20,17 @@ def _require_local_database_url() -> str:
     from tests.db_test_safety import _ci_skips_db_integration
 
     if _ci_skips_db_integration():
-        pytest.skip("DB integration tests skipped on CI (set CI_DATABASE_URL to enable)")
+        pytest.skip(
+            "DB integration tests skipped on CI (set CI_DATABASE_URL to enable)"
+        )
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url:
         pytest.skip("DATABASE_URL not configured")
     lowered = database_url.lower()
     if any(token in lowered for token in ("railway", "rlwy.net", "production")):
-        pytest.skip("Refusing closing_at sync integration tests against production DATABASE_URL")
+        pytest.skip(
+            "Refusing closing_at sync integration tests against production DATABASE_URL"
+        )
     return database_url
 
 
@@ -80,8 +85,17 @@ def test_sync_closing_at_from_deadline_integration(local_db_session: Session):
     assert row is not None
     assert result["updated"] == 1
     assert row.closing_at is not None
-    assert row.closing_at.hour == 23
-    assert row.closing_at.minute == 59
+    # db/closing_at_parser.py's documented contract is "23:59:59 local
+    # America/Vancouver time" -- after a round-trip through a TIMESTAMPTZ
+    # column, psycopg2/SQLAlchemy return the value normalized to whatever
+    # timezone the connecting session happens to use (UTC on CI's Postgres
+    # container), so .hour/.minute on the raw value is environment-
+    # dependent. Convert explicitly to the parser's own timezone before
+    # asserting its documented contract, rather than asserting on however
+    # the current session happens to be configured.
+    closing_at_vancouver = row.closing_at.astimezone(VANCOUVER_TZ)
+    assert closing_at_vancouver.hour == 23
+    assert closing_at_vancouver.minute == 59
 
     local_db_session.execute(text("DELETE FROM tenders WHERE url = :url"), {"url": url})
     local_db_session.commit()
