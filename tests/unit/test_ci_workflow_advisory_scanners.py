@@ -94,6 +94,25 @@ def test_schemathesis_scan_step_is_continue_on_error():
     assert "schemathesis_run" in ids
 
 
+def test_semgrep_scan_step_captures_stderr_for_summary():
+    """Semgrep's human-readable "Findings: N" summary goes to stderr, not
+    stdout -- confirmed by reports/semgrep.txt (fed only by stdout via
+    `tee`) being empty in CI despite the console log showing findings.
+    The scan step's run script must merge stderr into the piped stream
+    (`2>&1` before the pipe) so the Advisory summary step's grep against
+    reports/semgrep.txt can actually find the finding count instead of
+    falling back to a generic "Semgrep reported findings" message."""
+    workflow = _load_workflow()
+    steps = workflow["jobs"]["semgrep"]["steps"]
+    scan_step = next(s for s in steps if s.get("id") == "semgrepscan")
+    run_text = scan_step["run"]
+    assert "2>&1" in run_text
+    # Must appear before the pipe to tee, not as some unrelated redirect.
+    pipe_index = run_text.index("| tee")
+    redirect_index = run_text.index("2>&1")
+    assert redirect_index < pipe_index
+
+
 def test_gitleaks_is_not_advisory():
     """Gitleaks is the one existing new-in-Phase-1 scanner that is a real,
     hard failure today (no continue-on-error) -- confirms this test isn't
