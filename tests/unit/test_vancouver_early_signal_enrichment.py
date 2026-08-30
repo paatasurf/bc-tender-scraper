@@ -955,6 +955,64 @@ def test_refresh_all_explicitly_opts_into_full_unbounded_sweep(monkeypatch):
     assert result["next_cursor"] == 0
 
 
+def test_refresh_all_continues_from_the_persisted_cursor_not_from_zero(monkeypatch):
+    """refresh_all=True is documented as unbounded "WITHOUT force's cursor
+    reset" -- unlike force=True, it must NOT restart at id 0. A prior
+    bounded run that already advanced (and persisted) the cursor past the
+    first few rows must have those rows respected: a later refresh_all
+    call sweeps everything from the persisted cursor to the true end of
+    the table in one unbounded pass, not the literal whole table from
+    scratch. This is the one combination (refresh_all + an existing
+    non-zero cursor) the other refresh_all/force tests never exercise,
+    since they all start from a table with no prior pipeline_runs row."""
+    Session = _session_factory()
+    _seed(
+        Session,
+        [
+            {"external_id": f"e{i}", "url_link": "", "region": "", "property_type": ""}
+            for i in range(10)
+        ],
+    )
+
+    monkeypatch.setattr(enrichment, "create_session", lambda: MagicMock())
+    monkeypatch.setattr(
+        enrichment, "load_development_projects", lambda *, session: [{"dummy": True}]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "enrich_early_signal_event",
+        lambda candidate, projects, *, http_session, fetch_details: (
+            {
+                "address": f"Addr {candidate.id}",
+                "applicant": "Acme",
+                "project_value": "",
+            },
+            False,
+        ),
+    )
+
+    first = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, limit=3, persist=True
+    )
+    assert first["candidates"] == 3
+    assert first["next_cursor"] == 3
+    _persist_run(Session, first)
+
+    second = enrichment.enrich_early_signal_events(
+        Session(), get_session=Session, refresh_all=True, persist=True
+    )
+
+    second_ids = {r["id"] for r in second["results"]}
+    # Starts after the persisted cursor (3), not from 0 -- ids 1-3 (already
+    # handled by the first, bounded run) are correctly NOT reselected here.
+    assert second_ids == {4, 5, 6, 7, 8, 9, 10}
+    assert second["candidates"] == 7
+    assert second["page_limit"] is None
+    assert second["refresh_all"] is True
+    # Unbounded pass reached the true end of the table -- wraps to 0.
+    assert second["next_cursor"] == 0
+
+
 def test_legacy_force_true_with_no_limit_stays_unbounded(monkeypatch):
     """force=True is the pre-existing contract the manual backfill script
     relies on: limit=None, force=True has always meant "an authoritative
