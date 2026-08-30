@@ -1,7 +1,13 @@
 # TenderScope — True CI/CD Pipeline (bc-tender-scraper)
 #
 # Engineering infrastructure only. No business-logic changes.
-# All quality stages are blocking; any failure stops the pipeline.
+# The required Quality Gate (ruff, black, pip-audit, pytest, opencode-review)
+# is blocking; any of those failing stops the pipeline. mypy, Semgrep, and
+# Schemathesis are advisory: they always run, always publish findings/
+# artifacts and a job-summary warning, but a finding never fails the job,
+# the overall workflow run, or blocks a deploy -- see the "Stage 1.6"
+# comment below for why, and tests/unit/test_ci_workflow_advisory_scanners.py
+# for the regression test on this exact property.
 # Railway deployment can only occur after the Quality Gate succeeds.
 # Docs: docs/engineering/
 
@@ -160,19 +166,30 @@ jobs:
           pip-audit --requirement=requirements.txt --requirement=requirements-dev.txt
 
   # ---------------------------------------------------------------------------
-  # Stage 1.6 — New quality scanners (Phase 1 hardening)
+  # Stage 1.6 — New quality scanners (Phase 1 hardening) — ADVISORY ONLY
   #
-  # These three jobs are new to this repo. Each runs for real (no
-  # continue-on-error) and its pass/fail is visible in the PR checks list,
-  # but NONE of them is in quality-gate's `needs:` below yet -- that is a
+  # These three jobs (mypy, semgrep, schemathesis) always run, always save
+  # findings/artifacts, and always surface a warning in the job summary --
+  # but their scan step carries `continue-on-error: true`, so a scanner
+  # finding does not fail the job, does not fail the overall workflow run,
+  # and cannot block a deploy (deploy only ever gates on quality-gate's
+  # `needs:`, which does not include these three -- see that job).
+  #
+  # NONE of them is in quality-gate's `needs:` below yet -- that is a
   # deliberate, separate decision. mypy alone currently reports 268
-  # pre-existing findings across 79 files; making any of these blocking on
-  # day one would immediately red every future PR on debt this pass merely
-  # discovered, not introduced. Promote each to blocking (add to
-  # quality-gate's `needs:`) individually, once its first-run findings have
-  # been triaged. Gitleaks is the strongest immediate candidate: secret
-  # detection has a much lower false-positive rate than a fresh type/lint
-  # pass on a large existing codebase.
+  # pre-existing findings across 79 files; Semgrep 79 findings; Schemathesis
+  # 4 expected-503 "server errors" (see the corresponding CI PRs' findings
+  # write-ups). Promote each to blocking (add to quality-gate's `needs:` AND
+  # drop its `continue-on-error: true`) individually, once its first-run
+  # findings have been triaged. Gitleaks is the strongest immediate
+  # candidate: secret detection has a much lower false-positive rate than a
+  # fresh type/lint pass on a large existing codebase (it has no
+  # continue-on-error and is a real, hard failure today).
+  #
+  # tests/unit/test_ci_workflow_advisory_scanners.py asserts these
+  # invariants structurally (continue-on-error present, none of the three
+  # in quality-gate's needs, deploy's needs is exactly [quality-gate]) so a
+  # future edit can't silently regress this.
   # ---------------------------------------------------------------------------
   mypy:
     name: mypy
@@ -196,6 +213,8 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Type check (mypy.ini -- Phase 1 narrow ruleset, see file comment)
+        id: typecheck
+        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -209,6 +228,20 @@ jobs:
           path: reports/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Advisory summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.typecheck.outcome }}" = "failure" ]; then
+            finding_line=$(grep -E '^Found [0-9]+ errors? in [0-9]+ files?' reports/mypy.txt || echo "mypy reported errors")
+            echo "## ⚠️ mypy (advisory, non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+            echo "$finding_line — see the uploaded mypy-report artifact for details." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::mypy: $finding_line (advisory only — not in the required Quality Gate)"
+          else
+            echo "## ✅ mypy (advisory)" >> "$GITHUB_STEP_SUMMARY"
+            echo "No errors." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   semgrep:
     name: Semgrep
@@ -231,6 +264,8 @@ jobs:
           pip install semgrep
 
       - name: Semgrep scan (community rulesets -- no SEMGREP_APP_TOKEN needed)
+        id: semgrepscan
+        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -250,6 +285,20 @@ jobs:
           path: reports/
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Advisory summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.semgrepscan.outcome }}" = "failure" ]; then
+            finding_line=$(grep -E '^Ran [0-9]+ rules? on [0-9]+ files?: [0-9]+ findings?\.' reports/semgrep.txt || echo "Semgrep reported findings")
+            echo "## ⚠️ Semgrep (advisory, non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+            echo "$finding_line — see the uploaded semgrep-report artifact (SARIF) for details." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Semgrep: $finding_line (advisory only — not in the required Quality Gate)"
+          else
+            echo "## ✅ Semgrep (advisory)" >> "$GITHUB_STEP_SUMMARY"
+            echo "No findings." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   gitleaks:
     name: Gitleaks
@@ -467,6 +516,8 @@ jobs:
           exit 1
 
       - name: Schemathesis (GET-only, positive-mode -- safe reporting run)
+        id: schemathesis_run
+        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -494,6 +545,20 @@ jobs:
           path: reports/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Advisory summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.schemathesis_run.outcome }}" = "failure" ]; then
+            finding_line=$(grep -E '^[0-9]+ failures?, [0-9]+ warnings? in' reports/schemathesis.txt || echo "Schemathesis reported failures")
+            echo "## ⚠️ Schemathesis (advisory, non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+            echo "$finding_line — see the uploaded schemathesis-report artifact for details." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Schemathesis: $finding_line (advisory only — not in the required Quality Gate)"
+          else
+            echo "## ✅ Schemathesis (advisory)" >> "$GITHUB_STEP_SUMMARY"
+            echo "No failures." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   openapi-contract:
     name: OpenAPI contract (cross-repo consumers, e.g. voice-n8n-agent)
