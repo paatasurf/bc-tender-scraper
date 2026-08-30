@@ -121,12 +121,20 @@ def run_vancouver_early_signal_events_scraper() -> dict[str, Any]:
 
 
 def run_vancouver_early_signal_enrichment_scraper(
-    *, limit: int | None = None
+    *,
+    limit: int | None = None,
+    since_id: int | None = None,
+    refresh_all: bool = False,
 ) -> dict[str, Any]:
     from scraper.vancouver_early_signal_enrichment import run_early_signal_enrichment
 
     return run_early_signal_enrichment(
-        limit=limit, force=False, fetch_details=True, persist=True
+        limit=limit,
+        force=False,
+        since_id=since_id,
+        refresh_all=refresh_all,
+        fetch_details=True,
+        persist=True,
     )
 
 
