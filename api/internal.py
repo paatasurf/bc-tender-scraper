@@ -30,6 +30,7 @@ from pipeline.lifecycle_resolver import resolve_tender_lifecycle
 from pipeline.tender_data_pipeline import run_tender_data_pipeline
 from pipeline.runs import (
     execute_tracked_step,
+    find_in_flight_run,
     get_pipeline_run,
     list_recent_runs,
     list_runs_for_run_id,
@@ -250,9 +251,32 @@ def _enqueue_step(
     worker,
     run_id: str | None,
 ) -> dict[str, Any]:
+    """Start `step` in the background under `run_id` (generating one if
+    omitted), unless a run for this exact (step, run_id) is already in
+    flight -- in which case no second worker is scheduled and the caller
+    gets back the existing in-flight run's poll URLs instead. Without this
+    check, a retried/duplicate trigger for the same explicit run_id (e.g.
+    an n8n retry after a slow response) would call start_run() twice and
+    schedule two concurrent workers against two independent "running"
+    pipeline_runs rows that nothing ever reconciles -- see
+    find_in_flight_run()'s docstring for the production incident this
+    reproduces (pipeline_runs id 754/755, step="import-csvs",
+    run_id="n8n-5564", 2026-08-05)."""
     actual_run_id = run_id or new_run_id()
     bootstrap = get_session()
     try:
+        if run_id is not None:
+            in_flight = find_in_flight_run(bootstrap, step, actual_run_id)
+            if in_flight is not None:
+                pipeline_run_id = in_flight.id
+                return {
+                    "status": "already_running",
+                    "run_id": actual_run_id,
+                    "step": step,
+                    "pipeline_run_id": pipeline_run_id,
+                    "poll_url": _step_status_path(pipeline_run_id),
+                    "run_poll_url": _run_status_path(actual_run_id),
+                }
         record = start_run(bootstrap, step, actual_run_id)
         pipeline_run_id = record.id
     finally:
