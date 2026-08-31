@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hmac
 import os
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from config.env import env_flag
 from db.connection import get_session
 from db.closing_at_sync import backfill_all_tender_closing_at
 from db.permit_source_status import backfill_permit_source_status
@@ -176,6 +177,16 @@ class GoogleEnrichmentRunRequest(BaseModel):
     company_ids: list[int] | None = Field(
         default=None,
         description="Optional explicit company ids (useful for dry_run smoke tests).",
+    )
+
+
+class EnrichmentRunRequest(BaseModel):
+    trigger: Literal["profile_view", "agent", "manual"] = Field(
+        default="manual",
+        description="RFC S7 step 1. An unrecognized value is rejected by "
+        "Pydantic at request-parsing time (422), before the route body "
+        "runs -- not a bare ValueError from start_or_join_job()'s own "
+        "trigger check, which would otherwise surface as an unhandled 500.",
     )
 
 
@@ -880,6 +891,86 @@ def google_enrichment_run(
         _worker,
         run_id=payload.run_id,
     )
+
+
+def _enrichment_enabled() -> bool:
+    """RFC S10 master kill switch. Default false -- until an operator
+    explicitly sets ENRICHMENT_ENABLED=true on a target environment (a
+    separate, deliberate config change never bundled with a code deploy),
+    the route below returns 503 before touching a session, a provider, or
+    a company_enrichment_jobs row."""
+    return env_flag("ENRICHMENT_ENABLED", default=False)
+
+
+@router.post("/enrichment/company/{company_id}/run")
+def enrichment_company_run(
+    company_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: EnrichmentRunRequest | None = None,
+) -> dict[str, Any]:
+    """On-demand company enrichment (RFC Phase 2, docs/COMPANY_ON_DEMAND_ENRICHMENT_RFC.md
+    S7/S8.2). Disabled by default -- see _enrichment_enabled(). When
+    enabled: cache-check and in-flight dedup (RFC S7 steps 2-3) run
+    synchronously (fast, local-DB-only) so the response is immediately
+    accurate; the provider cascade itself (RFC S7 steps 5-7, real
+    provider latency) always runs as a background task, never inline in
+    this request handler -- matching this RFC's own "no request handler
+    thread may ever call a provider inline" principle."""
+    _require_internal_key(request)
+    if not _enrichment_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Company enrichment is disabled (ENRICHMENT_ENABLED=false)",
+        )
+
+    from db.connection import init_db
+    from db.models import Company
+    from pipeline.company_enrichment.orchestrator import (
+        check_cache,
+        run_cascade_for_job,
+        start_or_join_job,
+    )
+
+    init_db()
+    payload = body or EnrichmentRunRequest()
+
+    session = get_session()
+    try:
+        company = session.get(Company, company_id)
+        if company is None:
+            raise HTTPException(
+                status_code=404, detail=f"Company {company_id} not found"
+            )
+        company_name = company.name
+
+        cached = check_cache(session, company_id)
+        if cached is not None:
+            return cached
+
+        run_id, joined = start_or_join_job(session, company_id, trigger=payload.trigger)
+    finally:
+        session.close()
+
+    if joined:
+        return {"status": "already_running", "company_id": company_id, "run_id": run_id}
+
+    def _worker() -> None:
+        worker_session = get_session()
+        try:
+            run_cascade_for_job(worker_session, run_id, company_id, company_name)
+        finally:
+            worker_session.close()
+
+    background_tasks.add_task(_worker)
+    return {
+        "status": "started",
+        "company_id": company_id,
+        "run_id": run_id,
+        # No poll_url yet -- GET /api/companies/{id}/enrichment (RFC S8.1)
+        # is Phase 4 scope, not implemented by this phase. Progress can
+        # only be observed by querying company_enrichment_jobs directly.
+    }
 
 
 @router.get("/kg/validation-snapshot")
