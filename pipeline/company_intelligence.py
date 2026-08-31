@@ -130,6 +130,14 @@ def populate_companies_from_permits(session: Session) -> int:
         )
     ).yield_per(1000)
 
+    # Diagnostic-only (read-only audit of the unconfirmed "cursor already
+    # closed" failures, pipeline_runs id 770/1020, ~29m50s wall-clock each):
+    # this loop was previously silent until it finished, so there was no way
+    # to tell from logs alone whether a failure happened here or in a later
+    # phase, or how far in. A periodic elapsed-time marker costs one print
+    # per 5000 rows on production's ~112k permits and changes nothing else.
+    phase_start = time.monotonic()
+    visited = 0
     for (
         permit_id,
         applicant,
@@ -140,6 +148,12 @@ def populate_companies_from_permits(session: Session) -> int:
         city,
         source,
     ) in rows:
+        visited += 1
+        if visited % 5000 == 0:
+            print(
+                f"[Companies] Permit resolution progress: {visited} visited "
+                f"(elapsed={time.monotonic() - phase_start:.1f}s)"
+            )
         raw = (applicant or "").strip()
         if not raw:
             continue
@@ -270,9 +284,22 @@ def enrich_companies_google(session: Session) -> int:
         .limit(limit)
     ).all()
 
+    # Diagnostic-only (read-only audit of the unconfirmed "cursor already
+    # closed" failures, pipeline_runs id 770/1020 -- both took ~29m50s
+    # wall-clock, close to db/connection.py's pool_recycle=1800s): this loop
+    # makes a real HTTP call plus a commit/rollback per company and is one
+    # of the two candidates still open long enough to plausibly be running
+    # near that mark. Elapsed time in the existing per-company print gives
+    # Railway's log stream a timestamp trail for the next occurrence,
+    # without changing what this loop does.
+    phase_start = time.monotonic()
     enriched = 0
     for index, company in enumerate(companies, start=1):
-        print(f"[Companies] Google {index}/{len(companies)}: {company.name[:70]}")
+        elapsed = time.monotonic() - phase_start
+        print(
+            f"[Companies] Google {index}/{len(companies)} "
+            f"(elapsed={elapsed:.1f}s): {company.name[:70]}"
+        )
         try:
             place = _fetch_google_place(api_key, company.name)
             if place:
@@ -364,9 +391,15 @@ def analyze_companies_ai(session: Session) -> int:
         .limit(limit)
     ).all()
 
+    # Diagnostic-only, same rationale as enrich_companies_google() above.
+    phase_start = time.monotonic()
     analyzed = 0
     for index, company in enumerate(companies, start=1):
-        print(f"[Companies] AI {index}/{len(companies)}: {company.name[:70]}")
+        elapsed = time.monotonic() - phase_start
+        print(
+            f"[Companies] AI {index}/{len(companies)} "
+            f"(elapsed={elapsed:.1f}s): {company.name[:70]}"
+        )
         try:
             score, summary = _analyze_company(client, company)
             company.ai_reliability_score = score

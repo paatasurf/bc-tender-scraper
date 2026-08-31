@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -101,6 +102,20 @@ def _execute_tracked_worker(
     run_id: str,
     worker: Callable[[], dict[str, Any]],
 ) -> tuple[str, dict[str, Any], str | None]:
+    """(Diagnostic-only addition -- read-only audit of the unconfirmed
+    "cursor already closed" company-intelligence failures, pipeline_runs id
+    770/1020: both took ~29m47s-29m53s wall-clock before failing, suspiciously
+    close to db/connection.py's pool_recycle=1800s. That timing could only
+    ever be checked after the fact by diffing started_at/finished_at -- for
+    a "failed" run's own duration that's exact, but it says nothing about
+    which internal phase/iteration the worker was on when it died, since
+    worker() below is an opaque callable to this function. Appending
+    elapsed wall-clock time to the persisted error text is the minimal,
+    purely additive way to make that duration queryable directly from
+    pipeline_runs.error without correlating log timestamps -- it changes
+    nothing about control flow, retries nothing, catches nothing new, and
+    the original exception text is fully preserved, only appended to."""
+    start = time.monotonic()
     logger.info(
         "[Pipeline/%s] Started run_id=%s pipeline_run_id=%s", step, run_id, record_id
     )
@@ -112,20 +127,25 @@ def _execute_tracked_worker(
         status = _resolve_status(counts)
     except Exception as exc:
         status = "failed"
-        error = str(exc)
+        elapsed = time.monotonic() - start
+        error = f"{exc} (after {elapsed:.1f}s)"
         logger.exception(
-            "[Pipeline/%s] Failed run_id=%s pipeline_run_id=%s",
+            "[Pipeline/%s] Failed run_id=%s pipeline_run_id=%s elapsed=%.1fs",
             step,
             run_id,
             record_id,
+            elapsed,
         )
     else:
+        elapsed = time.monotonic() - start
         logger.info(
-            "[Pipeline/%s] Finished run_id=%s pipeline_run_id=%s status=%s counts=%s",
+            "[Pipeline/%s] Finished run_id=%s pipeline_run_id=%s status=%s "
+            "elapsed=%.1fs counts=%s",
             step,
             run_id,
             record_id,
             status,
+            elapsed,
             counts,
         )
     return status, counts, error
