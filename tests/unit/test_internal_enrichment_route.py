@@ -16,6 +16,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from api import internal as internal_api
 
@@ -164,3 +165,47 @@ def test_missing_company_returns_404_before_any_cache_or_dedup_check():
 
     assert getattr(exc_info.value, "status_code", None) == 404
     cache_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bugbot finding #4: trigger must be a strict enum, rejected with 422
+# ---------------------------------------------------------------------------
+
+
+def test_bugbot_finding_unknown_trigger_value_rejected_at_the_pydantic_level():
+    """EnrichmentRunRequest.trigger is now Literal[...] -- an unrecognized
+    value must fail Pydantic validation immediately (before the route
+    body ever runs), not reach start_or_join_job()'s own bare
+    `if trigger not in _VALID_TRIGGERS: raise ValueError(...)`, which
+    FastAPI does NOT auto-convert to a 422 (a bare ValueError surfaces as
+    an unhandled 500)."""
+    with pytest.raises(ValidationError):
+        internal_api.EnrichmentRunRequest(trigger="not_a_real_trigger")
+
+
+@pytest.mark.parametrize("valid_trigger", ["profile_view", "agent", "manual"])
+def test_bugbot_finding_every_documented_trigger_value_is_still_accepted(valid_trigger):
+    body = internal_api.EnrichmentRunRequest(trigger=valid_trigger)
+    assert body.trigger == valid_trigger
+
+
+def test_bugbot_finding_unknown_trigger_returns_real_http_422_not_500():
+    """End-to-end through the actual FastAPI/Pydantic request pipeline
+    (TestClient, not a direct Python call) -- proves the real HTTP
+    contract, not just the Pydantic model in isolation."""
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    with patch.dict("os.environ", {"INTERNAL_API_KEY": "secret", "ENRICHMENT_ENABLED": "true"}, clear=False):
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            "/internal/enrichment/company/1/run",
+            json={"trigger": "bogus_value"},
+            headers={"X-Internal-Key": "secret"},
+        )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["detail"][0]["loc"] == ["body", "trigger"]
+    assert "profile_view" in body["detail"][0]["msg"]

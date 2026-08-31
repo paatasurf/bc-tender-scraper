@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hmac
 import os
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -181,9 +181,12 @@ class GoogleEnrichmentRunRequest(BaseModel):
 
 
 class EnrichmentRunRequest(BaseModel):
-    trigger: str = Field(
+    trigger: Literal["profile_view", "agent", "manual"] = Field(
         default="manual",
-        description="One of profile_view | agent | manual (RFC S7 step 1).",
+        description="RFC S7 step 1. An unrecognized value is rejected by "
+        "Pydantic at request-parsing time (422), before the route body "
+        "runs -- not a bare ValueError from start_or_join_job()'s own "
+        "trigger check, which would otherwise surface as an unhandled 500.",
     )
 
 

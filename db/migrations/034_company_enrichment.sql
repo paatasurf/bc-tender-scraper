@@ -73,9 +73,15 @@ CREATE TABLE IF NOT EXISTS company_enrichment_fields (
 -- One CURRENT row per (company, field, provider) -- a provider re-fetching
 -- the same field must supersede its own prior row (UPDATE superseded_at),
 -- never insert a second live row for the identical (company_id,
--- field_name, source) triple.
+-- field_name, source) triple. Bugbot finding: this MUST be a partial
+-- index (WHERE superseded_at IS NULL) -- a full unique index across all
+-- rows would block a second insert forever after the first supersede,
+-- since the OLD (now-superseded) row still occupies that exact key.
+-- Superseded rows are kept for provenance (RFC S5/S12) and must be free
+-- to accumulate multiple historical entries for the same triple.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_company_enrichment_fields_company_field_source
-    ON company_enrichment_fields (company_id, field_name, source);
+    ON company_enrichment_fields (company_id, field_name, source)
+    WHERE superseded_at IS NULL;
 
 -- Read-model support: "current fields for this company" without a
 -- full-table scan or a superseded_at IS NULL filter on every query plan.

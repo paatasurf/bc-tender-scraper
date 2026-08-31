@@ -160,6 +160,7 @@ _EXPECTED_INDEXES = (
         FIELDS_TABLE,
         True,
         ("company_id", "field_name", "source"),
+        predicate="superseded_at is null",
     ),
     _ExpectedIndex(
         "ix_company_enrichment_fields_company",
@@ -197,19 +198,38 @@ def _index_conforms(expected: _ExpectedIndex, actual: dict[str, Any] | None) -> 
     return _normalize_predicate(actual.get("predicate")) == expected.predicate
 
 
-def _fk_exists(conn: Any, *, table: str, ref_table: str, column: str) -> bool:
+def _fk_exists(conn: Any, *, table: str, local_column: str, ref_table: str, ref_column: str) -> bool:
+    """True iff `table.local_column` has a FOREIGN KEY to `ref_table.ref_column`.
+
+    Bugbot finding fix: the original query joined table_constraints only
+    to constraint_column_usage (which reports the REFERENCED side of a
+    FOREIGN KEY constraint), and never consulted key_column_usage (which
+    reports the LOCAL/constrained side). It therefore only proved "table
+    has SOME foreign key pointing at ref_table.ref_column" -- it could
+    never have caught a corrupt schema where an unrelated column carried
+    the FK instead of local_column, or where local_column's own FK had
+    been dropped while a different, unrelated FK to the same ref_table
+    happened to still exist. Joining key_column_usage as well pins down
+    the LOCAL column too, matching what the function name always claimed
+    to check.
+    """
     row = conn.execute(
         text("""
             SELECT 1
             FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+              ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema = kcu.table_schema
             JOIN information_schema.constraint_column_usage ccu
               ON tc.constraint_name = ccu.constraint_name
+              AND tc.table_schema = ccu.table_schema
             WHERE tc.table_name = :table
               AND tc.constraint_type = 'FOREIGN KEY'
+              AND kcu.column_name = :local_column
               AND ccu.table_name = :ref_table
-              AND ccu.column_name = :column
+              AND ccu.column_name = :ref_column
             """),
-        {"table": table, "ref_table": ref_table, "column": column},
+        {"table": table, "local_column": local_column, "ref_table": ref_table, "ref_column": ref_column},
     ).first()
     return row is not None
 
@@ -320,15 +340,17 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
         if not _fk_exists(
             session_or_conn,
             table=FIELDS_TABLE,
+            local_column="company_id",
             ref_table="companies",
-            column="id",
+            ref_column="id",
         ):
             violations.append(f"{FIELDS_TABLE}.company_id -> companies.id foreign key is missing")
         if not _fk_exists(
             session_or_conn,
             table=JOBS_TABLE,
+            local_column="company_id",
             ref_table="companies",
-            column="id",
+            ref_column="id",
         ):
             violations.append(f"{JOBS_TABLE}.company_id -> companies.id foreign key is missing")
         for table, name in _EXPECTED_CHECK_CONSTRAINTS:

@@ -31,6 +31,8 @@ Scope of THIS phase, deliberately narrow:
 
 from __future__ import annotations
 
+import concurrent.futures
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -42,7 +44,9 @@ from sqlalchemy.orm import Session
 
 from db.company_enrichment_tables import company_enrichment_fields, company_enrichment_jobs
 from pipeline.company_enrichment.orgbook_adapter import OrgBookAdapter
-from pipeline.company_enrichment.provider import EnrichmentProvider, EnrichmentRequest
+from pipeline.company_enrichment.provider import EnrichmentProvider, EnrichmentRequest, ProviderResult
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STALE_DAYS = 30
 DEFAULT_LEASE_TTL = timedelta(minutes=10)
@@ -395,6 +399,94 @@ def _resolve_cascade_status(providers_attempted: list[str]) -> str:
     return "failed"
 
 
+def _call_provider_with_timeout(
+    provider: EnrichmentProvider, request: EnrichmentRequest, timeout_s: float
+) -> tuple[ProviderResult | None, str]:
+    """Run provider.lookup() with a REAL, enforced wall-clock timeout.
+
+    Bugbot finding fix: the previous implementation called
+    provider.lookup() synchronously and measured elapsed time only AFTER
+    it had already fully returned -- that can never interrupt a
+    genuinely hung call (e.g. a network read blocking indefinitely past
+    timeout_s), which would have blocked this entire cascade, and the
+    whole background task, forever. This runs the call in its own
+    worker thread and enforces the timeout via
+    concurrent.futures.Future.result(timeout=...), which raises and
+    returns control to the caller the moment the deadline passes,
+    regardless of whether the underlying call has finished.
+
+    Python cannot forcibly kill a thread, so a timed-out thread is
+    abandoned (never joined/waited on) rather than blocked on again --
+    it uses its OWN independent DB session (get_session(), never the
+    caller's `session`), specifically so an abandoned thread that is
+    still running in the background can never race against or corrupt
+    the orchestrator's own session, which SQLAlchemy's Session is not
+    designed to tolerate from multiple threads concurrently. Whatever
+    that orphaned thread eventually returns (or raises) is simply
+    discarded when it finishes.
+
+    Returns (result_or_None, tag) where tag is exactly one of
+    "ok" | "error" | "timeout".
+    """
+
+    def _run() -> ProviderResult:
+        from db.connection import get_session
+
+        thread_session = get_session()
+        try:
+            return provider.lookup(thread_session, request)
+        finally:
+            thread_session.close()
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_run)
+    try:
+        result = future.result(timeout=timeout_s)
+    except concurrent.futures.TimeoutError:
+        executor.shutdown(wait=False)
+        return None, "timeout"
+    except Exception:  # noqa: BLE001 -- provider errors are isolated per RFC S7 step 5
+        executor.shutdown(wait=False)
+        return None, "error"
+    executor.shutdown(wait=False)
+    if result.error is not None:
+        return result, "error"
+    return result, "ok"
+
+
+def _mark_job_failed_best_effort(run_id: str) -> None:
+    """Last-resort safety net (Bugbot finding fix): guarantees a job
+    reaches a terminal status even when the writer or the finish
+    transition itself raises an unexpected exception -- e.g. a broken
+    connection, a constraint violation, or anything else that would
+    otherwise leave the row 'running' until its lease naturally expires
+    10 minutes later and needs a FUTURE, unrelated request to reclaim it
+    (reclaim_stale_job()) rather than being marked failed immediately by
+    the job that actually broke.
+
+    Uses a brand-new, independent session -- the caller's own `session`
+    may be unusable at this point (a raised DB exception typically
+    poisons the transaction until rolled back, and this function must
+    not assume the caller has done that). Idempotent, matching
+    _finish_job()'s own contract (a no-op if the run is already
+    terminal). Fail-open and swallows its OWN failures: this is a safety
+    net, not a source of truth, and must never mask or replace the
+    original exception the caller is about to re-raise."""
+    try:
+        from db.connection import get_session
+
+        fresh_session = get_session()
+        try:
+            _finish_job(fresh_session, run_id, status="failed")
+        finally:
+            fresh_session.close()
+    except Exception:  # noqa: BLE001 -- this IS the last-resort handler
+        logger.exception(
+            "[company_enrichment] failed to mark run_id=%s as failed after an unhandled exception",
+            run_id,
+        )
+
+
 def run_cascade_for_job(
     session: Session,
     run_id: str,
@@ -412,74 +504,73 @@ def run_cascade_for_job(
     (S7 preamble). Never raises for a provider failure (golden case #6) or
     a total no-match (golden case #9) -- both are valid, non-error
     outcomes.
+
+    The whole body below is wrapped so that ANY unexpected exception --
+    from the provider cascade, the writer, or the finish transition --
+    still leaves the job in a genuine terminal status (never stuck
+    'running') before propagating: see _mark_job_failed_best_effort().
+    This is a guaranteed terminal transition, not a retry -- the
+    exception itself is always re-raised, never swallowed or retried.
     """
-    active_providers = providers if providers is not None else _default_providers()
-    request = EnrichmentRequest(company_id=company_id, company_name=company_name)
+    try:
+        active_providers = providers if providers is not None else _default_providers()
+        request = EnrichmentRequest(company_id=company_id, company_name=company_name)
 
-    providers_attempted: list[str] = []
-    facts_by_provider: dict[str, list[Any]] = {}
-    any_matched = False
+        providers_attempted: list[str] = []
+        facts_by_provider: dict[str, list[Any]] = {}
+        any_matched = False
 
-    for provider in active_providers:
-        started = datetime.now(timezone.utc)
-        try:
-            result = provider.lookup(session, request)
-        except Exception:  # noqa: BLE001 -- cascade must never crash on one bad provider
-            providers_attempted.append(f"{provider.name}:error")
-            continue
+        for provider in active_providers:
+            result, tag = _call_provider_with_timeout(provider, request, timeout_s)
+            providers_attempted.append(f"{provider.name}:{tag}")
+            if tag != "ok":
+                continue
+            if result.matched and result.facts:
+                any_matched = True
+                facts_by_provider.setdefault(provider.name, []).extend(result.facts)
+            elif result.matched:
+                any_matched = True
 
-        elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
-        if elapsed_s > timeout_s:
-            providers_attempted.append(f"{provider.name}:timeout")
-            continue
-        if result.error is not None:
-            providers_attempted.append(f"{provider.name}:error")
-            continue
+        written: list[str] = []
+        skipped_verified: list[str] = []
+        for provider_name, facts in facts_by_provider.items():
+            outcome = write_enrichment_facts(session, company_id, facts, source=provider_name, run_id=run_id)
+            written.extend(outcome.written)
+            skipped_verified.extend(outcome.skipped_verified)
+        write_outcome = WriteOutcome(written=tuple(written), skipped_verified=tuple(skipped_verified))
 
-        providers_attempted.append(f"{provider.name}:ok")
-        if result.matched and result.facts:
-            any_matched = True
-            facts_by_provider.setdefault(provider.name, []).extend(result.facts)
-        elif result.matched:
-            any_matched = True
+        session.execute(
+            update(company_enrichment_jobs)
+            .where(company_enrichment_jobs.c.run_id == run_id)
+            .values(providers_attempted=providers_attempted)
+        )
+        session.commit()
 
-    written: list[str] = []
-    skipped_verified: list[str] = []
-    for provider_name, facts in facts_by_provider.items():
-        outcome = write_enrichment_facts(session, company_id, facts, source=provider_name, run_id=run_id)
-        written.extend(outcome.written)
-        skipped_verified.extend(outcome.skipped_verified)
-    write_outcome = WriteOutcome(written=tuple(written), skipped_verified=tuple(skipped_verified))
+        requested_status = _resolve_cascade_status(providers_attempted)
+        finished = _finish_job(session, run_id, status=requested_status)
+        if finished:
+            actual_status = requested_status
+        else:
+            # This run_id was no longer 'running' by the time we finished --
+            # almost certainly reclaim_stale_job() already flipped it to
+            # 'failed' while this cascade was still in flight (a lease-vs-
+            # real-latency race; see reclaim_stale_job()'s docstring). Report
+            # what the row ACTUALLY persisted, not the status this cascade
+            # merely wished for -- a caller must never be told "success" for
+            # a job the row itself disagrees with.
+            actual_status = session.execute(
+                select(company_enrichment_jobs.c.status).where(company_enrichment_jobs.c.run_id == run_id)
+            ).scalar_one()
 
-    session.execute(
-        update(company_enrichment_jobs)
-        .where(company_enrichment_jobs.c.run_id == run_id)
-        .values(providers_attempted=providers_attempted)
-    )
-    session.commit()
-
-    requested_status = _resolve_cascade_status(providers_attempted)
-    finished = _finish_job(session, run_id, status=requested_status)
-    if finished:
-        actual_status = requested_status
-    else:
-        # This run_id was no longer 'running' by the time we finished --
-        # almost certainly reclaim_stale_job() already flipped it to
-        # 'failed' while this cascade was still in flight (a lease-vs-
-        # real-latency race; see reclaim_stale_job()'s docstring). Report
-        # what the row ACTUALLY persisted, not the status this cascade
-        # merely wished for -- a caller must never be told "success" for
-        # a job the row itself disagrees with.
-        actual_status = session.execute(
-            select(company_enrichment_jobs.c.status).where(company_enrichment_jobs.c.run_id == run_id)
-        ).scalar_one()
-
-    return {
-        "status": actual_status,
-        "company_id": company_id,
-        "run_id": run_id,
-        "matched": any_matched,
-        "fields_written": write_outcome.written,
-        "fields_skipped_verified": write_outcome.skipped_verified,
-        "providers_attempted": providers_attempted,
-    }
+        return {
+            "status": actual_status,
+            "company_id": company_id,
+            "run_id": run_id,
+            "matched": any_matched,
+            "fields_written": write_outcome.written,
+            "fields_skipped_verified": write_outcome.skipped_verified,
+            "providers_attempted": providers_attempted,
+        }
+    except Exception:
+        _mark_job_failed_best_effort(run_id)
+        raise
