@@ -67,6 +67,7 @@ planned follow-up phases.
 
 from config.env import env_flag
 from db.connection import get_session, init_db
+from pipeline import company_intelligence_telemetry
 from pipeline.ai_scoring import score_unscored_tenders
 from pipeline.arch_company_intelligence import run_arch_company_intelligence
 from pipeline.company_intelligence import run_company_intelligence
@@ -187,71 +188,33 @@ def _ai_scoring_telemetry_finish(
 
 
 COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG = (
-    "ENABLE_COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY"
+    company_intelligence_telemetry.JOB_RUN_TELEMETRY_FLAG
 )
-COMPANY_INTELLIGENCE_JOB_RUN_JOB_TYPE = "company_intelligence"
-_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL = "Company intelligence telemetry"
+COMPANY_INTELLIGENCE_JOB_RUN_JOB_TYPE = company_intelligence_telemetry.JOB_TYPE
 
-# Flat int fields already present, unchanged, in run_company_intelligence()'s
-# own return dict -- see pipeline/company_intelligence.py. Deliberately an
-# explicit allowlist, not a blanket pass-through, same reasoning as
-# _AI_SCORING_COUNT_KEYS above. Notably does NOT include the nested
-# `tier_counts` dict or `reference_date` string that
-# compute_construction_tiers() itself returns internally -- those never
-# leave pipeline/company_intelligence.py; run_company_intelligence() only
-# surfaces the flat `construction_tiers_updated` int from that dict.
-_COMPANY_INTELLIGENCE_COUNT_KEYS = (
-    "companies_populated",
-    "companies_google_enriched",
-    "companies_ai_analyzed",
-    "companies_classified",
-    "construction_tiers_updated",
+# Thin delegations to pipeline.company_intelligence_telemetry (shared with
+# pipeline/internal_steps.py's manual/n8n path -- see that module's
+# docstring). Kept as same-named local functions, called the exact same
+# way at every existing call site below, so this refactor changes no
+# control flow here: trigger="scheduler", run_id=None (this path has no
+# pipeline_runs row of its own to correlate against -- unchanged from
+# before this delegation existed).
+company_intelligence_job_run_telemetry_enabled = (
+    company_intelligence_telemetry.company_intelligence_job_run_telemetry_enabled
 )
-
-
-def company_intelligence_job_run_telemetry_enabled() -> bool:
-    """Read-only feature-flag check, same "1"/"true"/"yes" convention as
-    every other flag in this repo. False by default."""
-    return env_flag(COMPANY_INTELLIGENCE_JOB_RUN_TELEMETRY_FLAG, default=False)
-
-
-def _safe_company_intelligence_counts(result: dict) -> dict[str, int]:
-    """Allowlisted counts only -- never a prompt, an AI response, or a
-    company/tender record. None of those exist in
-    run_company_intelligence()'s return value in the first place; this
-    function only narrows further, and protects against the return dict
-    growing an unexpected field in the future."""
-    return {
-        key: result[key] for key in _COMPANY_INTELLIGENCE_COUNT_KEYS if key in result
-    }
+_safe_company_intelligence_counts = (
+    company_intelligence_telemetry.safe_company_intelligence_counts
+)
 
 
 def _company_intelligence_telemetry_start() -> str | None:
-    def _do(session: object) -> str:
-        return start_job_run(
-            session,
-            job_type=COMPANY_INTELLIGENCE_JOB_RUN_JOB_TYPE,
-            trigger="scheduler",
-            source="permits",
-        )
-
-    return call_with_telemetry_session(
-        _do,
-        log_label=_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL,
-        failure_message="failed to start job run tracking",
+    return company_intelligence_telemetry.start_company_intelligence_telemetry(
+        trigger="scheduler"
     )
 
 
 def _company_intelligence_telemetry_phase(run_id: str, phase: str) -> None:
-    def _do(session: object) -> None:
-        record_job_step(session, run_id, event_type="step_completed", step=phase)
-        heartbeat_job_run(session, run_id)
-
-    call_with_telemetry_session(
-        _do,
-        log_label=_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL,
-        failure_message=f"failed to record phase={phase}",
-    )
+    company_intelligence_telemetry.record_company_intelligence_phase(run_id, phase)
 
 
 def _company_intelligence_telemetry_finish(
@@ -261,15 +224,8 @@ def _company_intelligence_telemetry_finish(
     counts: dict[str, int] | None = None,
     raw_error: str | None = None,
 ) -> None:
-    def _do(session: object) -> None:
-        finish_job_run(
-            session, run_id, status=status, counts=counts, raw_error=raw_error
-        )
-
-    call_with_telemetry_session(
-        _do,
-        log_label=_COMPANY_INTELLIGENCE_TELEMETRY_LOG_LABEL,
-        failure_message="failed to finish job run tracking",
+    company_intelligence_telemetry.finish_company_intelligence_telemetry(
+        run_id, status=status, counts=counts, raw_error=raw_error
     )
 
 
