@@ -109,6 +109,38 @@ class _CompanyStats:
     last_project_date: str = ""
 
 
+def _permit_resolution_query():
+    """The SELECT driving populate_companies_from_permits()'s per-row UPDATE
+    loop, ordered by Permit.id.
+
+    This ordering is the fix for a confirmed production deadlock
+    (pipeline_runs id 759, 2026-08-05: "DeadlockDetected ... while updating
+    tuple (184,2) in relation 'permits'", two processes each holding a lock
+    the other was waiting for). populate_companies_from_permits() has no
+    concurrency guard of its own (nothing in pipeline.run_coordinator covers
+    this step -- see PR #156/#157/#158's audit), so two overlapping
+    invocations touching the same permit rows are possible. Without an
+    explicit ORDER BY, PostgreSQL does not guarantee row order for a plain
+    scan, so two concurrent transactions could acquire the same rows' locks
+    in different relative orders -- a classic lock-order deadlock. With every
+    invocation locking permit rows strictly in ascending id order, two
+    overlapping transactions can only ever block on each other in one
+    direction (whichever reaches a given id first), never form a cycle, and
+    therefore cannot deadlock on these rows -- this is a lock-order fix, not
+    a retry: nothing here catches or retries a deadlock, it structurally
+    cannot occur across two callers of this query."""
+    return select(
+        Permit.id,
+        Permit.applicant,
+        Permit.permit_type,
+        Permit.project_value,
+        Permit.issue_date,
+        Permit.address,
+        Permit.city,
+        Permit.source,
+    ).order_by(Permit.id)
+
+
 def populate_companies_from_permits(session: Session) -> int:
     """Aggregate permits onto canonical companies via resolve_company (not raw applicant)."""
     print("[Companies] Aggregating permits by resolved canonical company...")
@@ -117,18 +149,7 @@ def populate_companies_from_permits(session: Session) -> int:
     review_count = 0
     skipped_person = 0
 
-    rows = session.execute(
-        select(
-            Permit.id,
-            Permit.applicant,
-            Permit.permit_type,
-            Permit.project_value,
-            Permit.issue_date,
-            Permit.address,
-            Permit.city,
-            Permit.source,
-        )
-    ).yield_per(1000)
+    rows = session.execute(_permit_resolution_query()).yield_per(1000)
 
     for (
         permit_id,
@@ -194,7 +215,11 @@ def populate_companies_from_permits(session: Session) -> int:
     )
 
     updated = 0
-    for company_id, entry in stats.items():
+    # Ascending company_id, not dict insertion order -- same lock-order
+    # rationale as _permit_resolution_query() above, applied to the
+    # companies phase so it can't independently become a second AB-BA
+    # deadlock surface between two overlapping invocations.
+    for company_id, entry in sorted(stats.items()):
         session.execute(
             Company.__table__.update()
             .where(Company.id == company_id)
