@@ -337,8 +337,20 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
             f"unexpected={sorted(set(jobs_columns) - _JOBS_EXPECTED_COLUMNS)}"
         )
 
-    if fields_columns is not None and jobs_columns is not None:
+    # Safety review finding #3: index/FK/CHECK checks below are gated on
+    # EACH table's own existence independently, not on both tables
+    # existing together. A schema in a PARTIAL state (e.g. an earlier
+    # failed/interrupted apply left fields_table created with a
+    # wrong-shaped index, but jobs_table not created yet) must still
+    # have that wrong index surfaced as a violation right now -- an
+    # operator reading the dry-run report in that exact partial state
+    # must see everything wrong with what already exists, not just "the
+    # other table is missing" (which is true but incomplete, and could
+    # read as "just create the other table and you're done").
+    if fields_columns is not None:
         for expected in _EXPECTED_INDEXES:
+            if expected.table != FIELDS_TABLE:
+                continue
             actual = _index_info(
                 session_or_conn, table=expected.table, index=expected.name
             )
@@ -354,6 +366,16 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
             violations.append(
                 f"{FIELDS_TABLE}.company_id -> companies.id foreign key is missing"
             )
+
+    if jobs_columns is not None:
+        for expected in _EXPECTED_INDEXES:
+            if expected.table != JOBS_TABLE:
+                continue
+            actual = _index_info(
+                session_or_conn, table=expected.table, index=expected.name
+            )
+            if not _index_conforms(expected, actual):
+                violations.append(f"{expected.name} index does not conform: {actual}")
         if not _fk_exists(
             session_or_conn,
             table=JOBS_TABLE,
@@ -365,6 +387,8 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
                 f"{JOBS_TABLE}.company_id -> companies.id foreign key is missing"
             )
         for table, name in _EXPECTED_CHECK_CONSTRAINTS:
+            if table != JOBS_TABLE:
+                continue
             if not _check_constraint_exists(session_or_conn, table=table, name=name):
                 violations.append(f"{name} check constraint is missing on {table}")
 

@@ -72,4 +72,20 @@ class EnrichmentProvider(Protocol):
 
     def lookup(self, session: Session, request: EnrichmentRequest) -> ProviderResult:
         """Return raw, provider-scoped facts. Must not invent a value --
-        missing = absent from ProviderResult.facts, never a guess."""
+        missing = absent from ProviderResult.facts, never a guess.
+
+        MANDATORY for any implementation that performs network I/O
+        (safety review requirement, RFC Phase 3+): the implementation
+        MUST set its own request-level timeout on every outbound call
+        (e.g. `requests.get(url, timeout=N)`, never an untimed call).
+        pipeline.company_enrichment.orchestrator._call_provider_with_timeout()
+        wraps every lookup() call in a thread-based wall-clock deadline,
+        but Python cannot forcibly kill a thread -- that wrapper can only
+        stop the CALLER from waiting past the deadline, never force this
+        method's own blocked I/O call to actually return. A lookup() with
+        no timeout of its own turns a bounded-latency provider outage
+        into an unbounded leaked thread + held DB connection per call
+        (see _call_provider_with_timeout()'s docstring for the exact
+        accumulation this causes). OrgBookAdapter has no network I/O
+        (local-DB-only) so this does not apply to it; it becomes a hard
+        requirement starting with the website provider (RFC Phase 3)."""

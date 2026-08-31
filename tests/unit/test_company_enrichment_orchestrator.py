@@ -673,6 +673,70 @@ def test_bugbot_finding_two_concurrent_hung_lookups_are_each_interrupted_indepen
         ), f"{key} took {elapsed:.2f}s -- not independently interrupted"
 
 
+def test_bugbot_finding_repeated_timeouts_accumulate_abandoned_threads_a_documented_limitation() -> (
+    None
+):
+    """Safety review finding #1: Python cannot forcibly kill a thread, so
+    a provider that is systematically hung (its own I/O call has no
+    timeout) leaves ONE abandoned OS thread accumulated per timed-out
+    call -- unboundedly, for as long as the underlying block never
+    returns. This is not something _call_provider_with_timeout() can fix
+    (no cooperative-cancellation hook exists in plain Python threads); it
+    is why EnrichmentProvider.lookup() implementations are REQUIRED to
+    set their own network-level timeout (provider.py's updated
+    docstring). This test locks in the actual, measured growth -- not
+    just asserts it in prose -- and confirms the threads DO eventually
+    clean up once the underlying (test-bounded) block finally returns,
+    so this is a real, bounded-in-this-test but unbounded-in-general
+    leak, not a permanent process-wide thread explosion in this specific
+    reproduction."""
+    hang_s = 1.5
+    n_calls = 4
+    request = EnrichmentRequest(company_id=1, company_name="X")
+
+    # Settle first: other tests in this module (e.g. the concurrent-hung-
+    # lookups test just above, sleep_s=2.0) also leave abandoned threads
+    # that take up to ~2s to naturally finish, and may still be mid-sleep
+    # (not yet finished, but also not yet CHANGING) when this test
+    # starts -- a short stability-poll can be fooled by that "stable but
+    # not actually done" window and capture an inflated baseline that
+    # then drops later, unrelated to this test's own threads. Sleep a
+    # fixed, deterministic duration instead, comfortably longer than any
+    # sibling test's own hang duration in this module, so every prior
+    # test's abandoned threads are GUARANTEED finished (not just
+    # currently stable) before this test's own baseline is captured.
+    time.sleep(2.5)
+    before = threading.active_count()
+
+    for _ in range(n_calls):
+        provider = FakeProvider(
+            "hung",
+            result=ProviderResult(provider="hung", matched=False),
+            sleep_s=hang_s,
+        )
+        result, tag = _call_provider_with_timeout(provider, request, timeout_s=0.05)
+        assert tag == "timeout"
+        assert result is None
+
+    immediately_after = threading.active_count()
+    assert immediately_after - before == n_calls, (
+        f"expected exactly {n_calls} abandoned threads accumulated "
+        f"(before={before}, after={immediately_after}) -- if this is "
+        f"lower, the timeout mechanism may have started actually "
+        f"cancelling/reaping threads (update this test and the "
+        f"docstring limitation notice); if this is higher, something "
+        f"else is also leaking threads."
+    )
+
+    time.sleep(hang_s + 1.0)  # let the hung calls finish naturally, generous margin
+    after_natural_completion = threading.active_count()
+    assert after_natural_completion == before, (
+        "abandoned threads must clean up once their own blocked call "
+        "finally returns -- a provider with NO timeout of its own would "
+        "never reach this point, which is exactly the documented risk"
+    )
+
+
 def test_bugbot_finding_an_unexpected_writer_exception_still_finishes_the_job_as_failed(
     enrichment_db,
 ) -> None:

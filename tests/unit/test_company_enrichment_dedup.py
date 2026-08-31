@@ -195,6 +195,102 @@ def test_a_dead_worker_with_an_expired_lease_is_reclaimed_not_joined_forever(
     assert statuses[new_run_id] == "running"
 
 
+def test_process_restart_between_job_creation_and_background_task_execution(
+    enrichment_db,
+) -> None:
+    """Safety review finding #2: api/internal.py's route creates the
+    company_enrichment_jobs row (start_or_join_job(), synchronous) and
+    THEN calls background_tasks.add_task(_worker) so the HTTP response
+    can return immediately -- but FastAPI's BackgroundTasks only runs
+    that callable AFTER the response is sent, still within the same
+    process. If the process is killed (Railway restartPolicyType=
+    "ON_FAILURE" -- a real, recurring event, not hypothetical) in the
+    window between the job row being committed and the background task
+    actually executing, run_cascade_for_job() NEVER RUNS AT ALL for that
+    run_id -- there is no durable queue behind BackgroundTasks (and this
+    review explicitly does not add one without separate agreement).
+
+    This test proves the existing reclaim mechanism (built for the
+    "worker started, then died mid-cascade" case) is INDISTINGUISHABLE,
+    at the DB level, from -- and therefore already transparently covers
+    -- this "worker never started at all" case: both leave
+    company_enrichment_jobs at status='running' with a lease that was set
+    once at creation and never renewed, so the SAME lease-expiry reclaim
+    logic recovers either failure mode identically, with no special-case
+    code needed.
+
+    Residual, explicitly accepted gap (not fixed here, per this review's
+    "no durable queue without separate agreement" instruction): if NO
+    future request is ever made for that specific company again, the row
+    simply stays status='running' forever with no proactive cleanup --
+    there is no standalone reaper for company_enrichment_jobs (unlike
+    pipeline/run_coordinator_postgres.py::reap_stale_run() for the
+    tender_data coordinator, PR #156). This is a data-hygiene/
+    observability gap, not a functional deadlock: it can never block a
+    DIFFERENT company, and it self-heals the moment anyone does ask about
+    this company again.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import update
+
+    from db.company_enrichment_tables import company_enrichment_jobs
+
+    engine, company_id = enrichment_db
+
+    # Simulates exactly what api/internal.py's route does synchronously,
+    # BEFORE scheduling the background task -- this is the real
+    # production code path for job creation, not a re-implementation.
+    with Session(engine) as session:
+        run_id, joined = start_or_join_job(session, company_id, trigger="profile_view")
+    assert joined is False
+
+    # Simulates the process being killed right here -- background_tasks
+    # .add_task(_worker)'s callable is deliberately NEVER invoked in this
+    # test, exactly as it never would be if the process died before
+    # Starlette got to run it.
+
+    with engine.connect() as conn:
+        status_immediately_after = conn.execute(
+            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"),
+            {"r": run_id},
+        ).scalar_one()
+    assert status_immediately_after == "running"  # looks like a perfectly healthy job
+
+    # Time passes -- the lease (set once at creation, never renewed,
+    # because the worker that would have heartbeat/finished it never ran)
+    # eventually expires. Simulated via backdating, matching this file's
+    # other lease-expiry tests, rather than sleeping 10 real minutes.
+    with engine.begin() as conn:
+        conn.execute(
+            update(company_enrichment_jobs)
+            .where(company_enrichment_jobs.c.run_id == run_id)
+            .values(lease_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+        )
+
+    # A LATER request for the SAME company (the only way this specific
+    # job row is ever revisited) must reclaim it and make real progress,
+    # not join a run_id that will never report an outcome.
+    with Session(engine) as session:
+        recovered_run_id, recovered_joined = start_or_join_job(
+            session, company_id, trigger="profile_view"
+        )
+    assert recovered_joined is False
+    assert recovered_run_id != run_id
+
+    with engine.connect() as conn:
+        statuses = dict(
+            conn.execute(
+                text(
+                    "SELECT run_id, status FROM company_enrichment_jobs WHERE company_id = :id"
+                ),
+                {"id": company_id},
+            ).all()
+        )
+    assert statuses[run_id] == "failed"  # the never-started job is reclaimed, not lost
+    assert statuses[recovered_run_id] == "running"
+
+
 def test_a_live_job_within_its_lease_is_never_reclaimed(enrichment_db) -> None:
     """The flip side: reclaim_stale_job() must never touch a job whose
     lease has not actually expired -- a genuinely in-progress job must

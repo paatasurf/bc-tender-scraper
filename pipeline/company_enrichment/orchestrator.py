@@ -74,6 +74,30 @@ DEFAULT_PROVIDER_TIMEOUT_S = (
 # "success") if it finds itself reclaimed by the time it finishes, so a
 # lease-vs-latency race degrades to an honest "failed" result today, never
 # a silently wrong "success".
+#
+# Known limitation #2 (safety review, not fixed here -- explicitly no
+# durable queue added without separate agreement): api/internal.py's
+# route creates the company_enrichment_jobs row synchronously
+# (start_or_join_job()) THEN schedules run_cascade_for_job() via
+# FastAPI's BackgroundTasks, which only runs after the HTTP response is
+# sent, in the SAME process -- there is no persistence behind it. A
+# process killed (Railway restartPolicyType="ON_FAILURE", a real,
+# recurring event) between those two steps leaves the job 'running' with
+# a lease that was set once and never renewed, and
+# run_cascade_for_job() never runs for that run_id at all. This is
+# mechanically INDISTINGUISHABLE from "worker started then died
+# mid-cascade" (see reclaim_stale_job() above), so the same lease-expiry
+# reclaim already recovers it transparently the next time anyone
+# requests that company again -- see
+# test_process_restart_between_job_creation_and_background_task_execution
+# in tests/unit/test_company_enrichment_dedup.py. Residual, accepted gap:
+# a company nobody ever asks about again leaves its row 'running' forever
+# with no proactive cleanup (no standalone reaper exists yet for this
+# table, unlike pipeline/run_coordinator_postgres.py::reap_stale_run()
+# for the tender_data coordinator, PR #156) -- a data-hygiene/
+# observability gap, never a functional deadlock, since it can never
+# block a DIFFERENT company and self-heals on the next real request for
+# this one.
 
 _VALID_TRIGGERS = frozenset({"profile_view", "agent", "manual"})
 _TERMINAL_STATUSES = frozenset({"success", "failed", "partial_success"})
@@ -460,6 +484,50 @@ def _call_provider_with_timeout(
     that orphaned thread eventually returns (or raises) is simply
     discarded when it finishes.
 
+    KNOWN, ACCEPTED LIMITATION (safety review finding -- documented, not
+    "fixed", because it is not fixable in pure Python without cooperative
+    cancellation from the provider itself): each abandoned thread keeps
+    running, and keeps holding its own DB connection (via thread_session)
+    checked out from the pool, for as long as the underlying blocked call
+    takes to return -- which, for a provider whose OWN I/O call has no
+    timeout of its own, could be forever. Repeated timeouts against a
+    systematically hung provider therefore accumulate one abandoned
+    thread (and one held pool connection) per call, unboundedly, never
+    reclaimed by this function -- see
+    test_bugbot_finding_repeated_timeouts_accumulate_abandoned_threads_a_documented_limitation
+    for a reproduction of exactly this growth.
+
+    Second, more severe consequence (confirmed by direct measurement
+    during a later safety-review pass -- this is NOT "silently discarded
+    and forgotten" the way it may first read): concurrent.futures.
+    ThreadPoolExecutor workers are ordinary NON-daemon threads, and
+    Python registers an atexit hook (concurrent.futures.thread.
+    _python_exit) that JOINS every such worker thread -- including
+    ones from an executor this function already called shutdown(wait=
+    False) on -- before the interpreter is allowed to exit cleanly.
+    executor.shutdown(wait=False) only means THIS FUNCTION stops
+    waiting; it does not detach the thread from that atexit machinery.
+    A single abandoned thread from one timed-out call was measured to
+    delay a plain `python -c "..."` process's own exit by the full
+    duration of that thread's underlying block (script's own code
+    finished at 0.21s; the OS process did not actually terminate until
+    ~1.5s later, matching the hung call's sleep duration exactly) --
+    confirming this is a real, physical process-exit delay, not just a
+    resource-accounting concern. Since this whole mechanism runs inside
+    the SAME process as the API server (FastAPI BackgroundTasks, not a
+    separate worker process), a provider that hangs with no timeout of
+    its own can delay -- and in the worst case, indefinitely block --
+    that process's own graceful shutdown during a deploy/restart, until
+    Railway's own SIGKILL grace period forcibly ends it. This is the
+    strongest form of the same underlying requirement: EnrichmentProvider
+    implementations are REQUIRED to set their own network-level timeout
+    (e.g. `requests.get(url, timeout=N)`) rather than relying on this
+    function alone -- this function's timeout only stops the CALLER from
+    waiting past timeout_s, it can never force the underlying call to
+    actually stop, and an untimed provider call turns a bounded-latency
+    risk into both an unbounded resource leak AND a real deploy-shutdown
+    hazard for the whole process.
+
     Returns (result_or_None, tag) where tag is exactly one of
     "ok" | "error" | "timeout".
     """
@@ -560,6 +628,9 @@ def run_cascade_for_job(
             providers_attempted.append(f"{provider.name}:{tag}")
             if tag != "ok":
                 continue
+            assert (
+                result is not None
+            )  # _call_provider_with_timeout's own contract: tag=="ok" always pairs with a real result
             if result.matched and result.facts:
                 any_matched = True
                 facts_by_provider.setdefault(provider.name, []).extend(result.facts)
