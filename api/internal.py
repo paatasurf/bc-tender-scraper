@@ -12,11 +12,11 @@ from db.closing_at_sync import backfill_all_tender_closing_at
 from db.permit_source_status import backfill_permit_source_status
 from pipeline.internal_steps import (
     assert_import_allowed,
+    make_company_intelligence_worker,
     make_gated_import_worker,
     make_tender_scrape_worker,
     run_ai_scoring_step,
     run_arch_company_intelligence_step,
-    run_company_intelligence_step,
     run_import_contract_awards_step,
     run_odbus_import_step,
     run_orgbook_import_step,
@@ -630,11 +630,16 @@ def company_intelligence(
     body: InternalRunRequest | None = None,
 ) -> dict[str, Any]:
     _require_manual_pipeline()
+    # Resolved here (not left to _enqueue_step's own run_id-or-new_run_id()
+    # fallback) so the SAME value can be captured into the worker closure
+    # below and threaded through to ops_job_runs telemetry -- see
+    # pipeline/company_intelligence_telemetry.py's module docstring.
+    actual_run_id = (body.run_id if body else None) or new_run_id()
     return _enqueue_step(
         background_tasks,
         "company-intelligence",
-        run_company_intelligence_step,
-        body.run_id if body else None,
+        make_company_intelligence_worker(actual_run_id),
+        actual_run_id,
     )
 
 
