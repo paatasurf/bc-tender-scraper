@@ -92,6 +92,8 @@ __all__ = [
     "complete_import",
     "finish_run",
     "get_run_state",
+    "describe_active_run",
+    "reap_stale_run",
     "assert_import_not_before_scrape",
 ]
 
@@ -182,14 +184,16 @@ def _lease_expired(row: Mapping[str, Any]) -> bool:
     return _utc_now() >= expires
 
 
-def _reclaim_stale_values(row: Mapping[str, Any]) -> dict[str, Any]:
+def _reclaim_stale_values(
+    row: Mapping[str, Any], *, reclaimed_via: str = "begin_run"
+) -> dict[str, Any]:
     now = _utc_now()
     return {
         "status": "finished",
         "stale_reclaimed": True,
         "success": False,
         "error": (
-            f"stale run reclaimed after lease expiry "
+            f"stale run reclaimed via {reclaimed_via} after lease expiry "
             f"(lease_expires_at={_iso(row['lease_expires_at'])})"
         )[:4000],
         "phase": "finished",
@@ -409,7 +413,9 @@ def _mutate_locked_run(
             session.execute(
                 update(pipeline_coordinator_runs)
                 .where(pipeline_coordinator_runs.c.id == row["id"])
-                .values(**_reclaim_stale_values(row))
+                .values(
+                    **_reclaim_stale_values(row, reclaimed_via="late_worker_callback")
+                )
             )
             session.commit()
             raise PipelineOrderError(
@@ -630,6 +636,102 @@ def finish_run(run_id: str, *, success: bool, error: str = "") -> None:
             )
         )
         session.commit()
+    finally:
+        session.close()
+
+
+def describe_active_run() -> dict[str, Any] | None:
+    """Read-only companion to reap_stale_run(): report the current active
+    row for this scope (if any) and whether its lease has expired, without
+    taking the row lock or mutating anything. For dry-run/reporting
+    callers (e.g. scripts/reap_stale_tender_data_run.py --dry-run) that
+    want to show what a reap would do without doing it."""
+    session = _get_checked_session()
+    try:
+        row = (
+            session.execute(
+                select(pipeline_coordinator_runs).where(
+                    pipeline_coordinator_runs.c.pipeline_scope == _SCOPE,
+                    pipeline_coordinator_runs.c.status == "active",
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return {
+            "run_id": row["run_id"],
+            "phase": row["phase"],
+            "lease_expires_at": _iso(row["lease_expires_at"]),
+            "lease_expired": _lease_expired(row),
+        }
+    finally:
+        session.close()
+
+
+def reap_stale_run() -> dict[str, Any]:
+    """Proactively reclaim the active tender_data run if -- and only if --
+    its lease has expired, without waiting for some future begin_run() or
+    late worker callback to trigger the reclaim as a side effect (the only
+    two paths that did this before: _begin_or_resume and
+    _mutate_locked_run). Closes the gap pipeline/ops_read_model.py's
+    get_coordinator_summary() already surfaces as `expired_lease_run`: that
+    function only *detects* a status='active' row past its lease, it never
+    acts on it. This is the standalone action.
+
+    Never reclaims a live run: the sole criterion is lease_expires_at, the
+    same heartbeat every mutating coordinator call already renews, so a run
+    still making progress can never be reclaimed here regardless of how
+    long it has been running or how little of the tender_scrape/import
+    lifecycle it has completed so far.
+
+    Idempotent and concurrency-safe by construction, not by a separate
+    lock: it reuses _active_row_for_update's SELECT ... FOR UPDATE, the
+    same row lock _begin_or_resume relies on. Two concurrent callers
+    serialize on that lock; whichever commits first flips status away
+    from 'active', so the second sees no matching row at all once the
+    predicate is re-evaluated under READ COMMITTED and returns
+    reason="no_active_run" -- never a second reclaim, never an error. A
+    later, separate call after a successful reclaim gets the same
+    no_active_run result, making repeated invocation safe.
+
+    Returns a dict (not a bool) so a CLI/ops caller can report exactly why
+    nothing happened, not just that nothing happened:
+      - {"reclaimed": False, "reason": "no_active_run", "run_id": None}
+      - {"reclaimed": False, "reason": "lease_still_valid", "run_id": ...,
+         "lease_expires_at": ...}
+      - {"reclaimed": True, "reason": "lease_expired", "run_id": ...,
+         "lease_expires_at": ...}
+    """
+    session = _get_checked_session()
+    try:
+        active = _active_row_for_update(session)
+        if active is None:
+            session.commit()
+            return {"reclaimed": False, "reason": "no_active_run", "run_id": None}
+
+        if not _lease_expired(active):
+            session.commit()
+            return {
+                "reclaimed": False,
+                "reason": "lease_still_valid",
+                "run_id": active["run_id"],
+                "lease_expires_at": _iso(active["lease_expires_at"]),
+            }
+
+        session.execute(
+            update(pipeline_coordinator_runs)
+            .where(pipeline_coordinator_runs.c.id == active["id"])
+            .values(**_reclaim_stale_values(active, reclaimed_via="stale_run_reaper"))
+        )
+        session.commit()
+        return {
+            "reclaimed": True,
+            "reason": "lease_expired",
+            "run_id": active["run_id"],
+            "lease_expires_at": _iso(active["lease_expires_at"]),
+        }
     finally:
         session.close()
 
