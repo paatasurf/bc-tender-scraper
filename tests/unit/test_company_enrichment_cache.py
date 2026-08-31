@@ -50,9 +50,17 @@ def enrichment_db():
 
     def _reset() -> None:
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM company_enrichment_fields WHERE company_id = :id"), {"id": company_id})
-            conn.execute(text("DELETE FROM company_enrichment_jobs WHERE company_id = :id"), {"id": company_id})
-            conn.execute(text("DELETE FROM companies WHERE id = :id"), {"id": company_id})
+            conn.execute(
+                text("DELETE FROM company_enrichment_fields WHERE company_id = :id"),
+                {"id": company_id},
+            )
+            conn.execute(
+                text("DELETE FROM company_enrichment_jobs WHERE company_id = :id"),
+                {"id": company_id},
+            )
+            conn.execute(
+                text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
+            )
 
     try:
         yield engine, company_id

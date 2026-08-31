@@ -198,7 +198,9 @@ def _index_conforms(expected: _ExpectedIndex, actual: dict[str, Any] | None) -> 
     return _normalize_predicate(actual.get("predicate")) == expected.predicate
 
 
-def _fk_exists(conn: Any, *, table: str, local_column: str, ref_table: str, ref_column: str) -> bool:
+def _fk_exists(
+    conn: Any, *, table: str, local_column: str, ref_table: str, ref_column: str
+) -> bool:
     """True iff `table.local_column` has a FOREIGN KEY to `ref_table.ref_column`.
 
     Bugbot finding fix: the original query joined table_constraints only
@@ -229,7 +231,12 @@ def _fk_exists(conn: Any, *, table: str, local_column: str, ref_table: str, ref_
               AND ccu.table_name = :ref_table
               AND ccu.column_name = :ref_column
             """),
-        {"table": table, "local_column": local_column, "ref_table": ref_table, "ref_column": ref_column},
+        {
+            "table": table,
+            "local_column": local_column,
+            "ref_table": ref_table,
+            "ref_column": ref_column,
+        },
     ).first()
     return row is not None
 
@@ -344,7 +351,9 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
             ref_table="companies",
             ref_column="id",
         ):
-            violations.append(f"{FIELDS_TABLE}.company_id -> companies.id foreign key is missing")
+            violations.append(
+                f"{FIELDS_TABLE}.company_id -> companies.id foreign key is missing"
+            )
         if not _fk_exists(
             session_or_conn,
             table=JOBS_TABLE,
@@ -352,7 +361,9 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
             ref_table="companies",
             ref_column="id",
         ):
-            violations.append(f"{JOBS_TABLE}.company_id -> companies.id foreign key is missing")
+            violations.append(
+                f"{JOBS_TABLE}.company_id -> companies.id foreign key is missing"
+            )
         for table, name in _EXPECTED_CHECK_CONSTRAINTS:
             if not _check_constraint_exists(session_or_conn, table=table, name=name):
                 violations.append(f"{name} check constraint is missing on {table}")

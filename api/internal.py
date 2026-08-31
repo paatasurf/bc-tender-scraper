@@ -939,7 +939,9 @@ def enrichment_company_run(
     try:
         company = session.get(Company, company_id)
         if company is None:
-            raise HTTPException(status_code=404, detail=f"Company {company_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Company {company_id} not found"
+            )
         company_name = company.name
 
         cached = check_cache(session, company_id)

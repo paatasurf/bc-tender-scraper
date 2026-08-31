@@ -17,7 +17,9 @@ from pipeline.company_enrichment.provider import EnrichmentRequest, ProviderResu
 
 
 def _request(company_id: int = 42) -> EnrichmentRequest:
-    return EnrichmentRequest(company_id=company_id, company_name="Acme Construction Ltd")
+    return EnrichmentRequest(
+        company_id=company_id, company_name="Acme Construction Ltd"
+    )
 
 
 def test_lookup_returns_unmatched_with_no_facts_when_hub_finds_no_match():
@@ -38,7 +40,9 @@ def test_lookup_reshapes_hub_match_into_provider_result_with_facts():
         "pipeline.company_enrichment.orgbook_adapter.hub.match_company",
         return_value={"source": "orgbook", "confidence": 0.91, "match_tier": "exact"},
     ):
-        with patch("pipeline.company_enrichment.orgbook_adapter.hub.get_provider") as get_provider_mock:
+        with patch(
+            "pipeline.company_enrichment.orgbook_adapter.hub.get_provider"
+        ) as get_provider_mock:
             get_provider_mock.return_value.build_profile.return_value = {
                 "legal_name": "Acme Construction Ltd.",
                 "business_number": "BC1234567",
@@ -69,7 +73,9 @@ def test_lookup_never_invents_a_fact_for_a_field_the_profile_does_not_have():
         "pipeline.company_enrichment.orgbook_adapter.hub.match_company",
         return_value={"confidence": 0.8},
     ):
-        with patch("pipeline.company_enrichment.orgbook_adapter.hub.get_provider") as get_provider_mock:
+        with patch(
+            "pipeline.company_enrichment.orgbook_adapter.hub.get_provider"
+        ) as get_provider_mock:
             get_provider_mock.return_value.build_profile.return_value = {
                 "legal_name": "Acme Construction Ltd.",
                 "city": "",
@@ -77,7 +83,9 @@ def test_lookup_never_invents_a_fact_for_a_field_the_profile_does_not_have():
             result = OrgBookAdapter().lookup(session, _request())
 
     field_names = {f.field_name for f in result.facts}
-    assert field_names == {"legal_name"}  # city="" (falsy) and business_number/province absent
+    assert field_names == {
+        "legal_name"
+    }  # city="" (falsy) and business_number/province absent
 
 
 def test_lookup_treats_a_matched_company_with_no_profile_as_matched_no_facts():
@@ -86,7 +94,9 @@ def test_lookup_treats_a_matched_company_with_no_profile_as_matched_no_facts():
         "pipeline.company_enrichment.orgbook_adapter.hub.match_company",
         return_value={"confidence": 0.7},
     ):
-        with patch("pipeline.company_enrichment.orgbook_adapter.hub.get_provider") as get_provider_mock:
+        with patch(
+            "pipeline.company_enrichment.orgbook_adapter.hub.get_provider"
+        ) as get_provider_mock:
             get_provider_mock.return_value.build_profile.return_value = None
             result = OrgBookAdapter().lookup(session, _request())
 

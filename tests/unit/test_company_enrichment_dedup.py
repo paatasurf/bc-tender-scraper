@@ -49,9 +49,17 @@ def enrichment_db():
 
     def _reset() -> None:
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM company_enrichment_fields WHERE company_id = :id"), {"id": company_id})
-            conn.execute(text("DELETE FROM company_enrichment_jobs WHERE company_id = :id"), {"id": company_id})
-            conn.execute(text("DELETE FROM companies WHERE id = :id"), {"id": company_id})
+            conn.execute(
+                text("DELETE FROM company_enrichment_fields WHERE company_id = :id"),
+                {"id": company_id},
+            )
+            conn.execute(
+                text("DELETE FROM company_enrichment_jobs WHERE company_id = :id"),
+                {"id": company_id},
+            )
+            conn.execute(
+                text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
+            )
 
     try:
         yield engine, company_id
@@ -90,10 +98,14 @@ def test_second_concurrent_request_for_the_same_company_joins_not_duplicates(
     (company_id) key instead."""
     engine, company_id = enrichment_db
     with Session(engine) as first_session:
-        first_run_id, first_joined = start_or_join_job(first_session, company_id, trigger="profile_view")
+        first_run_id, first_joined = start_or_join_job(
+            first_session, company_id, trigger="profile_view"
+        )
 
     with Session(engine) as second_session:
-        second_run_id, second_joined = start_or_join_job(second_session, company_id, trigger="agent")
+        second_run_id, second_joined = start_or_join_job(
+            second_session, company_id, trigger="agent"
+        )
 
     assert first_joined is False
     assert second_joined is True
@@ -101,7 +113,9 @@ def test_second_concurrent_request_for_the_same_company_joins_not_duplicates(
     assert _job_count(engine, company_id) == 1
 
 
-def test_a_third_request_after_the_job_finishes_starts_a_fresh_job(enrichment_db) -> None:
+def test_a_third_request_after_the_job_finishes_starts_a_fresh_job(
+    enrichment_db,
+) -> None:
     """Once the in-flight job is no longer 'running', dedup must not
     permanently block that company -- a later request starts a new job."""
     from sqlalchemy import update
@@ -161,7 +175,9 @@ def test_a_dead_worker_with_an_expired_lease_is_reclaimed_not_joined_forever(
         session.commit()
 
     with Session(engine) as session:
-        new_run_id, joined = start_or_join_job(session, company_id, trigger="profile_view")
+        new_run_id, joined = start_or_join_job(
+            session, company_id, trigger="profile_view"
+        )
 
     assert new_run_id != dead_run_id
     assert joined is False  # a genuinely NEW job, not a join
@@ -169,7 +185,9 @@ def test_a_dead_worker_with_an_expired_lease_is_reclaimed_not_joined_forever(
     with engine.connect() as conn:
         statuses = dict(
             conn.execute(
-                text("SELECT run_id, status FROM company_enrichment_jobs WHERE company_id = :id"),
+                text(
+                    "SELECT run_id, status FROM company_enrichment_jobs WHERE company_id = :id"
+                ),
                 {"id": company_id},
             ).all()
         )
@@ -213,7 +231,9 @@ def test_two_truly_concurrent_first_requests_never_create_two_running_jobs(
         barrier.wait(timeout=5)
         try:
             with Session(engine) as session:
-                results[key] = start_or_join_job(session, company_id, trigger="profile_view")
+                results[key] = start_or_join_job(
+                    session, company_id, trigger="profile_view"
+                )
         except Exception as exc:  # pragma: no cover - failure diagnostics
             results[key] = f"error:{exc}"
 
@@ -224,12 +244,18 @@ def test_two_truly_concurrent_first_requests_never_create_two_running_jobs(
         t.join(timeout=10)
 
     outcome_a, outcome_b = results["a"], results["b"]
-    assert isinstance(outcome_a, tuple) and isinstance(outcome_b, tuple), (outcome_a, outcome_b)
+    assert isinstance(outcome_a, tuple) and isinstance(outcome_b, tuple), (
+        outcome_a,
+        outcome_b,
+    )
     run_id_a, joined_a = outcome_a
     run_id_b, joined_b = outcome_b
 
     assert run_id_a == run_id_b  # both converge on the SAME job
-    assert sorted([joined_a, joined_b]) == [False, True]  # exactly one starter, one joiner
+    assert sorted([joined_a, joined_b]) == [
+        False,
+        True,
+    ]  # exactly one starter, one joiner
     assert _job_count(engine, company_id) == 1  # never two running jobs
 
 
@@ -269,7 +295,9 @@ def test_two_truly_concurrent_reclaim_attempts_produce_exactly_one_fresh_job(
         barrier.wait(timeout=5)
         try:
             with Session(engine) as session:
-                results[key] = start_or_join_job(session, company_id, trigger="profile_view")
+                results[key] = start_or_join_job(
+                    session, company_id, trigger="profile_view"
+                )
         except Exception as exc:  # pragma: no cover - failure diagnostics
             results[key] = f"error:{exc}"
 
@@ -280,7 +308,10 @@ def test_two_truly_concurrent_reclaim_attempts_produce_exactly_one_fresh_job(
         t.join(timeout=10)
 
     outcome_a, outcome_b = results["a"], results["b"]
-    assert isinstance(outcome_a, tuple) and isinstance(outcome_b, tuple), (outcome_a, outcome_b)
+    assert isinstance(outcome_a, tuple) and isinstance(outcome_b, tuple), (
+        outcome_a,
+        outcome_b,
+    )
     run_id_a, joined_a = outcome_a
     run_id_b, joined_b = outcome_b
 
@@ -291,7 +322,9 @@ def test_two_truly_concurrent_reclaim_attempts_produce_exactly_one_fresh_job(
     with engine.connect() as conn:
         statuses = dict(
             conn.execute(
-                text("SELECT run_id, status FROM company_enrichment_jobs WHERE company_id = :id"),
+                text(
+                    "SELECT run_id, status FROM company_enrichment_jobs WHERE company_id = :id"
+                ),
                 {"id": company_id},
             ).all()
         )
@@ -311,7 +344,9 @@ def test_repeated_join_attempts_all_return_the_same_run_id(enrichment_db) -> Non
     joined_run_ids = set()
     for _ in range(5):
         with Session(engine) as session:
-            run_id, joined = start_or_join_job(session, company_id, trigger="profile_view")
+            run_id, joined = start_or_join_job(
+                session, company_id, trigger="profile_view"
+            )
             assert joined is True
             joined_run_ids.add(run_id)
 

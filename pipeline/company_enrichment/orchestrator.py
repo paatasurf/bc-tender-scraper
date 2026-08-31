@@ -42,15 +42,24 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from db.company_enrichment_tables import company_enrichment_fields, company_enrichment_jobs
+from db.company_enrichment_tables import (
+    company_enrichment_fields,
+    company_enrichment_jobs,
+)
 from pipeline.company_enrichment.orgbook_adapter import OrgBookAdapter
-from pipeline.company_enrichment.provider import EnrichmentProvider, EnrichmentRequest, ProviderResult
+from pipeline.company_enrichment.provider import (
+    EnrichmentProvider,
+    EnrichmentRequest,
+    ProviderResult,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_STALE_DAYS = 30
 DEFAULT_LEASE_TTL = timedelta(minutes=10)
-DEFAULT_PROVIDER_TIMEOUT_S = 90  # RFC S10 ENRICHMENT_PROVIDER_TIMEOUT_S, revised per benchmark
+DEFAULT_PROVIDER_TIMEOUT_S = (
+    90  # RFC S10 ENRICHMENT_PROVIDER_TIMEOUT_S, revised per benchmark
+)
 
 # Known limitation (pre-PR review, not fixed in this phase): no heartbeat
 # renews lease_expires_at while a cascade is actually running -- a job's
@@ -86,14 +95,18 @@ def _default_providers() -> tuple[EnrichmentProvider, ...]:
 def get_current_fields(session: Session, company_id: int) -> list[dict[str, Any]]:
     """Current (non-superseded) company_enrichment_fields rows for one
     company, most-recently-fetched first."""
-    rows = session.execute(
-        select(company_enrichment_fields)
-        .where(
-            company_enrichment_fields.c.company_id == company_id,
-            company_enrichment_fields.c.superseded_at.is_(None),
+    rows = (
+        session.execute(
+            select(company_enrichment_fields)
+            .where(
+                company_enrichment_fields.c.company_id == company_id,
+                company_enrichment_fields.c.superseded_at.is_(None),
+            )
+            .order_by(company_enrichment_fields.c.fetched_at.desc())
         )
-        .order_by(company_enrichment_fields.c.fetched_at.desc())
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]
 
 
@@ -135,12 +148,16 @@ def check_cache(
 
 
 def find_active_job(session: Session, company_id: int) -> dict[str, Any] | None:
-    row = session.execute(
-        select(company_enrichment_jobs).where(
-            company_enrichment_jobs.c.company_id == company_id,
-            company_enrichment_jobs.c.status == "running",
+    row = (
+        session.execute(
+            select(company_enrichment_jobs).where(
+                company_enrichment_jobs.c.company_id == company_id,
+                company_enrichment_jobs.c.status == "running",
+            )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     return dict(row) if row is not None else None
 
 
@@ -208,7 +225,9 @@ def start_or_join_job(
     Returns (run_id, joined_existing).
     """
     if trigger not in _VALID_TRIGGERS:
-        raise ValueError(f"trigger must be one of {sorted(_VALID_TRIGGERS)}, got {trigger!r}")
+        raise ValueError(
+            f"trigger must be one of {sorted(_VALID_TRIGGERS)}, got {trigger!r}"
+        )
 
     run_id = str(uuid.uuid4())
     now = _utc_now()
@@ -224,7 +243,10 @@ def start_or_join_job(
             finished_at=None,
             lease_expires_at=now + lease_ttl,
         )
-        .on_conflict_do_nothing(index_elements=["company_id"], index_where=company_enrichment_jobs.c.status == "running")
+        .on_conflict_do_nothing(
+            index_elements=["company_id"],
+            index_where=company_enrichment_jobs.c.status == "running",
+        )
         .returning(company_enrichment_jobs.c.run_id)
     )
     inserted_run_id = session.execute(stmt).scalar_one_or_none()
@@ -237,7 +259,9 @@ def start_or_join_job(
     if existing is None:
         # Extremely narrow race: the in-flight job finished between our
         # failed INSERT and this SELECT. Safe to just start fresh.
-        return start_or_join_job(session, company_id, trigger=trigger, lease_ttl=lease_ttl)
+        return start_or_join_job(
+            session, company_id, trigger=trigger, lease_ttl=lease_ttl
+        )
 
     if existing["lease_expires_at"] <= _utc_now():
         # The blocking job is not live -- its worker died (crash, OOM,
@@ -246,7 +270,9 @@ def start_or_join_job(
         # report an outcome (see reclaim_stale_job()'s docstring for the
         # exact deadlock this prevents), then retry as a fresh start.
         reclaim_stale_job(session, existing["run_id"])
-        return start_or_join_job(session, company_id, trigger=trigger, lease_ttl=lease_ttl)
+        return start_or_join_job(
+            session, company_id, trigger=trigger, lease_ttl=lease_ttl
+        )
 
     return existing["run_id"], True
 
@@ -342,10 +368,15 @@ def _finish_job(session: Session, run_id: str, *, status: str) -> bool:
     performed the transition, so the caller can report the run's REAL
     persisted status rather than assume its own requested status won."""
     if status not in _TERMINAL_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_TERMINAL_STATUSES)}, got {status!r}")
+        raise ValueError(
+            f"status must be one of {sorted(_TERMINAL_STATUSES)}, got {status!r}"
+        )
     result = session.execute(
         update(company_enrichment_jobs)
-        .where(company_enrichment_jobs.c.run_id == run_id, company_enrichment_jobs.c.status == "running")
+        .where(
+            company_enrichment_jobs.c.run_id == run_id,
+            company_enrichment_jobs.c.status == "running",
+        )
         .values(status=status, finished_at=_utc_now())
     )
     session.commit()
@@ -391,7 +422,11 @@ def _resolve_cascade_status(providers_attempted: list[str]) -> str:
     anything.
     """
     ok_count = sum(1 for entry in providers_attempted if entry.endswith(":ok"))
-    bad_count = sum(1 for entry in providers_attempted if entry.endswith(":error") or entry.endswith(":timeout"))
+    bad_count = sum(
+        1
+        for entry in providers_attempted
+        if entry.endswith(":error") or entry.endswith(":timeout")
+    )
     if bad_count == 0:
         return "success"
     if ok_count > 0:
@@ -534,10 +569,14 @@ def run_cascade_for_job(
         written: list[str] = []
         skipped_verified: list[str] = []
         for provider_name, facts in facts_by_provider.items():
-            outcome = write_enrichment_facts(session, company_id, facts, source=provider_name, run_id=run_id)
+            outcome = write_enrichment_facts(
+                session, company_id, facts, source=provider_name, run_id=run_id
+            )
             written.extend(outcome.written)
             skipped_verified.extend(outcome.skipped_verified)
-        write_outcome = WriteOutcome(written=tuple(written), skipped_verified=tuple(skipped_verified))
+        write_outcome = WriteOutcome(
+            written=tuple(written), skipped_verified=tuple(skipped_verified)
+        )
 
         session.execute(
             update(company_enrichment_jobs)
@@ -559,7 +598,9 @@ def run_cascade_for_job(
             # merely wished for -- a caller must never be told "success" for
             # a job the row itself disagrees with.
             actual_status = session.execute(
-                select(company_enrichment_jobs.c.status).where(company_enrichment_jobs.c.run_id == run_id)
+                select(company_enrichment_jobs.c.status).where(
+                    company_enrichment_jobs.c.run_id == run_id
+                )
             ).scalar_one()
 
         return {

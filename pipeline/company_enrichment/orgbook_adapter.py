@@ -44,17 +44,23 @@ class OrgBookAdapter:
     def lookup(self, session: Session, request: EnrichmentRequest) -> ProviderResult:
         try:
             match = hub.match_company(session, request.company_id, source="orgbook")
-        except Exception as exc:  # noqa: BLE001 -- provider errors are isolated per RFC S7 step 5
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 -- provider errors are isolated per RFC S7 step 5
             return ProviderResult(provider=self.name, matched=False, error=str(exc))
 
         if match is None:
             return ProviderResult(provider=self.name, matched=False)
 
         confidence = match.get("confidence")
-        profile = hub.get_provider("orgbook").build_profile(session, request.company_id) or {}
+        profile = (
+            hub.get_provider("orgbook").build_profile(session, request.company_id) or {}
+        )
 
         facts = tuple(
-            ProviderFact(field_name=field_name, value=profile[field_name], confidence=confidence)
+            ProviderFact(
+                field_name=field_name, value=profile[field_name], confidence=confidence
+            )
             for field_name in _PROFILE_FACT_FIELDS
             if profile.get(field_name)
         )

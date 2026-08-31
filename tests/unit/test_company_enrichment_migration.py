@@ -78,7 +78,9 @@ def test_fresh_postgres_full_migration_lifecycle(clean_engine) -> None:
         assert r.status == ApplyReadinessStatus.NOT_APPLIED
 
         exists = conn.execute(
-            text("SELECT to_regclass('company_enrichment_fields'), to_regclass('company_enrichment_jobs')")
+            text(
+                "SELECT to_regclass('company_enrichment_fields'), to_regclass('company_enrichment_jobs')"
+            )
         ).first()
         assert exists == (None, None)
 
@@ -92,11 +94,31 @@ def test_fk_exists_confirms_the_real_company_id_foreign_key(clean_engine) -> Non
             conn.execute(text(stmt))
 
     with engine.connect() as conn:
-        assert _fk_exists(conn, table="company_enrichment_fields", local_column="company_id", ref_table="companies", ref_column="id") is True
-        assert _fk_exists(conn, table="company_enrichment_jobs", local_column="company_id", ref_table="companies", ref_column="id") is True
+        assert (
+            _fk_exists(
+                conn,
+                table="company_enrichment_fields",
+                local_column="company_id",
+                ref_table="companies",
+                ref_column="id",
+            )
+            is True
+        )
+        assert (
+            _fk_exists(
+                conn,
+                table="company_enrichment_jobs",
+                local_column="company_id",
+                ref_table="companies",
+                ref_column="id",
+            )
+            is True
+        )
 
 
-def test_fk_exists_rejects_a_foreign_key_on_the_wrong_local_column(clean_engine) -> None:
+def test_fk_exists_rejects_a_foreign_key_on_the_wrong_local_column(
+    clean_engine,
+) -> None:
     """Bugbot finding #5 regression: a table where a DIFFERENT column
     (not company_id) carries the FK to companies.id must NOT be reported
     as "company_id has a foreign key to companies.id". The pre-fix query
@@ -124,10 +146,30 @@ def test_fk_exists_rejects_a_foreign_key_on_the_wrong_local_column(clean_engine)
     try:
         with engine.connect() as conn:
             # The column that actually has the FK is owner_company_id, not company_id.
-            assert _fk_exists(conn, table="fk_check_scratch", local_column="owner_company_id", ref_table="companies", ref_column="id") is True
-            assert _fk_exists(conn, table="fk_check_scratch", local_column="company_id", ref_table="companies", ref_column="id") is False
+            assert (
+                _fk_exists(
+                    conn,
+                    table="fk_check_scratch",
+                    local_column="owner_company_id",
+                    ref_table="companies",
+                    ref_column="id",
+                )
+                is True
+            )
+            assert (
+                _fk_exists(
+                    conn,
+                    table="fk_check_scratch",
+                    local_column="company_id",
+                    ref_table="companies",
+                    ref_column="id",
+                )
+                is False
+            )
     finally:
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE fk_check_scratch"))
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM companies WHERE id = :id"), {"id": company_id})
+            conn.execute(
+                text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
+            )

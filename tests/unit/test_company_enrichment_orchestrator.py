@@ -35,7 +35,11 @@ from pipeline.company_enrichment.orchestrator import (
     start_or_join_job,
     write_enrichment_facts,
 )
-from pipeline.company_enrichment.provider import EnrichmentRequest, ProviderFact, ProviderResult
+from pipeline.company_enrichment.provider import (
+    EnrichmentRequest,
+    ProviderFact,
+    ProviderResult,
+)
 from tests.db_test_safety import require_local_test_database
 
 
@@ -44,7 +48,10 @@ from tests.db_test_safety import require_local_test_database
     [
         ([], "success"),
         (["orgbook:ok"], "success"),
-        (["orgbook:ok", "website:ok"], "success"),  # clean, even with zero matches -- golden case #9
+        (
+            ["orgbook:ok", "website:ok"],
+            "success",
+        ),  # clean, even with zero matches -- golden case #9
         (["orgbook:error"], "failed"),
         (["orgbook:timeout"], "failed"),
         (["orgbook:error", "website:timeout"], "failed"),  # every attempt broke
@@ -61,7 +68,13 @@ def test_resolve_cascade_status_truth_table(providers_attempted, expected) -> No
 
 
 class FakeProvider:
-    def __init__(self, name: str, result: ProviderResult | None = None, raises: Exception | None = None, sleep_s: float = 0.0):
+    def __init__(
+        self,
+        name: str,
+        result: ProviderResult | None = None,
+        raises: Exception | None = None,
+        sleep_s: float = 0.0,
+    ):
         self.name = name
         self.is_fact_source = True
         self._result = result
@@ -98,9 +111,17 @@ def enrichment_db():
 
     def _reset() -> None:
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM company_enrichment_fields WHERE company_id = :id"), {"id": company_id})
-            conn.execute(text("DELETE FROM company_enrichment_jobs WHERE company_id = :id"), {"id": company_id})
-            conn.execute(text("DELETE FROM companies WHERE id = :id"), {"id": company_id})
+            conn.execute(
+                text("DELETE FROM company_enrichment_fields WHERE company_id = :id"),
+                {"id": company_id},
+            )
+            conn.execute(
+                text("DELETE FROM company_enrichment_jobs WHERE company_id = :id"),
+                {"id": company_id},
+            )
+            conn.execute(
+                text("DELETE FROM companies WHERE id = :id"), {"id": company_id}
+            )
 
     try:
         yield engine, company_id
@@ -117,15 +138,23 @@ def _job_status(engine, run_id: str) -> str:
         ).scalar_one()
 
 
-def test_no_match_from_any_provider_is_a_valid_success_not_an_error(enrichment_db) -> None:
+def test_no_match_from_any_provider_is_a_valid_success_not_an_error(
+    enrichment_db,
+) -> None:
     engine, company_id = enrichment_db
     with Session(engine) as session:
         run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
 
-    provider = FakeProvider("stub", result=ProviderResult(provider="stub", matched=False))
+    provider = FakeProvider(
+        "stub", result=ProviderResult(provider="stub", matched=False)
+    )
     with Session(engine) as session:
         result = run_cascade_for_job(
-            session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(provider,)
+            session,
+            run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(provider,),
         )
 
     assert result["status"] == "success"
@@ -151,12 +180,22 @@ def test_a_raising_provider_is_isolated_and_the_cascade_continues_as_partial_suc
         result=ProviderResult(
             provider="healthy",
             matched=True,
-            facts=(ProviderFact(field_name="legal_name", value="Orchestrator Test Co Ltd.", confidence=0.8),),
+            facts=(
+                ProviderFact(
+                    field_name="legal_name",
+                    value="Orchestrator Test Co Ltd.",
+                    confidence=0.8,
+                ),
+            ),
         ),
     )
     with Session(engine) as session:
         result = run_cascade_for_job(
-            session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(broken, healthy)
+            session,
+            run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(broken, healthy),
         )
 
     assert result["status"] == "partial_success"
@@ -185,7 +224,13 @@ def test_two_successful_providers_each_write_their_own_source_not_misattributed(
         result=ProviderResult(
             provider="orgbook",
             matched=True,
-            facts=(ProviderFact(field_name="legal_name", value="Orchestrator Test Co Ltd.", confidence=0.9),),
+            facts=(
+                ProviderFact(
+                    field_name="legal_name",
+                    value="Orchestrator Test Co Ltd.",
+                    confidence=0.9,
+                ),
+            ),
         ),
     )
     second = FakeProvider(
@@ -193,24 +238,36 @@ def test_two_successful_providers_each_write_their_own_source_not_misattributed(
         result=ProviderResult(
             provider="website",
             matched=True,
-            facts=(ProviderFact(field_name="phone", value="+1 604 555 0100", confidence=0.7),),
+            facts=(
+                ProviderFact(
+                    field_name="phone", value="+1 604 555 0100", confidence=0.7
+                ),
+            ),
         ),
     )
     with Session(engine) as session:
         result = run_cascade_for_job(
-            session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(first, second)
+            session,
+            run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(first, second),
         )
 
     assert set(result["fields_written"]) == {"legal_name", "phone"}
 
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT field_name, source FROM company_enrichment_fields "
-                "WHERE company_id = :id AND superseded_at IS NULL"
-            ),
-            {"id": company_id},
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT field_name, source FROM company_enrichment_fields "
+                    "WHERE company_id = :id AND superseded_at IS NULL"
+                ),
+                {"id": company_id},
+            )
+            .mappings()
+            .all()
+        )
     source_by_field = {r["field_name"]: r["source"] for r in rows}
     assert source_by_field == {"legal_name": "orgbook", "phone": "website"}
 
@@ -245,16 +302,26 @@ def test_two_providers_disagreeing_on_the_same_field_both_coexist_not_overwritte
         ),
     )
     with Session(engine) as session:
-        run_cascade_for_job(session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(orgbook, website))
+        run_cascade_for_job(
+            session,
+            run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(orgbook, website),
+        )
 
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT source, value FROM company_enrichment_fields "
-                "WHERE company_id = :id AND field_name = 'city' AND superseded_at IS NULL"
-            ),
-            {"id": company_id},
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT source, value FROM company_enrichment_fields "
+                    "WHERE company_id = :id AND field_name = 'city' AND superseded_at IS NULL"
+                ),
+                {"id": company_id},
+            )
+            .mappings()
+            .all()
+        )
     by_source = {r["source"]: r["value"] for r in rows}
     assert by_source == {"orgbook": "Vancouver", "website": "Burnaby"}
 
@@ -277,12 +344,20 @@ def test_a_slow_provider_past_the_timeout_is_marked_partial_success_not_hidden_a
 
     slow = FakeProvider(
         "slow",
-        result=ProviderResult(provider="slow", matched=True, facts=(ProviderFact("legal_name", "Wrong Co", 0.5),)),
+        result=ProviderResult(
+            provider="slow",
+            matched=True,
+            facts=(ProviderFact("legal_name", "Wrong Co", 0.5),),
+        ),
         sleep_s=0.15,
     )
     fast = FakeProvider(
         "fast",
-        result=ProviderResult(provider="fast", matched=True, facts=(ProviderFact("business_number", "BC7654321", 0.9),)),
+        result=ProviderResult(
+            provider="fast",
+            matched=True,
+            facts=(ProviderFact("business_number", "BC7654321", 0.9),),
+        ),
     )
     with Session(engine) as session:
         result = run_cascade_for_job(
@@ -308,7 +383,9 @@ def test_a_slow_provider_past_the_timeout_is_marked_partial_success_not_hidden_a
     assert _job_status(engine, run_id) == "partial_success"
 
 
-def test_every_provider_erroring_is_reported_failed_not_partial_success(enrichment_db) -> None:
+def test_every_provider_erroring_is_reported_failed_not_partial_success(
+    enrichment_db,
+) -> None:
     """The third branch of the semantic-status split: if EVERY attempted
     provider errors/times out (zero clean successes), the job is
     "failed" -- categorically different from a clean no-match (golden
@@ -323,7 +400,11 @@ def test_every_provider_erroring_is_reported_failed_not_partial_success(enrichme
     broken_two = FakeProvider("broken_two", raises=RuntimeError("also boom"))
     with Session(engine) as session:
         result = run_cascade_for_job(
-            session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(broken_one, broken_two)
+            session,
+            run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(broken_one, broken_two),
         )
 
     assert result["status"] == "failed"
@@ -353,33 +434,50 @@ def test_a_finish_after_reclaim_reports_the_real_persisted_status_not_success(
     engine, company_id = enrichment_db
     with Session(engine) as session:
         slow_run_id, _ = start_or_join_job(
-            session, company_id, trigger="profile_view", lease_ttl=timedelta(milliseconds=50)
+            session,
+            company_id,
+            trigger="profile_view",
+            lease_ttl=timedelta(milliseconds=50),
         )
     time.sleep(0.1)  # the tiny lease genuinely expires
 
     with Session(engine) as session:
-        new_run_id, joined = start_or_join_job(session, company_id, trigger="profile_view")
+        new_run_id, joined = start_or_join_job(
+            session, company_id, trigger="profile_view"
+        )
     assert joined is False
     assert new_run_id != slow_run_id  # reclaimed, not joined
 
     late_provider = FakeProvider(
-        "stub", result=ProviderResult(provider="stub", matched=True, facts=(ProviderFact("legal_name", "Late Value", 0.9),))
+        "stub",
+        result=ProviderResult(
+            provider="stub",
+            matched=True,
+            facts=(ProviderFact("legal_name", "Late Value", 0.9),),
+        ),
     )
     with Session(engine) as session:
         late_result = run_cascade_for_job(
-            session, slow_run_id, company_id, "Orchestrator Test Co Ltd", providers=(late_provider,)
+            session,
+            slow_run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(late_provider,),
         )
 
     assert late_result["status"] == "failed"  # NOT "success" -- matches the DB
 
     with engine.connect() as conn:
         db_status = conn.execute(
-            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"), {"r": slow_run_id}
+            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"),
+            {"r": slow_run_id},
         ).scalar_one()
     assert db_status == "failed"  # never resurrected to success
 
 
-def test_verified_field_is_never_overwritten_by_an_automated_result(enrichment_db) -> None:
+def test_verified_field_is_never_overwritten_by_an_automated_result(
+    enrichment_db,
+) -> None:
     """Golden case #8's core protection: a manually-verified field is a
     hard floor no automated provider result can cross, regardless of that
     provider's own confidence."""
@@ -407,25 +505,39 @@ def test_verified_field_is_never_overwritten_by_an_automated_result(enrichment_d
         result=ProviderResult(
             provider="orgbook",
             matched=True,
-            facts=(ProviderFact(field_name="legal_name", value="Automated Guess Inc.", confidence=0.95),),
+            facts=(
+                ProviderFact(
+                    field_name="legal_name",
+                    value="Automated Guess Inc.",
+                    confidence=0.95,
+                ),
+            ),
         ),
     )
     with Session(engine) as session:
         result = run_cascade_for_job(
-            session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(provider,)
+            session,
+            run_id,
+            company_id,
+            "Orchestrator Test Co Ltd",
+            providers=(provider,),
         )
 
     assert result["fields_written"] == ()
     assert result["fields_skipped_verified"] == ("legal_name",)
 
     with engine.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT value, verified FROM company_enrichment_fields "
-                "WHERE company_id = :id AND field_name = 'legal_name' AND superseded_at IS NULL"
-            ),
-            {"id": company_id},
-        ).mappings().one()
+        row = (
+            conn.execute(
+                text(
+                    "SELECT value, verified FROM company_enrichment_fields "
+                    "WHERE company_id = :id AND field_name = 'legal_name' AND superseded_at IS NULL"
+                ),
+                {"id": company_id},
+            )
+            .mappings()
+            .one()
+        )
     assert row["value"] == "Manually Verified Name Ltd."
     assert row["verified"] is True
 
@@ -454,25 +566,39 @@ def test_bugbot_finding_a_provider_can_refetch_the_same_field_a_second_time(
 
     with Session(engine) as session:
         first = write_enrichment_facts(
-            session, company_id, [ProviderFact("legal_name", "First Value Ltd.", 0.8)], source="orgbook", run_id=run_id
+            session,
+            company_id,
+            [ProviderFact("legal_name", "First Value Ltd.", 0.8)],
+            source="orgbook",
+            run_id=run_id,
         )
     assert first.written == ("legal_name",)
 
     with Session(engine) as session:
         second = write_enrichment_facts(
-            session, company_id, [ProviderFact("legal_name", "Second Value Ltd.", 0.9)], source="orgbook", run_id=run_id
+            session,
+            company_id,
+            [ProviderFact("legal_name", "Second Value Ltd.", 0.9)],
+            source="orgbook",
+            run_id=run_id,
         )
     assert second.written == ("legal_name",)  # must NOT raise IntegrityError
 
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT value, superseded_at IS NULL AS is_current FROM company_enrichment_fields "
-                "WHERE company_id = :id AND field_name = 'legal_name' ORDER BY fetched_at"
-            ),
-            {"id": company_id},
-        ).mappings().all()
-    assert len(rows) == 2  # both the old AND the new row still exist -- history preserved
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT value, superseded_at IS NULL AS is_current FROM company_enrichment_fields "
+                    "WHERE company_id = :id AND field_name = 'legal_name' ORDER BY fetched_at"
+                ),
+                {"id": company_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert (
+        len(rows) == 2
+    )  # both the old AND the new row still exist -- history preserved
     assert rows[0]["value"] == "First Value Ltd."
     assert rows[0]["is_current"] is False
     assert rows[1]["value"] == "Second Value Ltd."
@@ -488,8 +614,12 @@ def test_bugbot_finding_a_genuinely_hung_provider_is_interrupted_not_awaited(
     NOT after the full 2s block, which would prove the old (broken)
     after-the-fact measurement is still in effect."""
     engine, company_id = enrichment_db
-    hung = FakeProvider("hung", result=ProviderResult(provider="hung", matched=False), sleep_s=2.0)
-    request = EnrichmentRequest(company_id=company_id, company_name="Orchestrator Test Co Ltd")
+    hung = FakeProvider(
+        "hung", result=ProviderResult(provider="hung", matched=False), sleep_s=2.0
+    )
+    request = EnrichmentRequest(
+        company_id=company_id, company_name="Orchestrator Test Co Ltd"
+    )
 
     started = time.monotonic()
     result, tag = _call_provider_with_timeout(hung, request, timeout_s=0.1)
@@ -497,7 +627,9 @@ def test_bugbot_finding_a_genuinely_hung_provider_is_interrupted_not_awaited(
 
     assert tag == "timeout"
     assert result is None
-    assert elapsed < 1.0, f"took {elapsed:.2f}s -- the caller waited for the hung call instead of being interrupted"
+    assert (
+        elapsed < 1.0
+    ), f"took {elapsed:.2f}s -- the caller waited for the hung call instead of being interrupted"
 
 
 def test_bugbot_finding_two_concurrent_hung_lookups_are_each_interrupted_independently(
@@ -514,10 +646,14 @@ def test_bugbot_finding_two_concurrent_hung_lookups_are_each_interrupted_indepen
 
     def _attempt(key: str, sleep_s: float, timeout_s: float) -> None:
         barrier.wait(timeout=5)
-        provider = FakeProvider(key, result=ProviderResult(provider=key, matched=False), sleep_s=sleep_s)
+        provider = FakeProvider(
+            key, result=ProviderResult(provider=key, matched=False), sleep_s=sleep_s
+        )
         request = EnrichmentRequest(company_id=1, company_name="X")
         started = time.monotonic()
-        result, tag = _call_provider_with_timeout(provider, request, timeout_s=timeout_s)
+        result, tag = _call_provider_with_timeout(
+            provider, request, timeout_s=timeout_s
+        )
         results[key] = (result, tag, time.monotonic() - started)
 
     threads = [
@@ -532,7 +668,9 @@ def test_bugbot_finding_two_concurrent_hung_lookups_are_each_interrupted_indepen
     for key, (result, tag, elapsed) in results.items():
         assert tag == "timeout", (key, results)
         assert result is None
-        assert elapsed < 1.0, f"{key} took {elapsed:.2f}s -- not independently interrupted"
+        assert (
+            elapsed < 1.0
+        ), f"{key} took {elapsed:.2f}s -- not independently interrupted"
 
 
 def test_bugbot_finding_an_unexpected_writer_exception_still_finishes_the_job_as_failed(
@@ -554,7 +692,9 @@ def test_bugbot_finding_an_unexpected_writer_exception_still_finishes_the_job_as
     provider = FakeProvider(
         "orgbook",
         result=ProviderResult(
-            provider="orgbook", matched=True, facts=(ProviderFact("legal_name", "X", 0.8),)
+            provider="orgbook",
+            matched=True,
+            facts=(ProviderFact("legal_name", "X", 0.8),),
         ),
     )
 
@@ -564,11 +704,18 @@ def test_bugbot_finding_an_unexpected_writer_exception_still_finishes_the_job_as
             side_effect=RuntimeError("simulated writer failure"),
         ):
             with pytest.raises(RuntimeError, match="simulated writer failure"):
-                run_cascade_for_job(session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(provider,))
+                run_cascade_for_job(
+                    session,
+                    run_id,
+                    company_id,
+                    "Orchestrator Test Co Ltd",
+                    providers=(provider,),
+                )
 
     with engine.connect() as conn:
         db_status = conn.execute(
-            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"), {"r": run_id}
+            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"),
+            {"r": run_id},
         ).scalar_one()
     assert db_status == "failed"
 
@@ -584,7 +731,9 @@ def test_bugbot_finding_an_unexpected_finish_exception_still_leaves_the_job_fail
     with Session(engine) as session:
         run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
 
-    provider = FakeProvider("orgbook", result=ProviderResult(provider="orgbook", matched=False))
+    provider = FakeProvider(
+        "orgbook", result=ProviderResult(provider="orgbook", matched=False)
+    )
 
     with Session(engine) as session:
         with patch(
@@ -592,10 +741,17 @@ def test_bugbot_finding_an_unexpected_finish_exception_still_leaves_the_job_fail
             side_effect=RuntimeError("simulated finish-path failure"),
         ):
             with pytest.raises(RuntimeError, match="simulated finish-path failure"):
-                run_cascade_for_job(session, run_id, company_id, "Orchestrator Test Co Ltd", providers=(provider,))
+                run_cascade_for_job(
+                    session,
+                    run_id,
+                    company_id,
+                    "Orchestrator Test Co Ltd",
+                    providers=(provider,),
+                )
 
     with engine.connect() as conn:
         db_status = conn.execute(
-            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"), {"r": run_id}
+            text("SELECT status FROM company_enrichment_jobs WHERE run_id = :r"),
+            {"r": run_id},
         ).scalar_one()
     assert db_status == "failed"
