@@ -74,6 +74,7 @@ __all__ = [
     "finish_run",
     "get_run_state",
     "assert_import_not_before_scrape",
+    "reap_stale_run",
 ]
 
 _BACKEND_ENV_VAR = "PIPELINE_COORDINATOR_BACKEND"
@@ -162,3 +163,21 @@ def get_run_state() -> RunState | None:
 
 def assert_import_not_before_scrape() -> dict[str, str | None]:
     return _backend_module().assert_import_not_before_scrape()
+
+
+def reap_stale_run() -> dict[str, object]:
+    """Proactively reclaim the active run for this scope if its lease has
+    expired -- see pipeline/run_coordinator_postgres.py's reap_stale_run()
+    docstring for the full contract. Lease-based reclaim is a postgres
+    backend concept only (the legacy JSON+threading.Lock backend has no
+    lease/TTL at all -- see run_coordinator_legacy.py's module docstring);
+    calling this while PIPELINE_COORDINATOR_BACKEND=legacy is a caller
+    error, not something to silently no-op."""
+    if _resolve_backend() != "postgres":
+        raise PipelineCoordinatorBackendError(
+            "reap_stale_run() requires PIPELINE_COORDINATOR_BACKEND=postgres "
+            "-- the legacy backend has no lease/TTL concept to reclaim against."
+        )
+    from pipeline import run_coordinator_postgres
+
+    return run_coordinator_postgres.reap_stale_run()
