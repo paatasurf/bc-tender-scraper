@@ -32,6 +32,41 @@ def start_run(session: Session, step: str, run_id: str | None = None) -> Pipelin
     return record
 
 
+def find_in_flight_run(session: Session, step: str, run_id: str) -> PipelineRun | None:
+    """Return the currently-running PipelineRun for (step, run_id), if any.
+
+    Used by HTTP-triggered enqueue paths (api/internal.py::_enqueue_step) to
+    detect a retried/duplicate trigger *before* inserting another start_run()
+    row and scheduling a second, concurrent background worker for the same
+    logical attempt. start_run() itself has no such check -- called twice
+    with the same (step, run_id) it happily inserts two independent rows,
+    both status="running", neither ever superseding the other. That is
+    exactly the root cause behind pipeline_runs id 754/755 (step=
+    "import-csvs", run_id="n8n-5564", started ~90s apart on 2026-08-05):
+    two HTTP triggers (an n8n retry, or two calls that both resolved the
+    same coordinator-backed run_id) both passed the synchronous preflight
+    check, both called start_run(), and both got their own row -- neither
+    of which any component was ever going to mark finished once the retry
+    had already fired.
+
+    Deliberately last-writer-agnostic (ORDER BY id DESC LIMIT 1): if more
+    than one running row somehow already exists for this (step, run_id)
+    pair (e.g. from before this check existed), callers reuse the most
+    recent one rather than erroring -- this is a best-effort dedup guard
+    at the query level (no unique constraint backs it), not a strict
+    invariant."""
+    return session.scalars(
+        select(PipelineRun)
+        .where(
+            PipelineRun.run_id == run_id,
+            PipelineRun.step == step,
+            PipelineRun.status == "running",
+        )
+        .order_by(PipelineRun.id.desc())
+        .limit(1)
+    ).first()
+
+
 def finish_run(
     session: Session,
     record_id: int,

@@ -33,6 +33,87 @@ def test_enqueue_step_returns_int_pipeline_run_id():
     assert payload["poll_url"] == "/internal/steps/123"
 
 
+def test_enqueue_step_reuses_in_flight_run_instead_of_starting_a_second_worker():
+    """Reproduces the fix for pipeline_runs id 754/755 (step="import-csvs",
+    run_id="n8n-5564", 2026-08-05): a second HTTP trigger for the same
+    explicit run_id while the first is still "running" must not call
+    start_run() again or schedule a second background worker -- it must
+    reuse the existing in-flight run's identity."""
+    in_flight = MagicMock()
+    in_flight.id = 777
+
+    session = MagicMock()
+    background_tasks = MagicMock()
+
+    with patch("api.internal.get_session", return_value=session):
+        with patch("api.internal.find_in_flight_run", return_value=in_flight):
+            with patch("api.internal.start_run") as start_run_mock:
+                payload = internal_api._enqueue_step(
+                    background_tasks,
+                    "import-csvs",
+                    lambda: {},
+                    "n8n-5564",
+                )
+
+    assert payload["status"] == "already_running"
+    assert payload["pipeline_run_id"] == 777
+    assert payload["run_id"] == "n8n-5564"
+    assert payload["poll_url"] == "/internal/steps/777"
+    start_run_mock.assert_not_called()
+    background_tasks.add_task.assert_not_called()
+
+
+def test_enqueue_step_starts_normally_when_nothing_is_in_flight():
+    """Regression guard: the no-collision path is unchanged -- start_run()
+    is still called and a worker is still scheduled when
+    find_in_flight_run() finds nothing."""
+    record = MagicMock()
+    record.id = 888
+    record.run_id = "n8n-9999"
+
+    session = MagicMock()
+    background_tasks = MagicMock()
+
+    with patch("api.internal.get_session", return_value=session):
+        with patch("api.internal.find_in_flight_run", return_value=None):
+            with patch("api.internal.start_run", return_value=record):
+                payload = internal_api._enqueue_step(
+                    background_tasks,
+                    "import-csvs",
+                    lambda: {},
+                    "n8n-9999",
+                )
+
+    assert payload["status"] == "started"
+    assert payload["pipeline_run_id"] == 888
+    background_tasks.add_task.assert_called_once()
+
+
+def test_enqueue_step_skips_in_flight_check_when_run_id_is_omitted():
+    """When the caller supplies no explicit run_id, a fresh UUID is always
+    generated -- there is nothing it could collide with, so the dedup
+    query must not even run."""
+    record = MagicMock()
+    record.id = 999
+    record.run_id = "generated-uuid"
+
+    session = MagicMock()
+    background_tasks = MagicMock()
+
+    with patch("api.internal.get_session", return_value=session):
+        with patch("api.internal.find_in_flight_run") as find_mock:
+            with patch("api.internal.start_run", return_value=record):
+                payload = internal_api._enqueue_step(
+                    background_tasks,
+                    "import-csvs",
+                    lambda: {},
+                    None,
+                )
+
+    assert payload["status"] == "started"
+    find_mock.assert_not_called()
+
+
 def test_background_internal_routes_allow_non_string_response_fields():
     """FastAPI validates route return types; int fields must not use dict[str, str]."""
     for name, func in inspect.getmembers(internal_api, inspect.isfunction):
