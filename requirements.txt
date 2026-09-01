@@ -13,3 +13,15 @@ pypdf>=5.0.0
 PyJWT[crypto]>=2.8.0
 crawlee[beautifulsoup]>=0.6.0
 httpx>=0.27.0
+#
+# Phase 3A (pipeline/company_enrichment/website_contact_provider.py,
+# docs/COMPANY_CONTACT_PROVIDER_PHASE3_DESIGN.md) deliberately does NOT
+# list its dependencies here. crawl4ai/playwright/extruct/trafilatura are
+# heavy, browser-launching dependencies that must never be installed into
+# this project's main Nixpacks-built API service -- see
+# requirements-company-enrichment-worker.txt and
+# docs/COMPANY_CONTACT_PROVIDER_PHASE3A_RUNTIME_DECISION.md S3 for why,
+# and for the exact versions/compatibility verification. This file's own
+# `pip install -r requirements.txt` (what Railway's Nixpacks build and
+# every CI job actually run) never touches those four packages, whether
+# or not ENRICHMENT_ENABLED is set.
