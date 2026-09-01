@@ -465,7 +465,6 @@ def _redirect_walk(domain: str) -> dict:
                     "outcome": "resolved",
                     "final_url": current,
                     "final_status": probe["status"],
-                    "body_snippet": probe["body"].decode("utf-8", "replace"),
                     "hops": hops,
                 }
             current = urljoin(current, location)
@@ -475,7 +474,6 @@ def _redirect_walk(domain: str) -> dict:
             "outcome": "resolved",
             "final_url": current,
             "final_status": probe["status"],
-            "body_snippet": probe["body"].decode("utf-8", "replace"),
             "hops": hops,
         }
 
@@ -683,7 +681,17 @@ def _compute_confidence(
         confidence -= 0.15
     if not page_is_canonical:
         confidence -= 0.10
-    if extraction_method == "json_ld":
+    # Name corroboration applies to BOTH structured-data syntaxes, not just
+    # JSON-LD: _org_name_from_structured_item() (see _extract_contacts)
+    # reads an Organization/LocalBusiness `name` from either JSON-LD or
+    # microdata equally, so a microdata-sourced fact on a multi-brand site
+    # (decision doc S6.2's own named failure mode -- the right domain, but
+    # a structured contact block for a DIFFERENT declared entity) must be
+    # penalized exactly like a JSON-LD-sourced one. Gating this on
+    # extraction_method == "json_ld" only (the original implementation)
+    # let a mismatched microdata org_name through at full ceiling with no
+    # penalty at all.
+    if extraction_method in ("json_ld", "microdata"):
         if not _names_corroborate(org_name or "", company_name_normalized):
             confidence -= 0.20
 
@@ -756,7 +764,31 @@ class WebsiteContactProvider:
         return None
 
     def lookup(self, session: Session, request: EnrichmentRequest) -> ProviderResult:
-        company = session.get(Company, request.company_id)
+        try:
+            company = session.get(Company, request.company_id)
+        except Exception as e:  # noqa: BLE001 -- a DB/session failure is a
+            # real provider error (matched=False, error=<detail>), never a
+            # clean no-match (matched=False, error=None) -- those two are
+            # not the same outcome and must not be conflated. Every other
+            # failure path in this function already returns a categorized
+            # error string; this is the one call site that previously had
+            # no try/except at all and could raise straight out of
+            # lookup() -- caught by _call_provider_with_timeout()'s own
+            # outer exception handler one layer up (orchestrator.py,
+            # unchanged), but inconsistent with this function's own
+            # self-contained error-handling style everywhere else in it.
+            #
+            # Only the exception's CLASS NAME is included, never str(e):
+            # SQLAlchemy DB errors (OperationalError, InterfaceError, etc.)
+            # commonly embed the DSN, the failing SQL statement, and/or the
+            # DB hostname directly in their string representation, and
+            # ProviderResult.error is surfaced to callers/logs outside this
+            # module's trust boundary -- it must never carry that detail.
+            return ProviderResult(
+                provider=self.name,
+                matched=False,
+                error=f"db_error:{type(e).__name__}",
+            )
 
         domain = self._resolve_domain(request, company)
         if not domain:
@@ -781,6 +813,19 @@ class WebsiteContactProvider:
             )
 
         final_url = walk["final_url"]
+
+        # `_redirect_walk` fully follows every redirect it's given -- its
+        # "resolved" outcome means "the chain ended at a stable, non-3xx
+        # response," not "the response was actually a success." A 4xx/5xx
+        # here means launching Crawl4AI's real browser would only render an
+        # error page -- short-circuit before paying that cost.
+        final_status = walk.get("final_status")
+        if final_status is not None and not (200 <= final_status < 300):
+            return ProviderResult(
+                provider=self.name,
+                matched=False,
+                error=f"http_error:{final_status} at {final_url}",
+            )
 
         # Defense-in-depth re-validation immediately before handing off to
         # the browser (closes the TOCTOU gap between the manual probe above
@@ -812,6 +857,20 @@ class WebsiteContactProvider:
         except (SsrfBlockedError, DnsResolutionError) as e:
             return ProviderResult(
                 provider=self.name, matched=False, error=f"redirect_blocked:{e}"
+            )
+
+        # Crawl4AI/Playwright can report a navigation as "successful" (a
+        # response was received and rendered) even when that response is a
+        # 4xx/5xx error page -- result.success alone (checked inside
+        # _fetch_rendered_page) does not mean "this page has real content
+        # worth extracting from." A JS-driven redirect could also have
+        # landed somewhere different from what the manual walk's own
+        # final_status check above already cleared.
+        if http_status is not None and not (200 <= http_status < 300):
+            return ProviderResult(
+                provider=self.name,
+                matched=False,
+                error=f"http_error:{http_status} (post-render) at {rendered_final_url}",
             )
 
         _structured_data_found, org_name, phones, emails = _extract_contacts(

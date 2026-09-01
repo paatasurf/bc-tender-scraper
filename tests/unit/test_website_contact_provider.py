@@ -58,7 +58,6 @@ def _resolved_walk(final_url: str) -> dict:
         "outcome": "resolved",
         "final_url": final_url,
         "final_status": 200,
-        "body_snippet": "",
         "hops": [],
     }
 
@@ -238,6 +237,100 @@ def test_lookup_end_to_end_returns_a_microdata_sourced_fact_with_its_own_confide
     # LocalBusiness name ("Acme Construction Ltd") corroborates the
     # requested company name exactly -- no reductions apply.
     assert phone_fact.confidence == pytest.approx(0.75)
+
+
+def test_microdata_name_mismatch_is_penalized_exactly_like_json_ld_name_mismatch():
+    """Regression: the name-corroboration penalty (-0.20) was originally
+    gated on extraction_method == "json_ld" only, even though org_name can
+    equally come from microdata (_org_name_from_structured_item is shared
+    between both syntaxes). A microdata-sourced fact on a page whose
+    declared org name does NOT match the company being enriched must be
+    penalized exactly the same amount as a JSON-LD-sourced one -- this is
+    decision doc S6.2's own named failure mode (a structured contact block
+    on the right domain but for a DIFFERENT declared entity, e.g. a
+    multi-brand site)."""
+    json_ld_penalized = _compute_confidence(
+        extraction_method="json_ld",
+        domain_exact_match=True,
+        page_is_canonical=True,
+        org_name="Totally Different Brand Ltd",
+        company_name_normalized="acmeconstruction",
+        is_free_mail=False,
+    )
+    microdata_penalized = _compute_confidence(
+        extraction_method="microdata",
+        domain_exact_match=True,
+        page_is_canonical=True,
+        org_name="Totally Different Brand Ltd",
+        company_name_normalized="acmeconstruction",
+        is_free_mail=False,
+    )
+    # json_ld ceiling 0.85 - 0.20 = 0.65; microdata ceiling 0.75 - 0.20 = 0.55
+    # -- same ABSOLUTE penalty applied to each syntax's own ceiling.
+    assert json_ld_penalized == pytest.approx(0.65)
+    assert microdata_penalized == pytest.approx(0.55)
+
+    # And confirm the penalty is the SAME 0.20 magnitude relative to each
+    # syntax's own un-penalized ceiling, not just "both got some penalty."
+    json_ld_unpenalized = _compute_confidence(
+        extraction_method="json_ld",
+        domain_exact_match=True,
+        page_is_canonical=True,
+        org_name="Acme Construction Ltd",
+        company_name_normalized="acmeconstruction",
+        is_free_mail=False,
+    )
+    microdata_unpenalized = _compute_confidence(
+        extraction_method="microdata",
+        domain_exact_match=True,
+        page_is_canonical=True,
+        org_name="Acme Construction Ltd",
+        company_name_normalized="acmeconstruction",
+        is_free_mail=False,
+    )
+    assert round(json_ld_unpenalized - json_ld_penalized, 2) == 0.20
+    assert round(microdata_unpenalized - microdata_penalized, 2) == 0.20
+
+
+def test_lookup_end_to_end_multi_brand_microdata_site_reduces_confidence():
+    """Decision doc S6.2's own named scenario, end-to-end: the right
+    domain, a real microdata LocalBusiness block, but its declared name is
+    for a DIFFERENT brand than the company being enriched (e.g. a
+    multi-brand corporate site). Before the fix, this fact would have
+    sailed through at the full 0.75 microdata ceiling with no corroboration
+    check at all -- exactly the failure mode this check exists to catch."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.return_value = _company(name="Acme Construction Ltd")
+    multi_brand_html = """
+    <html><body>
+    <div itemscope itemtype="https://schema.org/LocalBusiness">
+      <span itemprop="name">Totally Different Brand Holdings Inc</span>
+      <span itemprop="telephone">604-555-4321</span>
+    </div>
+    </body></html>
+    """
+
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(multi_brand_html, 200, "https://example.com/"),
+        ),
+    ):
+        result = provider.lookup(session, _request())
+
+    assert result.matched is True
+    phone_fact = next(f for f in result.facts if f.field_name == "phone")
+    assert phone_fact.extraction_method == "microdata"
+    # 0.75 ceiling - 0.20 name-mismatch penalty = 0.55
+    assert phone_fact.confidence == pytest.approx(0.55)
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +766,202 @@ def test_lookup_reflects_domain_mismatch_in_the_returned_facts_confidence():
     # (not a canonical "/" or /contact*/about* path -- it is "/" here, so
     # only the domain-mismatch reduction applies) = 0.30
     assert phone_fact.confidence == pytest.approx(0.30)
+
+
+# ---------------------------------------------------------------------------
+# 11. session.get(Company) failure -- must be a distinct db_error, never a
+# clean no-match.
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_classifies_a_session_get_failure_as_db_error_not_no_match():
+    """Regression: session.get(Company, ...) previously had no try/except at
+    all -- an exception there would propagate straight out of lookup(),
+    inconsistent with every OTHER failure path in this function (which all
+    return a categorized ProviderResult(matched=False, error=...) rather
+    than raising). This asserts the fix: caught locally, tagged
+    "db_error:...", and -- the actual requirement -- distinguishable from a
+    genuine no-match (matched=False, error=None)."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.side_effect = RuntimeError("connection reset by peer")
+
+    with (
+        patch(f"{MODULE}._check_robots") as robots_mock,
+        patch(f"{MODULE}._redirect_walk") as walk_mock,
+    ):
+        result = provider.lookup(session, _request())
+
+    # No network call was ever attempted -- the DB failure short-circuits
+    # before domain resolution even has a company row to read from.
+    robots_mock.assert_not_called()
+    walk_mock.assert_not_called()
+
+    assert result.matched is False
+    assert result.error is not None  # NOT a clean no-match
+    assert result.error == "db_error:RuntimeError"  # class name only
+    assert "connection reset by peer" not in result.error  # never the raw message
+    assert result.facts == ()
+
+
+def test_lookup_db_error_never_leaks_raw_exception_detail_dsn_sql_or_hostname():
+    """A DB/session failure must be reported as a bare, categorized tag --
+    never str(the exception). Real SQLAlchemy failures (OperationalError,
+    InterfaceError, etc.) routinely embed the connection DSN, the failing
+    SQL statement, and/or the DB hostname directly in their string
+    representation; ProviderResult.error crosses this module's trust
+    boundary (surfaced to callers/logs), so none of that may ever appear in
+    it. Simulates a realistic exception message carrying exactly that kind
+    of sensitive detail."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.side_effect = RuntimeError(
+        "(psycopg2.OperationalError) connection to server at "
+        '"db-prod-primary.internal.example.com" (10.0.4.17), port 5432 failed: '
+        'FATAL: password authentication failed for user "bc_tender_app" '
+        "[SQL: SELECT companies.id, companies.name FROM companies WHERE "
+        "companies.id = %(id)s] "
+        "(Background on this error at: postgresql://bc_tender_app:hunter2@"
+        "db-prod-primary.internal.example.com:5432/bc_tenders)"
+    )
+
+    with (
+        patch(f"{MODULE}._check_robots") as robots_mock,
+        patch(f"{MODULE}._redirect_walk") as walk_mock,
+    ):
+        result = provider.lookup(session, _request())
+
+    robots_mock.assert_not_called()
+    walk_mock.assert_not_called()
+
+    assert result.matched is False
+    assert result.error == "db_error:RuntimeError"
+    for leaked in (
+        "db-prod-primary",
+        "10.0.4.17",
+        "5432",
+        "hunter2",
+        "bc_tender_app",
+        "SELECT",
+        "postgresql://",
+        "password authentication failed",
+    ):
+        assert leaked not in result.error
+    assert result.facts == ()
+
+
+def test_lookup_still_works_normally_when_session_get_succeeds():
+    """Non-regression companion to the above -- the try/except around
+    session.get() must not change behavior for the ordinary successful
+    case."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.return_value = _company(website="")  # no exception, just no domain
+
+    result = provider.lookup(session, _request(website=None))
+
+    assert result.matched is False
+    assert result.error is None  # a genuine no-match, unaffected by the fix
+    assert result.facts == ()
+
+
+# ---------------------------------------------------------------------------
+# 12. final_status / http_status -- a non-2xx response short-circuits
+# before (and after) the real Crawl4AI render, rather than being silently
+# extracted from as if it were real content.
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_short_circuits_on_a_non_2xx_final_status_before_launching_crawl4ai():
+    """_redirect_walk()'s "resolved" outcome means "the redirect chain
+    ended at a stable, non-3xx response," NOT "the response was a success"
+    -- a 404/500 at the end of that chain must not trigger a real browser
+    launch at all."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.return_value = _company()
+    error_walk = {
+        "outcome": "resolved",
+        "final_url": "https://example.com/gone",
+        "final_status": 404,
+        "hops": [],
+    }
+
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(f"{MODULE}._redirect_walk", return_value=error_walk),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(f"{MODULE}._fetch_rendered_page", new_callable=AsyncMock) as fetch_mock,
+    ):
+        result = provider.lookup(session, _request())
+
+    fetch_mock.assert_not_called()  # never even tried to launch the browser
+    assert result.matched is False
+    assert result.error is not None
+    assert result.error.startswith("http_error:404")
+    assert result.facts == ()
+
+
+def test_lookup_short_circuits_on_a_non_2xx_http_status_after_crawl4ai_render():
+    """Crawl4AI can report result.success=True (a response was received and
+    rendered) even for a 4xx/5xx error page -- that alone must not be
+    treated as "real content worth extracting from"."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.return_value = _company()
+    error_page_html = "<html><body><h1>500 Internal Server Error</h1></body></html>"
+
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(error_page_html, 500, "https://example.com/"),
+        ),
+    ):
+        result = provider.lookup(session, _request())
+
+    assert result.matched is False
+    assert result.error is not None
+    assert result.error.startswith("http_error:500")
+    assert "(post-render)" in result.error
+    assert result.facts == ()
+
+
+@pytest.mark.parametrize("status", [200, 201, 204, 299])
+def test_lookup_does_not_short_circuit_on_any_2xx_status(status):
+    """Boundary check on both short-circuits at once -- every 2xx code,
+    not just 200, must be treated as success and proceed to extraction."""
+    provider = WebsiteContactProvider()
+    session = MagicMock()
+    session.get.return_value = _company()
+    walk = {
+        "outcome": "resolved",
+        "final_url": "https://example.com/",
+        "final_status": status,
+        "hops": [],
+    }
+    html = "<html><body><p>Call 604-555-1234</p></body></html>"
+
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(f"{MODULE}._redirect_walk", return_value=walk),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(html, status, "https://example.com/"),
+        ),
+    ):
+        result = provider.lookup(session, _request())
+
+    assert result.matched is True
+    assert result.error is None
 
 
 # ---------------------------------------------------------------------------
