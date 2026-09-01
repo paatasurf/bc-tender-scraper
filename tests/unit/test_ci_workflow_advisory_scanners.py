@@ -5,8 +5,8 @@ mypy, Semgrep, and Schemathesis are advisory: they must always run, always
 publish findings/artifacts and a job-summary warning, but a finding must
 never fail the job (via `continue-on-error: true` on the scan step), never
 fail the overall workflow run, and never block a deploy. The required
-Quality Gate stays exactly {ruff, black, pip-audit, pytest, opencode-review},
-and Deploy must depend on nothing but Quality Gate.
+Quality Gate stays exactly {ruff, black, pip-audit, pytest, opencode-review,
+enrichment-worker-tests}, and Deploy must depend on nothing but Quality Gate.
 
 Parses the actual YAML (not a copy) so this test breaks the moment someone
 edits the workflow in a way that regresses any of these properties --
@@ -25,7 +25,14 @@ WORKFLOW_PATH = (
     Path(__file__).resolve().parents[2] / ".github" / "workflows" / "quality-gate.yml"
 )
 
-REQUIRED_QUALITY_GATE_JOBS = ["ruff", "black", "pip-audit", "pytest", "opencode-review"]
+REQUIRED_QUALITY_GATE_JOBS = [
+    "ruff",
+    "black",
+    "pip-audit",
+    "pytest",
+    "opencode-review",
+    "enrichment-worker-tests",
+]
 ADVISORY_JOBS = ["mypy", "semgrep", "schemathesis"]
 
 

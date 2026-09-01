@@ -343,16 +343,18 @@ def test_lookup_returns_no_match_and_never_fetches_when_robots_disallows():
     session = MagicMock()
     session.get.return_value = _company()
 
-    with patch(
-        f"{MODULE}._check_robots",
-        return_value={
-            "allowed": False,
-            "error": "Disallow: /",
-            "robots_url": "https://example.com/robots.txt",
-        },
-    ) as robots_mock, patch(f"{MODULE}._redirect_walk") as walk_mock, patch(
-        f"{MODULE}._fetch_rendered_page", new_callable=AsyncMock
-    ) as fetch_mock:
+    with (
+        patch(
+            f"{MODULE}._check_robots",
+            return_value={
+                "allowed": False,
+                "error": "Disallow: /",
+                "robots_url": "https://example.com/robots.txt",
+            },
+        ) as robots_mock,
+        patch(f"{MODULE}._redirect_walk") as walk_mock,
+        patch(f"{MODULE}._fetch_rendered_page", new_callable=AsyncMock) as fetch_mock,
+    ):
         result = provider.lookup(session, _request())
 
     robots_mock.assert_called_once()
@@ -438,8 +440,9 @@ def test_redirect_walk_blocks_a_redirect_target_pointing_at_a_private_ip_and_nev
             return ["93.184.216.34"]  # a real public IP, just to pass DNS
         return real_resolve_ips(hostname)
 
-    with patch(f"{MODULE}._resolve_ips", side_effect=fake_resolve), patch(
-        f"{MODULE}._manual_probe", side_effect=fake_probe
+    with (
+        patch(f"{MODULE}._resolve_ips", side_effect=fake_resolve),
+        patch(f"{MODULE}._manual_probe", side_effect=fake_probe),
     ):
         walk = _redirect_walk("fake-public-host.example")
 
@@ -458,12 +461,18 @@ def test_lookup_returns_no_match_when_the_fetch_times_out():
     session = MagicMock()
     session.get.return_value = _company()
 
-    with patch(f"{MODULE}._check_robots", return_value={"allowed": True}), patch(
-        f"{MODULE}._redirect_walk", return_value=_resolved_walk("https://example.com/")
-    ), patch(f"{MODULE}._ssrf_and_dns_check"), patch(
-        f"{MODULE}._fetch_rendered_page",
-        new_callable=AsyncMock,
-        side_effect=TimeoutError("simulated timeout"),
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            side_effect=TimeoutError("simulated timeout"),
+        ),
     ):
         result = provider.lookup(session, _request())
 
@@ -495,12 +504,18 @@ def test_lookup_still_returns_a_gmail_candidate_but_never_marks_anything_verifie
     session.get.return_value = _company()
     html = "<html><body><p>Email us at info@gmail.com</p></body></html>"
 
-    with patch(f"{MODULE}._check_robots", return_value={"allowed": True}), patch(
-        f"{MODULE}._redirect_walk", return_value=_resolved_walk("https://example.com/")
-    ), patch(f"{MODULE}._ssrf_and_dns_check"), patch(
-        f"{MODULE}._fetch_rendered_page",
-        new_callable=AsyncMock,
-        return_value=(html, 200, "https://example.com/"),
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(html, 200, "https://example.com/"),
+        ),
     ):
         result = provider.lookup(session, _request())
 
@@ -527,12 +542,18 @@ def test_lookup_returns_clean_no_match_when_page_has_no_contact_info():
     session.get.return_value = _company()
     html = "<html><body><h1>Welcome to Acme</h1><p>We build things.</p></body></html>"
 
-    with patch(f"{MODULE}._check_robots", return_value={"allowed": True}), patch(
-        f"{MODULE}._redirect_walk", return_value=_resolved_walk("https://example.com/")
-    ), patch(f"{MODULE}._ssrf_and_dns_check"), patch(
-        f"{MODULE}._fetch_rendered_page",
-        new_callable=AsyncMock,
-        return_value=(html, 200, "https://example.com/"),
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(html, 200, "https://example.com/"),
+        ),
     ):
         result = provider.lookup(session, _request())
 
@@ -548,9 +569,10 @@ def test_lookup_returns_clean_no_match_without_any_network_call_when_no_domain_i
     session = MagicMock()
     session.get.return_value = _company(website="", google_website="")
 
-    with patch(f"{MODULE}._check_robots") as robots_mock, patch(
-        f"{MODULE}._redirect_walk"
-    ) as walk_mock:
+    with (
+        patch(f"{MODULE}._check_robots") as robots_mock,
+        patch(f"{MODULE}._redirect_walk") as walk_mock,
+    ):
         result = provider.lookup(session, _request(website=None))
 
     robots_mock.assert_not_called()
@@ -632,9 +654,11 @@ def test_lookup_returns_clean_no_match_with_zero_network_calls_for_a_sentinel_we
     session = MagicMock()
     session.get.return_value = _company(website=raw, google_website="")
 
-    with patch(f"{MODULE}._check_robots") as robots_mock, patch(
-        f"{MODULE}._redirect_walk"
-    ) as walk_mock, patch(f"{MODULE}._fetch_rendered_page") as fetch_mock:
+    with (
+        patch(f"{MODULE}._check_robots") as robots_mock,
+        patch(f"{MODULE}._redirect_walk") as walk_mock,
+        patch(f"{MODULE}._fetch_rendered_page") as fetch_mock,
+    ):
         result = provider.lookup(session, _request(website=None))
 
     robots_mock.assert_not_called()
@@ -653,17 +677,23 @@ def test_lookup_falls_through_a_sentinel_request_website_to_a_valid_company_webs
     session = MagicMock()
     session.get.return_value = _company(website="example.com")
 
-    with patch(f"{MODULE}._check_robots", return_value={"allowed": True}), patch(
-        f"{MODULE}._redirect_walk", return_value=_resolved_walk("https://example.com/")
-    ), patch(f"{MODULE}._ssrf_and_dns_check"), patch(
-        f"{MODULE}._fetch_rendered_page",
-        new_callable=AsyncMock,
-        return_value=(
-            "<html><body>no contact info</body></html>",
-            200,
-            "https://example.com/",
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
         ),
-    ) as fetch_mock:
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(
+                "<html><body>no contact info</body></html>",
+                200,
+                "https://example.com/",
+            ),
+        ) as fetch_mock,
+    ):
         result = provider.lookup(session, _request(website="N/A"))
 
     fetch_mock.assert_called_once()
@@ -704,12 +734,18 @@ def test_lookup_survives_malformed_html_as_a_clean_no_match_not_a_crash():
         '<script type="application/ld+json">{broken</script><body>no valid markup'
     )
 
-    with patch(f"{MODULE}._check_robots", return_value={"allowed": True}), patch(
-        f"{MODULE}._redirect_walk", return_value=_resolved_walk("https://example.com/")
-    ), patch(f"{MODULE}._ssrf_and_dns_check"), patch(
-        f"{MODULE}._fetch_rendered_page",
-        new_callable=AsyncMock,
-        return_value=(malformed, 200, "https://example.com/"),
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(malformed, 200, "https://example.com/"),
+        ),
     ):
         result = provider.lookup(session, _request())
 
@@ -751,12 +787,18 @@ def test_lookup_reflects_domain_mismatch_in_the_returned_facts_confidence():
 
     # Rendered final URL lands on an entirely different host than the
     # requested domain (e.g. an unexpected but SSRF-safe redirect target).
-    with patch(f"{MODULE}._check_robots", return_value={"allowed": True}), patch(
-        f"{MODULE}._redirect_walk", return_value=_resolved_walk("https://example.com/")
-    ), patch(f"{MODULE}._ssrf_and_dns_check"), patch(
-        f"{MODULE}._fetch_rendered_page",
-        new_callable=AsyncMock,
-        return_value=(html, 200, "https://totally-different-domain.example/"),
+    with (
+        patch(f"{MODULE}._check_robots", return_value={"allowed": True}),
+        patch(
+            f"{MODULE}._redirect_walk",
+            return_value=_resolved_walk("https://example.com/"),
+        ),
+        patch(f"{MODULE}._ssrf_and_dns_check"),
+        patch(
+            f"{MODULE}._fetch_rendered_page",
+            new_callable=AsyncMock,
+            return_value=(html, 200, "https://totally-different-domain.example/"),
+        ),
     ):
         result = provider.lookup(session, _request())
 

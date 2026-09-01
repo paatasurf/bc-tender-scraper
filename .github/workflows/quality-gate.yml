@@ -455,6 +455,101 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
+  # Stage 2b — Company-enrichment worker test suite
+  #
+  # WebsiteContactProvider (pipeline/company_enrichment/website_contact_provider.py)
+  # imports extruct/trafilatura at module level, so its own test file
+  # (tests/unit/test_website_contact_provider.py) cannot even be COLLECTED
+  # by the main `pytest` job above, which deliberately installs only
+  # requirements.txt (no browser/scraping deps -- see
+  # requirements-company-enrichment-worker.txt and
+  # docs/COMPANY_CONTACT_PROVIDER_PHASE3A_RUNTIME_DECISION.md for why that
+  # isolation exists: crawl4ai/Playwright must never land in the main
+  # Nixpacks-built production API's build). This job installs BOTH
+  # requirements.txt AND requirements-company-enrichment-worker.txt into its
+  # own separate runner -- the main `pytest` job's environment above is
+  # completely unaffected -- and runs the provider's own tests plus the rest
+  # of the company_enrichment regression suite that must stay green
+  # alongside it, as a required (blocking) check.
+  #
+  # No `playwright install <browser>` step here: every test in this suite
+  # mocks _fetch_rendered_page / _redirect_walk / _check_robots /
+  # _ssrf_and_dns_check at the module boundary (unittest.mock.patch against
+  # MODULE = "pipeline.company_enrichment.website_contact_provider") -- no
+  # test here ever launches a real browser, so the ~150-300MB browser
+  # binary download is not needed to run it.
+  # ---------------------------------------------------------------------------
+  enrichment-worker-tests:
+    name: Enrichment Worker Tests (provider + regression)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tenderscope_ci
+          POSTGRES_PASSWORD: tenderscope_ci
+          POSTGRES_DB: tenderscope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tenderscope_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://tenderscope_ci:tenderscope_ci@localhost:5432/tenderscope_test
+      CI_DATABASE_URL: postgresql://tenderscope_ci:tenderscope_ci@localhost:5432/tenderscope_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install main + worker + dev dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-company-enrichment-worker.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run database migrations (fresh CI Postgres -- never production)
+        run: |
+          set -euo pipefail
+          python scripts/ci_apply_all_migrations.py
+
+      - name: Provider + enrichment regression suite
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          pytest \
+            tests/unit/test_website_contact_provider.py \
+            tests/unit/test_company_enrichment_cache.py \
+            tests/unit/test_company_enrichment_dedup.py \
+            tests/unit/test_company_enrichment_migration.py \
+            tests/unit/test_company_enrichment_orchestrator.py \
+            tests/unit/test_company_enrichment_provider.py \
+            tests/unit/test_internal_enrichment_route.py \
+            -v \
+            --tb=short \
+            --junitxml=reports/enrichment-worker-junit.xml \
+            | tee reports/pytest-enrichment-worker.txt
+
+      - name: Upload pytest reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: enrichment-worker-reports-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # Stage 2.5 — API contract checks (Phase 1 hardening; reporting only, see
   # the note on the mypy/semgrep/gitleaks jobs above for why nothing new in
   # this PR is wired into quality-gate's `needs:` yet)
@@ -637,7 +732,7 @@ jobs:
   # ---------------------------------------------------------------------------
   quality-gate:
     name: Quality Gate
-    needs: [ruff, black, pip-audit, pytest, opencode-review]
+    needs: [ruff, black, pip-audit, pytest, opencode-review, enrichment-worker-tests]
     runs-on: ubuntu-latest
     if: always()
     timeout-minutes: 10
@@ -649,22 +744,25 @@ jobs:
           PIP_AUDIT_RESULT: ${{ needs.pip-audit.result }}
           PYTEST_RESULT: ${{ needs.pytest.result }}
           OPENCODE_RESULT: ${{ needs.opencode-review.result }}
+          ENRICHMENT_WORKER_RESULT: ${{ needs.enrichment-worker-tests.result }}
         run: |
           set -euo pipefail
-          echo "Ruff:      $RUFF_RESULT"
-          echo "Black:     $BLACK_RESULT"
-          echo "pip-audit: $PIP_AUDIT_RESULT"
-          echo "pytest:    $PYTEST_RESULT"
-          echo "OpenCode:  $OPENCODE_RESULT"
+          echo "Ruff:               $RUFF_RESULT"
+          echo "Black:              $BLACK_RESULT"
+          echo "pip-audit:          $PIP_AUDIT_RESULT"
+          echo "pytest:             $PYTEST_RESULT"
+          echo "OpenCode:           $OPENCODE_RESULT"
+          echo "Enrichment worker:  $ENRICHMENT_WORKER_RESULT"
 
           failed=""
-          for job in ruff black pip-audit pytest opencode-review; do
+          for job in ruff black pip-audit pytest opencode-review enrichment-worker-tests; do
             case "$job" in
               ruff) result="$RUFF_RESULT" ;;
               black) result="$BLACK_RESULT" ;;
               pip-audit) result="$PIP_AUDIT_RESULT" ;;
               pytest) result="$PYTEST_RESULT" ;;
               opencode-review) result="$OPENCODE_RESULT" ;;
+              enrichment-worker-tests) result="$ENRICHMENT_WORKER_RESULT" ;;
             esac
             if [ "$result" = "success" ]; then
               continue
