@@ -37,11 +37,27 @@ class EnrichmentRequest:
 @dataclass(frozen=True)
 class ProviderFact:
     """One fact a provider found, ready to be persisted to
-    company_enrichment_fields (RFC S5) by the orchestrator's writer."""
+    company_enrichment_fields (RFC S5) by the orchestrator's writer.
+
+    `source_url`, `raw_value`, and `extraction_method` are Phase 3A additions
+    (docs/COMPANY_CONTACT_PROVIDER_PHASE3_DESIGN.md S2.2, "Option A") carried
+    on this in-memory dataclass ahead of the schema migration that would let
+    write_enrichment_facts() actually persist them -- that migration is not
+    applied anywhere (not even locally) as of Phase 3A, so these three fields
+    are currently dropped, not written, by the existing writer. They exist
+    here so WebsiteContactProvider's richer evidence is available in-process
+    (e.g. for a caller inspecting ProviderResult directly, or for tests) and
+    so the future writer update only has to start reading fields that
+    already exist on this dataclass, not add them. Optional with a None
+    default specifically so every existing ProviderFact construction site
+    (OrgBookAdapter, tests) keeps working unchanged."""
 
     field_name: str
     value: str
     confidence: float | None = None
+    source_url: str | None = None
+    raw_value: str | None = None
+    extraction_method: str | None = None
 
 
 @dataclass(frozen=True)

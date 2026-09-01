@@ -337,7 +337,27 @@ def test_a_slow_provider_past_the_timeout_is_marked_partial_success_not_hidden_a
     the way it was before this review (every provider outcome, including
     timeout and error, used to map to the same "success" regardless).
     Already-committed data (the fast provider's facts) is unaffected
-    either way."""
+    either way.
+
+    Timing margin, chosen from a direct measurement, not guessed:
+    _call_provider_with_timeout()'s worker thread calls get_session() for
+    EVERY provider (including "fast", which itself sleeps 0s) -- a real
+    Postgres connection checkout, not a no-op. Measured directly on this
+    suite's own test DB: 14/15 samples of get_session()+SELECT 1 landed at
+    ~1-2ms, but one outlier hit 77.7ms -- a real, occasional spike, not
+    noise to explain away. The original timeout_s=0.05 / slow sleep_s=0.15
+    left "fast" with a budget so tight that a SINGLE connection-setup
+    spike like that (indistinguishable, from the outside, from "fast"
+    itself running slow) could push "fast" past 0.05s too, tagging it
+    "timeout" instead of "ok" and flipping the cascade's overall status to
+    "failed" instead of the expected "partial_success" -- reproduced by
+    running this exact test twice in a row with zero code changes between
+    runs and getting a different result each time. The fix is not a
+    tighter assertion or a retry, it's enough real margin that this
+    class of jitter can never plausibly close the gap: timeout_s=1.0
+    leaves >10x headroom over the worst observed connection-setup spike
+    for "fast" to complete inside, while slow's sleep_s=3.0 stays
+    unambiguously (3x) past that same 1.0s budget."""
     engine, company_id = enrichment_db
     with Session(engine) as session:
         run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
@@ -349,7 +369,7 @@ def test_a_slow_provider_past_the_timeout_is_marked_partial_success_not_hidden_a
             matched=True,
             facts=(ProviderFact("legal_name", "Wrong Co", 0.5),),
         ),
-        sleep_s=0.15,
+        sleep_s=3.0,
     )
     fast = FakeProvider(
         "fast",
@@ -366,7 +386,7 @@ def test_a_slow_provider_past_the_timeout_is_marked_partial_success_not_hidden_a
             company_id,
             "Orchestrator Test Co Ltd",
             providers=(slow, fast),
-            timeout_s=0.05,
+            timeout_s=1.0,
         )
 
     assert result["status"] == "partial_success"
