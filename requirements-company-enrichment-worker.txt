@@ -1,0 +1,68 @@
+# Company-enrichment Phase 3A worker dependencies ONLY.
+#
+# NOT installed by the main API service (requirements.txt). NOT installed by
+# any CI job today. Exists solely for pipeline/company_enrichment/
+# website_contact_provider.py (docs/COMPANY_CONTACT_PROVIDER_PHASE3_DESIGN.md),
+# which is NOT wired into _default_providers() and is reachable only by
+# direct instantiation (tests/unit/test_website_contact_provider.py).
+#
+# These four packages are heavy, browser-launching dependencies (Crawl4AI
+# drives a real Chromium process per fetch via Playwright) that must never
+# land in the main Nixpacks-built production API's build -- see
+# docs/COMPANY_CONTACT_PROVIDER_PHASE3A_RUNTIME_DECISION.md SS1-3 for the
+# full reasoning (a Nixpacks + crawl4ai/Playwright glibc incompatibility is
+# a real, currently-reported, unresolved Railway issue; a separate
+# Docker-built worker service is the recommended, not-yet-implemented,
+# delivery path). Whether or not ENRICHMENT_ENABLED is set has no bearing
+# on this -- the isolation is about what the MAIN SERVICE'S BUILD installs,
+# not about whether the feature is turned on at runtime.
+#
+# Install ALONGSIDE the base requirements.txt (this file is additive, not a
+# replacement -- website_contact_provider.py still imports db.models.Company
+# and uses a SQLAlchemy Session, both already covered by requirements.txt):
+#
+#   pip install -r requirements.txt -r requirements-company-enrichment-worker.txt
+#
+# This install command is not run anywhere in this repository today (no CI
+# job, no Railway build config references this file) -- it exists for a
+# future, separately-authorized Docker-worker build only.
+#
+# crawl4ai is constrained to the 0.9.x line (~=0.9.0), not left open-ended:
+# confirmed via `pip check` that crawl4ai==0.8.9 declares lxml~=5.3 (i.e.
+# 5.3.x only), which does not overlap AT ALL with trafilatura's own
+# lxml>=6.1.1 -- a genuine, not installation-order-dependent, unresolvable
+# conflict on 0.8.9. crawl4ai 0.9.3 (the actual PyPI latest as of this
+# check) relaxes its own constraint to lxml<7,>=5.3, which DOES overlap
+# trafilatura's floor -- confirmed resolved via `pip check` reporting "No
+# broken requirements found" with crawl4ai 0.9.3 + trafilatura 2.2.0 +
+# lxml 6.1.2 installed together (base requirements.txt's own lxml>=4.9.0
+# floor is comfortably satisfied by that same 6.1.2). `~=0.9.0` (not a
+# bare `>=0.9.0`) is deliberate: it allows 0.9.x patch updates but blocks
+# a silent jump to a future 0.10.0+ that could reintroduce an incompatible
+# lxml pin the same way 0.8.9 did, without anyone noticing until a fresh
+# install broke. Re-run `pip check` (against BOTH files installed
+# together) before raising this ceiling to 0.10.x or beyond.
+#
+# Exact versions verified together, via a genuinely clean venv install of
+# `pip install -r requirements.txt -r requirements-company-enrichment-worker.txt`
+# (not just this file's own text) plus `pip check` reporting "No broken
+# requirements found": crawl4ai==0.9.3, playwright==1.62.0 (>=1.60.0's
+# floor resolved to a newer patch on a fresh install -- expected, no
+# conflict), extruct==0.18.0, trafilatura==2.2.0, lxml==6.1.2.
+# playwright-stealth==2.0.3 is also installed, as crawl4ai's own
+# transitive dependency -- not something this file pins directly.
+crawl4ai~=0.9.0
+playwright>=1.60.0
+extruct>=0.18.0
+trafilatura>=2.2.0
+#
+# IMPORTANT -- `pip install playwright` (above) installs only the Python
+# driver, never the browser binary; Playwright requires a SEPARATE
+# `playwright install chromium` step to fetch it (~150-300MB), and this
+# does not happen automatically as a pip/setup hook. The recommended
+# delivery mechanism (docs/COMPANY_CONTACT_PROVIDER_PHASE3A_RUNTIME_DECISION.md
+# S2) is a Dockerfile based on the official mcr.microsoft.com/playwright/python
+# image, which already bundles the browser binaries and all required OS
+# libraries -- that Dockerfile is NOT built by this repo today; building it
+# is a separate, future, explicitly-authorized step, not implied by this
+# file's existence.
