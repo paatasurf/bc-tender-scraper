@@ -414,7 +414,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
+          # tests/unit/test_website_contact_provider.py is ignored here --
+          # it imports extruct/trafilatura at module level (via
+          # pipeline/company_enrichment/website_contact_provider.py), which
+          # this job deliberately never installs (requirements.txt only, no
+          # browser deps -- see requirements-company-enrichment-worker.txt).
+          # That file is fully covered by the enrichment-worker-tests job
+          # below instead, which installs the worker requirements and runs
+          # it as a required (blocking) check.
           pytest tests/unit \
+            --ignore=tests/unit/test_website_contact_provider.py \
             -v \
             --tb=short \
             --cov=api --cov=db --cov=pipeline --cov=intelligence --cov=scraper \
