@@ -1,12 +1,20 @@
 """Runtime schema-contract checks and apply logic for the company
-on-demand enrichment schema (migration 034, RFC Phase 1) -- Class D
-helpers.
+on-demand enrichment schema (migration 034, RFC Phase 1) and its Phase 3
+provenance/verification extension (migration 035,
+docs/COMPANY_CONTACT_PROVIDER_PHASE3_DESIGN.md S2) -- Class D helpers.
 
-Applies two brand-new, empty tables (company_enrichment_fields,
+Migration 034 applies two brand-new, empty tables (company_enrichment_fields,
 company_enrichment_jobs) plus their indexes -- never touches any existing
-table (including companies), never writes application data. This module
-never applies anything by itself; the only caller is
-scripts/run_company_enrichment_migration.py --apply.
+table (including companies), never writes application data. Migration 035
+ALTERs those same two existing tables (6 new columns + 1 CHECK constraint
+on company_enrichment_fields; 1 new JSONB column + 1 validation function +
+1 CHECK constraint on company_enrichment_jobs) -- still touches no other
+table, still writes no application data, and does NOT require either table
+to be empty (unlike 034's own postcondition, which does -- 034 creates the
+tables from nothing, 035 alters tables that may already hold real rows).
+This module never applies anything by itself; the only callers are
+scripts/run_company_enrichment_migration.py --apply (034) and
+scripts/run_company_enrichment_phase3_migration.py --apply (035).
 
 No ORM mapping is added by this PR -- pipeline/company_enrichment/* talks
 to these tables through plain SQLAlchemy Core Table objects
@@ -16,6 +24,17 @@ Base.metadata.create_all() can never auto-create this schema. That wiring
 decision is what this migration's runner enforces operationally: the
 schema only exists once an operator has explicitly run --apply. Mirrors
 db/ops_job_run_migration.py's approach (migration 033) exactly.
+
+Phase 3 readiness (company_enrichment_phase3_apply_readiness()) is a
+SEPARATE function from 034's own company_enrichment_apply_readiness(),
+gated on 034 already being FULLY_APPLIED as a precondition -- "034
+applied, Phase 3 not yet applied" is a valid, normal, expected state (not
+corruption), and must stay distinguishable from "Phase 3 partially
+applied" (which IS corruption). 034's own readiness function is updated
+only so that the six/one Phase 3 columns, if ALSO present, are never
+misreported as "unexpected" columns (design doc S2.5) -- it otherwise
+still reports FULLY_APPLIED for the original 034-only schema exactly as
+before Phase 3 existed.
 """
 
 from __future__ import annotations
@@ -32,6 +51,7 @@ from db.company_enrichment_ddl import (
     FIELDS_TABLE,
     JOBS_TABLE,
     company_enrichment_migration_statements,
+    company_enrichment_phase3_migration_statements,
 )
 
 __all__ = [
@@ -39,11 +59,17 @@ __all__ = [
     "ApplyReadinessStatus",
     "CompanyEnrichmentSchemaCorruptError",
     "CompanyEnrichmentApplyPostconditionError",
+    "CompanyEnrichmentPhase3SchemaCorruptError",
+    "CompanyEnrichmentPhase3ApplyPostconditionError",
     "company_enrichment_apply_readiness",
     "company_enrichment_before_stats",
     "company_enrichment_migration_pending",
     "apply_company_enrichment_migration",
     "company_enrichment_row_counts",
+    "company_enrichment_phase3_apply_readiness",
+    "company_enrichment_phase3_before_stats",
+    "company_enrichment_phase3_migration_pending",
+    "apply_company_enrichment_phase3_migration",
 ]
 
 
@@ -65,7 +91,32 @@ class CompanyEnrichmentApplyPostconditionError(RuntimeError):
     migration."""
 
 
-_FIELDS_EXPECTED_COLUMNS = frozenset(
+class CompanyEnrichmentPhase3SchemaCorruptError(RuntimeError):
+    """Raised when migration 034 is applied but the Phase 3 increment
+    (db/migrations/035_company_enrichment_phase3.sql) exists in a state
+    that does not match it -- e.g. only some of the 6 new
+    company_enrichment_fields columns are present, or a same-named CHECK
+    constraint exists with the wrong expression. Fail-closed: the operator
+    must investigate manually. Nothing here attempts to silently repair a
+    corrupt schema."""
+
+
+class CompanyEnrichmentPhase3ApplyPostconditionError(RuntimeError):
+    """Raised by apply_company_enrichment_phase3_migration() when
+    migration 034 is not FULLY_APPLIED (Phase 3 cannot be safely applied
+    on top of a table that doesn't fully exist yet), or when, immediately
+    after executing migration 035's DDL -- through the exact same
+    connection and transaction, before commit -- the resulting schema does
+    not fully conform to the expected Phase 3 contract. Raised inside the
+    same ``with engine.begin()`` block that ran the DDL (when raised after
+    the DDL executes), so it triggers an automatic ROLLBACK of the entire
+    migration."""
+
+
+# The original migration-034 column set for each table -- REQUIRED for
+# 034's own FULLY_APPLIED status regardless of whether Phase 3 is also
+# applied on top.
+_FIELDS_034_COLUMNS = frozenset(
     {
         "id",
         "company_id",
@@ -79,7 +130,7 @@ _FIELDS_EXPECTED_COLUMNS = frozenset(
         "run_id",
     }
 )
-_JOBS_EXPECTED_COLUMNS = frozenset(
+_JOBS_034_COLUMNS = frozenset(
     {
         "id",
         "run_id",
@@ -91,6 +142,70 @@ _JOBS_EXPECTED_COLUMNS = frozenset(
         "finished_at",
         "lease_expires_at",
     }
+)
+
+# Migration 035 (Phase 3) additions -- design doc S2.2/S2.1. OPTIONAL for
+# 034's own readiness (their presence must never be flagged as
+# "unexpected" there -- design doc S2.5), REQUIRED for
+# company_enrichment_phase3_apply_readiness()'s own FULLY_APPLIED status.
+_FIELDS_PHASE3_COLUMNS = frozenset(
+    {
+        "source_url",
+        "raw_value",
+        "extraction_method",
+        "verified_at",
+        "verified_by",
+        "verification_source_url",
+    }
+)
+_JOBS_PHASE3_COLUMNS = frozenset({"field_attempt_log"})
+
+# Every column either migration could legitimately have created -- used by
+# 034's OWN readiness so a Phase-3-extended schema is never reported as
+# containing "unexpected" columns; 034's readiness still separately
+# requires the full _FIELDS_034_COLUMNS/_JOBS_034_COLUMNS set to be
+# present regardless (see company_enrichment_apply_readiness() below).
+_FIELDS_KNOWN_COLUMNS = _FIELDS_034_COLUMNS | _FIELDS_PHASE3_COLUMNS
+_JOBS_KNOWN_COLUMNS = _JOBS_034_COLUMNS | _JOBS_PHASE3_COLUMNS
+
+_VALIDATE_FIELD_ATTEMPT_LOG_FUNCTION = "company_enrichment_validate_field_attempt_log"
+
+
+@dataclass(frozen=True)
+class _ExpectedCheckConstraintShape:
+    """A Phase 3 CHECK constraint verified by actual expression shape (via
+    pg_get_constraintdef), not just name existence -- mirrors
+    _index_conforms()'s existing pg_get_expr-based predicate comparison
+    for indexes. Deliberately NOT applied to the two pre-existing 034
+    constraints (ck_company_enrichment_jobs_trigger/_status, still checked
+    by _check_constraint_exists() name-only below): db/ops_job_run_migration.py's
+    own _EXPECTED_CHECK_CONSTRAINTS explicitly documents that Postgres
+    rewrites an `IN (...)` clause on a varchar column in a
+    version-dependent way, making exact-text comparison fragile for THAT
+    shape of constraint. Phase 3's two constraints are NOT `IN (...)`
+    clauses (a function call and an IS-NOT-NULL conjunction), so the
+    fragility that precedent warns about doesn't apply to them, and the
+    schema review's own empirical finding (a same-named-but-weaker
+    verified-evidence constraint silently surviving the DO $$ guard) is
+    exactly the corruption shape-comparison is needed to catch."""
+
+    table: str
+    name: str
+    expected_definition: str  # a real pg_get_constraintdef()-shaped string
+
+
+_PHASE3_EXPECTED_CHECK_CONSTRAINTS: tuple[_ExpectedCheckConstraintShape, ...] = (
+    _ExpectedCheckConstraintShape(
+        JOBS_TABLE,
+        "ck_company_enrichment_jobs_field_attempt_log_shape",
+        f"CHECK ({_VALIDATE_FIELD_ATTEMPT_LOG_FUNCTION}(field_attempt_log))",
+    ),
+    _ExpectedCheckConstraintShape(
+        FIELDS_TABLE,
+        "ck_company_enrichment_fields_verified_evidence",
+        "CHECK (((NOT verified) OR ((verified_by IS NOT NULL) AND "
+        "(verified_at IS NOT NULL) AND (verification_source_url IS NOT NULL))))",
+    ),
 )
 
 
@@ -265,6 +380,58 @@ def _check_constraint_exists(conn: Any, *, table: str, name: str) -> bool:
     return row is not None
 
 
+_CHECK_CONSTRAINT_DEF_SQL = text("""
+    SELECT pg_get_constraintdef(con.oid)
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE con.contype = 'c'
+      AND con.conname = :name
+      AND rel.relname = :table
+      AND nsp.nspname = 'public'
+    """)
+
+
+def _check_constraint_def(conn: Any, *, table: str, name: str) -> str | None:
+    row = conn.execute(
+        _CHECK_CONSTRAINT_DEF_SQL, {"table": table, "name": name}
+    ).first()
+    return row[0] if row is not None else None
+
+
+def _check_constraint_conforms(
+    conn: Any, expected: _ExpectedCheckConstraintShape
+) -> bool:
+    """Shape comparison (not just name existence) for a Phase 3 CHECK
+    constraint -- reuses _normalize_predicate()'s cast-stripping/
+    paren-stripping/whitespace-collapsing normalization (already proven
+    correct for index predicates) so this is robust to Postgres's own
+    cosmetic formatting of pg_get_constraintdef() output, while still
+    catching a genuinely different expression (design doc S2.2's
+    documented "same name, weaker CHECK" blind spot -- exactly what a
+    name-only DO $$ guard cannot detect, and exactly what this function
+    exists to catch instead)."""
+    actual = _check_constraint_def(conn, table=expected.table, name=expected.name)
+    if actual is None:
+        return False
+    return _normalize_predicate(actual) == _normalize_predicate(
+        expected.expected_definition
+    )
+
+
+_VALIDATE_FUNCTION_EXISTS_SQL = text("""
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = :name AND n.nspname = 'public'
+    """)
+
+
+def _function_exists(conn: Any, *, name: str) -> bool:
+    row = conn.execute(_VALIDATE_FUNCTION_EXISTS_SQL, {"name": name}).first()
+    return row is not None
+
+
 def company_enrichment_before_stats(session_or_conn: Any) -> dict[str, Any]:
     """Lightweight existence-only snapshot -- used as the dry-run-artifact
     staleness signal. Does NOT verify the full contract -- see
@@ -319,23 +486,34 @@ def company_enrichment_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
 
     violations: list[str] = []
 
+    # Column-set check: the original 034 columns are always REQUIRED
+    # ("missing" against _FIELDS_034_COLUMNS/_JOBS_034_COLUMNS); a column
+    # is only "unexpected" if it isn't part of EITHER 034's or Phase 3's
+    # known contribution (_FIELDS_KNOWN_COLUMNS/_JOBS_KNOWN_COLUMNS) --
+    # design doc S2.5: the moment Phase 3's columns exist (correctly, on
+    # purpose), 034's own readiness must keep reporting FULLY_APPLIED, not
+    # CORRUPT, exactly as it did before Phase 3 existed.
     if fields_columns is None:
         violations.append(f"{FIELDS_TABLE} table is missing")
-    elif set(fields_columns) != _FIELDS_EXPECTED_COLUMNS:
-        violations.append(
-            f"{FIELDS_TABLE} columns do not match: "
-            f"missing={sorted(_FIELDS_EXPECTED_COLUMNS - set(fields_columns))} "
-            f"unexpected={sorted(set(fields_columns) - _FIELDS_EXPECTED_COLUMNS)}"
-        )
+    else:
+        missing = _FIELDS_034_COLUMNS - set(fields_columns)
+        unexpected = set(fields_columns) - _FIELDS_KNOWN_COLUMNS
+        if missing or unexpected:
+            violations.append(
+                f"{FIELDS_TABLE} columns do not match: "
+                f"missing={sorted(missing)} unexpected={sorted(unexpected)}"
+            )
 
     if jobs_columns is None:
         violations.append(f"{JOBS_TABLE} table is missing")
-    elif set(jobs_columns) != _JOBS_EXPECTED_COLUMNS:
-        violations.append(
-            f"{JOBS_TABLE} columns do not match: "
-            f"missing={sorted(_JOBS_EXPECTED_COLUMNS - set(jobs_columns))} "
-            f"unexpected={sorted(set(jobs_columns) - _JOBS_EXPECTED_COLUMNS)}"
-        )
+    else:
+        missing = _JOBS_034_COLUMNS - set(jobs_columns)
+        unexpected = set(jobs_columns) - _JOBS_KNOWN_COLUMNS
+        if missing or unexpected:
+            violations.append(
+                f"{JOBS_TABLE} columns do not match: "
+                f"missing={sorted(missing)} unexpected={sorted(unexpected)}"
+            )
 
     # Safety review finding #3: index/FK/CHECK checks below are gated on
     # EACH table's own existence independently, not on both tables
@@ -460,3 +638,205 @@ def apply_company_enrichment_migration(engine: Engine) -> dict[str, Any]:
     entire migration."""
     with engine.begin() as conn:
         return _apply_and_verify_within_transaction(conn)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (migration 035) -- provenance/verification schema extension.
+# Separate readiness/apply functions from 034's own, gated on 034 already
+# being FULLY_APPLIED (design doc S2.5).
+# ---------------------------------------------------------------------------
+
+
+def company_enrichment_phase3_before_stats(session_or_conn: Any) -> dict[str, Any]:
+    """Lightweight existence-only snapshot -- used as the dry-run-artifact
+    staleness signal. Does NOT verify the full contract -- see
+    company_enrichment_phase3_apply_readiness() for that."""
+    fields_columns = _table_columns(session_or_conn, FIELDS_TABLE)
+    jobs_columns = _table_columns(session_or_conn, JOBS_TABLE)
+    statements = company_enrichment_phase3_migration_statements()
+    fields_phase3_present = bool(_FIELDS_PHASE3_COLUMNS & set(fields_columns or ()))
+    jobs_phase3_present = bool(_JOBS_PHASE3_COLUMNS & set(jobs_columns or ()))
+    return {
+        "fields_table_exists": fields_columns is not None,
+        "jobs_table_exists": jobs_columns is not None,
+        "phase3_columns_present": fields_phase3_present or jobs_phase3_present,
+        "migration_pending": not (fields_phase3_present or jobs_phase3_present),
+        "statements_planned": len(statements),
+    }
+
+
+def company_enrichment_phase3_migration_pending(session_or_conn: Any) -> bool:
+    return bool(
+        company_enrichment_phase3_before_stats(session_or_conn).get("migration_pending")
+    )
+
+
+def company_enrichment_phase3_apply_readiness(session_or_conn: Any) -> ApplyReadiness:
+    """Phase 3 (migration 035) schema-contract check: the 6 new
+    company_enrichment_fields columns, the 1 new company_enrichment_jobs
+    column, the validation function, and both new CHECK constraints
+    (verified by actual expression shape, not just name) -- independent of,
+    but gated on, migration 034's own readiness.
+
+    Reuses ApplyReadiness/ApplyReadinessStatus (same three-state shape as
+    034's own readiness) rather than inventing a parallel type -- the
+    meaning is identical ("is this specific migration's contract fully,
+    partially, or not-at-all satisfied"), just evaluated against a
+    different, later increment of the same two tables.
+
+    "034 applied, Phase 3 not yet applied" reports NOT_APPLIED here (a
+    valid, normal, expected state -- not corruption). "034 not
+    FULLY_APPLIED at all" (including a totally fresh, untouched Postgres)
+    also reports NOT_APPLIED when nothing exists yet, or CORRUPT with an
+    explicit "034 must be applied first" violation when 034 itself is in
+    a CORRUPT state -- Phase 3's readiness has no meaningful independent
+    answer to give in that case (design doc S2.5)."""
+    base = company_enrichment_apply_readiness(session_or_conn)
+
+    if base.status is ApplyReadinessStatus.NOT_APPLIED:
+        # Neither table exists at all -- Phase 3 is trivially not applied
+        # too. The normal "haven't started" state, not corruption.
+        return ApplyReadiness(
+            status=ApplyReadinessStatus.NOT_APPLIED,
+            fields_columns=None,
+            jobs_columns=None,
+            violations=(),
+        )
+
+    if base.status is ApplyReadinessStatus.CORRUPT:
+        return ApplyReadiness(
+            status=ApplyReadinessStatus.CORRUPT,
+            fields_columns=base.fields_columns,
+            jobs_columns=base.jobs_columns,
+            violations=(
+                "migration 034 must be FULLY_APPLIED before Phase 3 readiness "
+                "can be evaluated; 034 violations: " + "; ".join(base.violations),
+            ),
+        )
+
+    # base.status is FULLY_APPLIED: 034's own required columns are all
+    # present and correctly shaped. Now independently check Phase 3's own
+    # increment: 6 fields columns, 1 jobs column, 1 function, 2 constraints.
+    fields_columns = base.fields_columns or {}
+    jobs_columns = base.jobs_columns or {}
+
+    present_fields_phase3 = _FIELDS_PHASE3_COLUMNS & set(fields_columns)
+    present_jobs_phase3 = _JOBS_PHASE3_COLUMNS & set(jobs_columns)
+    function_present = _function_exists(
+        session_or_conn, name=_VALIDATE_FIELD_ATTEMPT_LOG_FUNCTION
+    )
+    constraint_exists_by_name = {
+        expected.name: _check_constraint_exists(
+            session_or_conn, table=expected.table, name=expected.name
+        )
+        for expected in _PHASE3_EXPECTED_CHECK_CONSTRAINTS
+    }
+
+    nothing_present = (
+        not present_fields_phase3
+        and not present_jobs_phase3
+        and not function_present
+        and not any(constraint_exists_by_name.values())
+    )
+    if nothing_present:
+        return ApplyReadiness(
+            status=ApplyReadinessStatus.NOT_APPLIED,
+            fields_columns=fields_columns,
+            jobs_columns=jobs_columns,
+            violations=(),
+        )
+
+    violations: list[str] = []
+
+    missing_fields = _FIELDS_PHASE3_COLUMNS - set(fields_columns)
+    if missing_fields:
+        violations.append(
+            f"{FIELDS_TABLE} missing Phase 3 columns: {sorted(missing_fields)}"
+        )
+
+    missing_jobs = _JOBS_PHASE3_COLUMNS - set(jobs_columns)
+    if missing_jobs:
+        violations.append(
+            f"{JOBS_TABLE} missing Phase 3 columns: {sorted(missing_jobs)}"
+        )
+
+    if not function_present:
+        violations.append(
+            f"{_VALIDATE_FIELD_ATTEMPT_LOG_FUNCTION}() function is missing"
+        )
+
+    for expected in _PHASE3_EXPECTED_CHECK_CONSTRAINTS:
+        if not constraint_exists_by_name[expected.name]:
+            violations.append(
+                f"{expected.name} check constraint is missing on {expected.table}"
+            )
+        elif not _check_constraint_conforms(session_or_conn, expected):
+            actual_def = _check_constraint_def(
+                session_or_conn, table=expected.table, name=expected.name
+            )
+            violations.append(
+                f"{expected.name} check constraint does not conform: "
+                f"actual={actual_def!r} expected={expected.expected_definition!r}"
+            )
+
+    status = (
+        ApplyReadinessStatus.CORRUPT
+        if violations
+        else ApplyReadinessStatus.FULLY_APPLIED
+    )
+    return ApplyReadiness(
+        status=status,
+        fields_columns=fields_columns,
+        jobs_columns=jobs_columns,
+        violations=tuple(violations),
+    )
+
+
+def _apply_and_verify_phase3_within_transaction(conn: Any) -> dict[str, Any]:
+    base_readiness = company_enrichment_apply_readiness(conn)
+    if base_readiness.status is not ApplyReadinessStatus.FULLY_APPLIED:
+        raise CompanyEnrichmentPhase3ApplyPostconditionError(
+            "Refusing to apply migration 035 (Phase 3): migration 034 is not "
+            f"FULLY_APPLIED (status={base_readiness.status.value}).\n"
+            "  034 violations:\n"
+            + "\n".join(f"    - {v}" for v in base_readiness.violations)
+        )
+
+    statements = company_enrichment_phase3_migration_statements()
+    for statement in statements:
+        conn.execute(text(statement))
+
+    readiness = company_enrichment_phase3_apply_readiness(conn)
+    if readiness.status is not ApplyReadinessStatus.FULLY_APPLIED:
+        raise CompanyEnrichmentPhase3ApplyPostconditionError(
+            "Refusing to commit migration 035 (Phase 3): schema does not fully "
+            "conform to the expected contract immediately after applying its "
+            "DDL.\n  Violations:\n"
+            + "\n".join(f"    - {v}" for v in readiness.violations)
+        )
+
+    # Unlike 034's own apply, Phase 3 does NOT require either table to be
+    # empty -- it alters existing tables that may already hold real rows
+    # (new nullable columns / a JSONB column with a '[]' default never
+    # rejects an existing row). Row counts are reported for visibility
+    # only, never as a postcondition.
+    counts = company_enrichment_row_counts(conn)
+
+    return {
+        "statements_executed": len(statements),
+        "migration": "035_company_enrichment_phase3",
+        "conforms": True,
+        "row_counts": counts,
+    }
+
+
+def apply_company_enrichment_phase3_migration(engine: Engine) -> dict[str, Any]:
+    """Apply migration 035 (Phase 3) and verify its postcondition, all
+    inside one transaction: confirm 034 is FULLY_APPLIED, execute the
+    Phase 3 DDL, then -- through that exact same connection -- run the
+    full Phase 3 schema-contract check. Any mismatch raises
+    CompanyEnrichmentPhase3ApplyPostconditionError, which (raised inside
+    this ``with engine.begin()`` block) triggers an automatic ROLLBACK of
+    the entire migration."""
+    with engine.begin() as conn:
+        return _apply_and_verify_phase3_within_transaction(conn)
