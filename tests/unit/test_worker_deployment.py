@@ -144,10 +144,16 @@ def test_dockerignore_exists_and_excludes_env_files() -> None:
     )
 
 
-def test_dockerignore_is_an_allow_list_not_a_bare_deny_list() -> None:
-    """The very first non-comment line must be a bare `*` (deny everything),
-    so anything not explicitly re-included later is excluded by
-    construction -- protects against future clutter, not just today's."""
+def test_dockerignore_is_a_deny_list_not_a_restrictive_allow_list() -> None:
+    """The very first active rule must NOT be a bare `*` -- this file was
+    an allow-list once (deny-all + selective re-include) and that
+    architecture caused TWO separate production deploy failures for the
+    main API's Nixpacks build (`.nixpacks/nixpkgs-*.nix` first, then
+    `requirements.txt`/`api/`/etc. -- see the file's own header comment
+    for the full incident trace). It is now a deny-list: include
+    everything by default, explicitly exclude only what must never reach
+    an image. Guards against silently reverting to the allow-list
+    architecture that already broke production twice."""
     text = DOCKERIGNORE_PATH.read_text(encoding="utf-8")
     lines = [
         line.strip()
@@ -155,27 +161,39 @@ def test_dockerignore_is_an_allow_list_not_a_bare_deny_list() -> None:
         if line.strip() and not line.strip().startswith("#")
     ]
     assert lines, ".dockerignore has no active rules"
-    assert lines[0] == "*", (
-        f"expected the first active .dockerignore rule to be a bare '*' "
-        f"(default-deny), got {lines[0]!r}"
+    assert lines[0] != "*", (
+        "the first active .dockerignore rule is a bare '*' (default-deny) "
+        "-- this reverts to the allow-list architecture that broke the "
+        "main API's Nixpacks build twice in production (see this file's "
+        "own header comment); it must stay a deny-list"
+    )
+    assert not any(line == "*" for line in lines), (
+        ".dockerignore contains a bare '*' deny-all rule somewhere -- "
+        "even one, anywhere in the file, silently excludes everything "
+        "not separately re-included, reintroducing the allow-list failure "
+        "mode this file was rewritten to avoid"
     )
 
 
 # Sample paths this test's simulation must resolve correctly. Each entry
 # is a real or representative path, not exhaustive -- this is a targeted
-# regression check for two specific risks this file's history found, not
+# regression check for the specific risks this file's history found, not
 # a full filesystem audit:
-# 1. A secret-shaped filename dropped INSIDE an allowed directory
-#    previously would NOT have been excluded (safety review finding).
-# 2. `.nixpacks/nixpkgs-*.nix` previously WAS excluded, which broke a
-#    real production deploy: Nixpacks (railway.toml's `builder =
-#    "NIXPACKS"`) does NOT bypass Docker/.dockerignore the way an earlier
-#    version of this repo's own .dockerignore comment assumed -- it
-#    generates its own build plan through a standard Docker build
-#    context rooted at this repo, and that build plan COPYs a `.nix` file
-#    it writes into the context at build time. Confirmed directly from
-#    the failed deploy's Railway build logs before this fix.
+# 1. `.env`/secrets/credentials dropped anywhere in the tree must never
+#    reach an image (config/env.py auto-loads a baked-in .env at its own
+#    import time -- see the .dockerignore header comment).
+# 2. `.nixpacks/nixpkgs-*.nix` was once excluded (allow-list era), which
+#    broke a real production deploy: Nixpacks' generated build plan COPYs
+#    a `.nix` file it writes into the build context at build time.
+# 3. `requirements.txt`, `api/`, and other main-API-only paths were
+#    ALSO once excluded (same allow-list era, same incident's second
+#    failure) -- the main API's own Nixpacks build needs its full source
+#    tree, not just the four directories worker/Dockerfile needs.
+#    This is the exact silent-exclusion class of bug this deny-list
+#    rewrite exists to structurally prevent, so it gets its own dedicated
+#    assertion below, not just membership in this tuple.
 _DOCKERIGNORE_MUST_INCLUDE = (
+    # worker/Dockerfile's own needs -- still true under a deny-list.
     "worker/app.py",
     "worker/Dockerfile",
     "worker/requirements.txt",
@@ -190,35 +208,53 @@ _DOCKERIGNORE_MUST_INCLUDE = (
     "db/__init__.py",
     "config/env.py",
     "config/__init__.py",
-    # The main API's Nixpacks build needs these -- see point 2 above.
+    # Nixpacks' own generated build artifact -- see point 2 above.
     ".nixpacks/nixpkgs-bc8f8d1be58e8c8383e683a06e1e1e57893fff87.nix",
     ".nixpacks/some-other-generated-file.nix",
+    # The main API's own Nixpacks build needs -- see point 3 above. These
+    # are the exact paths confirmed missing from the failed production
+    # build's context before this deny-list rewrite.
+    "requirements.txt",
+    "requirements-dev.txt",
+    "api/main.py",
+    "scraper/__init__.py",
+    "intelligence/__init__.py",
+    "Procfile",
+    "runtime.txt",
+    "railway.toml",
 )
 _DOCKERIGNORE_MUST_EXCLUDE = (
     ".env",
     ".env.local",
     ".env.example",
-    "docs/COMPANY_ON_DEMAND_ENRICHMENT_RFC.md",
     "exports/company_contact_discovery_pilot.json",
-    "api/main.py",
-    "building_permits.csv",
-    ".github/workflows/quality-gate.yml",
-    "railway.toml",
-    "requirements.txt",
     "worker/__pycache__/app.cpython-313.pyc",
-    # Secret-shaped files dropped INSIDE an allowed directory -- the real
-    # gap this review found: the allow-list re-includes worker/, db/,
-    # pipeline/, config/ wholesale, which does nothing on its own to
-    # exclude a secret-shaped file placed inside one of them.
+    "pipeline/__pycache__/x.pyc",
+    "api/__pycache__/x.pyc",
+    ".git/config",
+    ".venv/lib/site-packages/x.py",
+    "node_modules/foo/index.js",
+    ".mypy_cache/x",
+    ".pytest_cache/x",
+    ".ruff_cache/x",
+    "something.egg-info/PKG-INFO",
+    # Secret-shaped files anywhere in the tree, not just inside a
+    # previously-allow-listed directory -- the same gap the earlier
+    # safety review found, now checked against the whole repo since
+    # there's no allow-list boundary to reason about anymore.
     "worker/secrets.json",
     "worker/.secrets",
     "db/secrets.py",
     "pipeline/company_enrichment/secrets.json",
+    "api/secrets.json",
+    "secrets/anything.txt",
+    "credentials/anything.txt",
     "worker/.env",
     "config/.env.local",
     "db/credentials.json",
     "worker/id_rsa.pem",
     "config/api.key",
+    "api/prod.key",
 )
 
 
@@ -252,6 +288,38 @@ def test_dockerignore_pattern_simulation_matches_needed_and_dangerous_paths() ->
             failures.append(f"wrongly INCLUDED (must never reach the image): {path}")
 
     assert not failures, "\n".join(failures)
+
+
+def test_dockerignore_does_not_silently_exclude_main_api_build_files() -> None:
+    """Dedicated regression test for the exact incident that forced this
+    file's allow-list -> deny-list rewrite: a production deploy failed
+    because `requirements.txt` (and, by the same allow-list mechanism,
+    `api/`, `scraper/`, `intelligence/`, `Procfile`, `runtime.txt`) were
+    silently absent from the main API's own Nixpacks build context.
+    Kept as its own named test, separate from the broader
+    must-include/must-exclude simulation above, so a future change that
+    narrows the deny-list back toward an allow-list fails on a test whose
+    name says exactly what broke and why, not just "some path mismatch."
+    """
+    pathspec = pytest.importorskip("pathspec")
+    text = DOCKERIGNORE_PATH.read_text(encoding="utf-8")
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", text.splitlines())
+
+    main_api_build_paths = (
+        "requirements.txt",
+        "requirements-dev.txt",
+        "api/main.py",
+        "scraper/__init__.py",
+        "intelligence/__init__.py",
+        "Procfile",
+        "runtime.txt",
+    )
+    silently_excluded = [p for p in main_api_build_paths if spec.match_file(p)]
+    assert not silently_excluded, (
+        "these main-API build files would be silently excluded from the "
+        f"Docker build context, exactly like the production incident this "
+        f"test guards against: {silently_excluded}"
+    )
 
 
 # ---------------------------------------------------------------------------

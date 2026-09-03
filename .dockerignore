@@ -1,99 +1,85 @@
 # Build context filter, consulted by BOTH worker/Dockerfile AND the main
-# API's own Railway/Nixpacks build.
+# API's own Railway/Nixpacks build (confirmed the hard way -- see below).
 #
-# CORRECTION (confirmed by an actual production build failure -- this is
-# not theoretical): an earlier version of this file's own comment here
-# claimed "the main API is Nixpacks-built ... this file has zero effect
-# on the main API's build" -- that claim was WRONG. `builder = "NIXPACKS"`
-# in railway.toml does not mean Docker/.dockerignore are bypassed:
-# Nixpacks generates its OWN internal Dockerfile-equivalent build plan
-# and still builds it through a standard Docker build context rooted at
-# this repo -- and that build context is still filtered by THIS file.
-# Railway build logs from the failed deploy confirmed this directly:
-# Nixpacks' generated build plan does `COPY .nixpacks/nixpkgs-<hash>.nix
-# .nixpacks/nixpkgs-<hash>.nix` (a file Nixpacks itself generates fresh
-# into the build context at build time) -- and because an earlier version
-# of the allow-list below did not include `.nixpacks/`, that COPY failed
-# with "not found", and the entire production deploy failed. `.nixpacks/`
-# is now explicitly allow-listed below specifically because of this.
+# ARCHITECTURE: DENY-LIST, not an allow-list. This file was originally an
+# allow-list (`*` deny-all, then `!worker/ !pipeline/ !db/ !config/`)
+# scoped to exactly what worker/Dockerfile needs. That caused TWO
+# separate production deploy failures for the main API's build, which
+# needs a much wider tree than the worker does:
+#   1. Nixpacks' own generated build plan writes `.nixpacks/nixpkgs-
+#      <hash>.nix` into the build context at build time and immediately
+#      COPYs it -- the allow-list didn't include `.nixpacks/`, so that
+#      COPY failed with "not found" and the deploy failed. Fixed by
+#      adding `.nixpacks/` to the allow-list (PR #168).
+#   2. The very next build step, `pip install -r requirements.txt`,
+#      then failed too: `requirements.txt` (repo root) was never in the
+#      allow-list either, and neither were api/, scraper/, intelligence/,
+#      Procfile, runtime.txt, etc. -- everything the main API's own build
+#      actually needs. Confirmed directly from Railway's build logs
+#      before writing this file.
+# Point 2 proved that hand-maintaining an allow-list for TWO different
+# builds with very different needs (a minimal worker image vs. the full
+# main API) doesn't scale and silently breaks whichever build isn't the
+# one being actively worked on. A deny-list -- include everything by
+# default, explicitly exclude only what must never reach an image --
+# does not have this failure mode: a new source directory, script, or
+# build file added anywhere in the repo is included automatically,
+# without this file ever needing an update.
 #
-# CAVEAT, still true and still worth restating: .dockerignore is scoped
-# to the BUILD CONTEXT (this repo root), not to one Dockerfile -- if a
-# root-level Dockerfile is ever added for the main API itself (building
-# from this same repo-root context) INSTEAD of Nixpacks, this same
-# allow-list would need api/, scraper/, intelligence/, etc. added too, or
-# it would need re-scoping (e.g. Docker's per-Dockerfile
-# `<name>.dockerignore` convention). The Nixpacks incident above is proof
-# this file's effective scope is easy to underestimate -- verify empirically
-# (as tests/unit/test_worker_deployment.py's dockerignore simulation test
-# now does for the paths this file actually needs to affect), don't assume.
+# `worker/Dockerfile`'s own build context therefore now includes more
+# than the four directories (worker/, pipeline/, db/, config/) its
+# import graph strictly needs -- e.g. api/, scraper/, intelligence/, the
+# various CSV/JSON data dumps at the repo root. That is a deliberate,
+# accepted trade-off: a larger worker image (still excludes .env/
+# secrets/credentials/exports -- see below, the properties that actually
+# matter for S4.8's "no DB credentials" contract) in exchange for a main
+# API build that is not silently broken by a file this .dockerignore's
+# author didn't happen to think of. worker/Dockerfile's own multi-stage
+# COPY instructions (COPY pipeline/ pipeline/, COPY db/ db/, etc.) are
+# unaffected by this file switching to a deny-list -- those instructions
+# only ever copy the specific directories they name, regardless of what
+# else the build CONTEXT contains.
 #
-# This is an ALLOW-LIST, not a deny-list of currently-known clutter -- a
-# deny-list only protects against files that exist today (this repo
-# root's own real, present .env file; various *.csv/*.json data dumps;
-# docs/; and many scratch/tooling directories like .agents/, .codex/,
-# .cursor/, .ocr/, .schemathesis/, .serena/, .tkg/, .windsurf/, plus
-# loose debug scripts). An allow-list protects against anything that
-# shows up later too -- structurally, not by remembering to update this
-# file every time something new lands at the repo root.
-#
-# worker/app.py's own import graph was traced by hand before writing this
-# file (worker/ -> pipeline.company_enrichment.website_contact_provider
-# -> db.models / pipeline.company_matching / pipeline.registry_verification
-# -> db.registry_constants, db.market_registry_constants,
-# db.company_canonical_constants, pipeline.company_resolution,
-# pipeline.registry_verification.providers.* -> config.env, via
-# db/__init__.py's own `from db.connection import ...`, which in turn
-# imports `from config.env import get_env, load_app_env`). Four
-# directories cover that whole graph: worker/, pipeline/, db/, config/.
-#
-# `.nixpacks/` is a fifth, different kind of entry: not a source
-# directory worker/app.py imports, but Nixpacks' OWN generated build
-# artifact (a `.nix` file it writes into the build context at build
-# time, then immediately COPYs as part of its generated build plan --
-# see the correction above). It must be allow-listed for the MAIN API's
-# Nixpacks build to succeed at all, regardless of anything worker-related.
-*
+# Secrets/credentials exclusion (the property this file's earlier
+# allow-list existed to guarantee in the first place, and still does):
+# this repo root has a real, present `.env` file, and config/env.py
+# calls load_app_env() AT ITS OWN MODULE IMPORT TIME (top-level call,
+# outside any function) -- merely importing db.models (which both
+# worker/app.py and the main API do) silently loads whatever `.env` file
+# is on disk into the process environment via python-dotenv. A `.env`
+# file baked into either image, however it got there, would be loaded
+# automatically at startup with zero further code involved. The explicit
+# excludes below are what prevent that -- not "nothing bad happens to be
+# in the repo today," an actual pattern match, verified empirically
+# below and in tests/unit/test_worker_deployment.py.
 
-!worker/
-!worker/**
-!pipeline/
-!pipeline/**
-!db/
-!db/**
-!config/
-!config/**
-!.nixpacks/
-!.nixpacks/**
-
-# Re-deny bytecode/cache noise, and any stray env/secret file, inside the
-# four allowed trees -- defense-in-depth. None of the four directories
-# above contains any of these today (verified with `find worker pipeline
-# db config -iname '*secret*' -o -iname '*credential*' -o -iname '*.pem'
-# -o -iname '*.key'` before adding these lines -- zero matches), but the
-# allow-list above only re-includes worker/, pipeline/, db/, config/ as a
-# WHOLE -- it does nothing to stop a secret-shaped file dropped INSIDE
-# one of those trees later from reaching the image, since it isn't
-# outside the allow-list. These lines close that gap.
-#
-# .env in particular: config/env.py calls load_app_env() AT ITS OWN
-# MODULE IMPORT TIME (config/env.py, top-level `load_app_env()` call
-# outside any function), which silently loads whatever .env file it
-# finds on disk (via python-dotenv's load_dotenv(), override=False) into
-# the running process's environment -- merely importing db.models (which
-# worker/app.py does transitively) is enough to trigger this. A .env file
-# baked into this image, however it got there, would be loaded
-# automatically at worker startup with zero further code involved. This
-# repo's root .env (real, present today) must never reach the build
-# context -- the allow-list above already keeps it out (it lives outside
-# all four allowed trees), and these lines guard the hypothetical case of
-# one appearing inside worker/, pipeline/, db/, or config/ later too.
-**/__pycache__/
-**/*.pyc
-**/.env
-**/.env.*
-**/secrets/
+# --- Never include, anywhere in the tree ---
+.env
+.env.*
+secrets/
 **/*secret*
+credentials/
 **/*credential*
-**/*.pem
-**/*.key
+*.pem
+*.key
+exports/
+
+# --- VCS / dependency / cache / bytecode noise ---
+.git/
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Temporary / editor / OS artifacts ---
+*.tmp
+*.temp
+*.log
+.DS_Store
+Thumbs.db
