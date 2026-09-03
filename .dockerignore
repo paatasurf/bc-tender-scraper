@@ -1,17 +1,32 @@
-# Build context filter for worker/Dockerfile (the only Dockerfile in this
-# repo today; the main API is built via Nixpacks (railway.toml's
-# `builder = "NIXPACKS"`), which never consults a .dockerignore file at
-# all -- this file has zero effect on the main API's build, today, by
-# construction, not by convention. CAVEAT for later: .dockerignore is
-# scoped to the BUILD CONTEXT (this repo root), not to one Dockerfile --
-# if a root-level Dockerfile is ever added for the main API itself
-# (building from this same repo-root context), THIS SAME allow-list would
-# apply to it too and would exclude api/, scraper/, intelligence/, etc.
-# Re-scope this file (e.g. Docker's per-Dockerfile
-# `<name>.dockerignore` convention, or add the main API's own needed
-# paths to the allow list below) before that ever happens -- do not
-# assume this file only ever affects worker/Dockerfile just because
-# that's the only Dockerfile today.
+# Build context filter, consulted by BOTH worker/Dockerfile AND the main
+# API's own Railway/Nixpacks build.
+#
+# CORRECTION (confirmed by an actual production build failure -- this is
+# not theoretical): an earlier version of this file's own comment here
+# claimed "the main API is Nixpacks-built ... this file has zero effect
+# on the main API's build" -- that claim was WRONG. `builder = "NIXPACKS"`
+# in railway.toml does not mean Docker/.dockerignore are bypassed:
+# Nixpacks generates its OWN internal Dockerfile-equivalent build plan
+# and still builds it through a standard Docker build context rooted at
+# this repo -- and that build context is still filtered by THIS file.
+# Railway build logs from the failed deploy confirmed this directly:
+# Nixpacks' generated build plan does `COPY .nixpacks/nixpkgs-<hash>.nix
+# .nixpacks/nixpkgs-<hash>.nix` (a file Nixpacks itself generates fresh
+# into the build context at build time) -- and because an earlier version
+# of the allow-list below did not include `.nixpacks/`, that COPY failed
+# with "not found", and the entire production deploy failed. `.nixpacks/`
+# is now explicitly allow-listed below specifically because of this.
+#
+# CAVEAT, still true and still worth restating: .dockerignore is scoped
+# to the BUILD CONTEXT (this repo root), not to one Dockerfile -- if a
+# root-level Dockerfile is ever added for the main API itself (building
+# from this same repo-root context) INSTEAD of Nixpacks, this same
+# allow-list would need api/, scraper/, intelligence/, etc. added too, or
+# it would need re-scoping (e.g. Docker's per-Dockerfile
+# `<name>.dockerignore` convention). The Nixpacks incident above is proof
+# this file's effective scope is easy to underestimate -- verify empirically
+# (as tests/unit/test_worker_deployment.py's dockerignore simulation test
+# now does for the paths this file actually needs to affect), don't assume.
 #
 # This is an ALLOW-LIST, not a deny-list of currently-known clutter -- a
 # deny-list only protects against files that exist today (this repo
@@ -29,9 +44,15 @@
 # db.company_canonical_constants, pipeline.company_resolution,
 # pipeline.registry_verification.providers.* -> config.env, via
 # db/__init__.py's own `from db.connection import ...`, which in turn
-# imports `from config.env import get_env, load_app_env`). Exactly four
-# directories cover the whole graph: worker/, pipeline/, db/, config/.
-# Nothing else is ever needed at runtime.
+# imports `from config.env import get_env, load_app_env`). Four
+# directories cover that whole graph: worker/, pipeline/, db/, config/.
+#
+# `.nixpacks/` is a fifth, different kind of entry: not a source
+# directory worker/app.py imports, but Nixpacks' OWN generated build
+# artifact (a `.nix` file it writes into the build context at build
+# time, then immediately COPYs as part of its generated build plan --
+# see the correction above). It must be allow-listed for the MAIN API's
+# Nixpacks build to succeed at all, regardless of anything worker-related.
 *
 
 !worker/
@@ -42,6 +63,8 @@
 !db/**
 !config/
 !config/**
+!.nixpacks/
+!.nixpacks/**
 
 # Re-deny bytecode/cache noise, and any stray env/secret file, inside the
 # four allowed trees -- defense-in-depth. None of the four directories

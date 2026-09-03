@@ -163,9 +163,18 @@ def test_dockerignore_is_an_allow_list_not_a_bare_deny_list() -> None:
 
 # Sample paths this test's simulation must resolve correctly. Each entry
 # is a real or representative path, not exhaustive -- this is a targeted
-# regression check for the specific risk this review found (a
-# secret-shaped filename dropped INSIDE an allowed directory previously
-# would NOT have been excluded), not a full filesystem audit.
+# regression check for two specific risks this file's history found, not
+# a full filesystem audit:
+# 1. A secret-shaped filename dropped INSIDE an allowed directory
+#    previously would NOT have been excluded (safety review finding).
+# 2. `.nixpacks/nixpkgs-*.nix` previously WAS excluded, which broke a
+#    real production deploy: Nixpacks (railway.toml's `builder =
+#    "NIXPACKS"`) does NOT bypass Docker/.dockerignore the way an earlier
+#    version of this repo's own .dockerignore comment assumed -- it
+#    generates its own build plan through a standard Docker build
+#    context rooted at this repo, and that build plan COPYs a `.nix` file
+#    it writes into the context at build time. Confirmed directly from
+#    the failed deploy's Railway build logs before this fix.
 _DOCKERIGNORE_MUST_INCLUDE = (
     "worker/app.py",
     "worker/Dockerfile",
@@ -181,6 +190,9 @@ _DOCKERIGNORE_MUST_INCLUDE = (
     "db/__init__.py",
     "config/env.py",
     "config/__init__.py",
+    # The main API's Nixpacks build needs these -- see point 2 above.
+    ".nixpacks/nixpkgs-bc8f8d1be58e8c8383e683a06e1e1e57893fff87.nix",
+    ".nixpacks/some-other-generated-file.nix",
 )
 _DOCKERIGNORE_MUST_EXCLUDE = (
     ".env",
