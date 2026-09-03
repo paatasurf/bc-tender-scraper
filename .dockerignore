@@ -1,0 +1,76 @@
+# Build context filter for worker/Dockerfile (the only Dockerfile in this
+# repo today; the main API is built via Nixpacks (railway.toml's
+# `builder = "NIXPACKS"`), which never consults a .dockerignore file at
+# all -- this file has zero effect on the main API's build, today, by
+# construction, not by convention. CAVEAT for later: .dockerignore is
+# scoped to the BUILD CONTEXT (this repo root), not to one Dockerfile --
+# if a root-level Dockerfile is ever added for the main API itself
+# (building from this same repo-root context), THIS SAME allow-list would
+# apply to it too and would exclude api/, scraper/, intelligence/, etc.
+# Re-scope this file (e.g. Docker's per-Dockerfile
+# `<name>.dockerignore` convention, or add the main API's own needed
+# paths to the allow list below) before that ever happens -- do not
+# assume this file only ever affects worker/Dockerfile just because
+# that's the only Dockerfile today.
+#
+# This is an ALLOW-LIST, not a deny-list of currently-known clutter -- a
+# deny-list only protects against files that exist today (this repo
+# root's own real, present .env file; various *.csv/*.json data dumps;
+# docs/; and many scratch/tooling directories like .agents/, .codex/,
+# .cursor/, .ocr/, .schemathesis/, .serena/, .tkg/, .windsurf/, plus
+# loose debug scripts). An allow-list protects against anything that
+# shows up later too -- structurally, not by remembering to update this
+# file every time something new lands at the repo root.
+#
+# worker/app.py's own import graph was traced by hand before writing this
+# file (worker/ -> pipeline.company_enrichment.website_contact_provider
+# -> db.models / pipeline.company_matching / pipeline.registry_verification
+# -> db.registry_constants, db.market_registry_constants,
+# db.company_canonical_constants, pipeline.company_resolution,
+# pipeline.registry_verification.providers.* -> config.env, via
+# db/__init__.py's own `from db.connection import ...`, which in turn
+# imports `from config.env import get_env, load_app_env`). Exactly four
+# directories cover the whole graph: worker/, pipeline/, db/, config/.
+# Nothing else is ever needed at runtime.
+*
+
+!worker/
+!worker/**
+!pipeline/
+!pipeline/**
+!db/
+!db/**
+!config/
+!config/**
+
+# Re-deny bytecode/cache noise, and any stray env/secret file, inside the
+# four allowed trees -- defense-in-depth. None of the four directories
+# above contains any of these today (verified with `find worker pipeline
+# db config -iname '*secret*' -o -iname '*credential*' -o -iname '*.pem'
+# -o -iname '*.key'` before adding these lines -- zero matches), but the
+# allow-list above only re-includes worker/, pipeline/, db/, config/ as a
+# WHOLE -- it does nothing to stop a secret-shaped file dropped INSIDE
+# one of those trees later from reaching the image, since it isn't
+# outside the allow-list. These lines close that gap.
+#
+# .env in particular: config/env.py calls load_app_env() AT ITS OWN
+# MODULE IMPORT TIME (config/env.py, top-level `load_app_env()` call
+# outside any function), which silently loads whatever .env file it
+# finds on disk (via python-dotenv's load_dotenv(), override=False) into
+# the running process's environment -- merely importing db.models (which
+# worker/app.py does transitively) is enough to trigger this. A .env file
+# baked into this image, however it got there, would be loaded
+# automatically at worker startup with zero further code involved. This
+# repo's root .env (real, present today) must never reach the build
+# context -- the allow-list above already keeps it out (it lives outside
+# all four allowed trees), and these lines guard the hypothetical case of
+# one appearing inside worker/, pipeline/, db/, or config/ later too.
+**/__pycache__/
+**/*.pyc
+**/.env
+**/.env.*
+**/secrets/
+**/*secret*
+**/*credential*
+**/*.pem
+**/*.key
