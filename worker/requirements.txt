@@ -1,0 +1,36 @@
+# Company-enrichment worker service
+# (docs/COMPANY_CONTACT_PROVIDER_PHASE3C_EXECUTION_PLAN.md S3.2, S13).
+#
+# Self-contained requirements for the SEPARATE worker service. Installed
+# nowhere else -- never by the main API's own requirements.txt (which
+# stays browser-dependency-free by design; see that file's own comment
+# and requirements-company-enrichment-worker.txt), and never by any CI job
+# today. This file does not modify, and is not referenced from,
+# requirements.txt or requirements-company-enrichment-worker.txt.
+#
+# No Dockerfile/railway.toml is added alongside this file by this change
+# -- building and deploying the worker as a real Railway service is a
+# separate, later, explicitly-authorized step (execution plan S3.2/S8).
+#
+# fastapi/uvicorn/sqlalchemy versions match the main API's own
+# requirements.txt floors for consistency, not because this worker shares
+# a process or a database with it -- it does not (S4.8: this worker never
+# holds DATABASE_URL or any DB credential; sqlalchemy is needed here only
+# for pipeline.company_enrichment.website_contact_provider's own
+# `Session` type hint and its `from db.models import Company` ORM-class
+# import, neither of which creates an engine or opens a connection at
+# import time -- confirmed empirically before writing this file).
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+sqlalchemy>=2.0.0
+#
+# Direct-site fetch+extract stack -- identical packages/versions/rationale
+# as requirements-company-enrichment-worker.txt (kept as literal lines
+# here, not `-r ../requirements-company-enrichment-worker.txt`, so this
+# file stays self-contained for a standalone Docker build context whose
+# exact layout is not decided by this change -- keep these four lines in
+# sync with that file if its versions are ever revised).
+crawl4ai~=0.9.0
+playwright>=1.60.0
+extruct>=0.18.0
+trafilatura>=2.2.0

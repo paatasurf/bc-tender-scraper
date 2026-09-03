@@ -414,16 +414,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
-          # tests/unit/test_website_contact_provider.py is ignored here --
-          # it imports extruct/trafilatura at module level (via
-          # pipeline/company_enrichment/website_contact_provider.py), which
-          # this job deliberately never installs (requirements.txt only, no
-          # browser deps -- see requirements-company-enrichment-worker.txt).
-          # That file is fully covered by the enrichment-worker-tests job
-          # below instead, which installs the worker requirements and runs
-          # it as a required (blocking) check.
+          # tests/unit/test_website_contact_provider.py and
+          # tests/unit/test_enrichment_worker.py are both ignored here --
+          # each imports WebsiteContactProvider (directly, or via
+          # worker/app.py), which pulls in extruct/trafilatura at module
+          # level (pipeline/company_enrichment/website_contact_provider.py),
+          # and this job deliberately never installs those (requirements.txt
+          # only, no browser deps -- see
+          # requirements-company-enrichment-worker.txt and
+          # worker/requirements.txt). Both files are fully covered by the
+          # enrichment-worker-tests job below instead, which installs the
+          # worker requirements and runs them as a required (blocking) check.
           pytest tests/unit \
             --ignore=tests/unit/test_website_contact_provider.py \
+            --ignore=tests/unit/test_enrichment_worker.py \
             -v \
             --tb=short \
             --cov=api --cov=db --cov=pipeline --cov=intelligence --cov=scraper \
@@ -468,18 +472,21 @@ jobs:
   #
   # WebsiteContactProvider (pipeline/company_enrichment/website_contact_provider.py)
   # imports extruct/trafilatura at module level, so its own test file
-  # (tests/unit/test_website_contact_provider.py) cannot even be COLLECTED
-  # by the main `pytest` job above, which deliberately installs only
+  # (tests/unit/test_website_contact_provider.py) -- and worker/app.py's own
+  # test file (tests/unit/test_enrichment_worker.py), which imports
+  # WebsiteContactProvider transitively -- cannot even be COLLECTED by the
+  # main `pytest` job above, which deliberately installs only
   # requirements.txt (no browser/scraping deps -- see
-  # requirements-company-enrichment-worker.txt and
-  # docs/COMPANY_CONTACT_PROVIDER_PHASE3A_RUNTIME_DECISION.md for why that
-  # isolation exists: crawl4ai/Playwright must never land in the main
+  # requirements-company-enrichment-worker.txt and worker/requirements.txt,
+  # and docs/COMPANY_CONTACT_PROVIDER_PHASE3A_RUNTIME_DECISION.md for why
+  # that isolation exists: crawl4ai/Playwright must never land in the main
   # Nixpacks-built production API's build). This job installs BOTH
   # requirements.txt AND requirements-company-enrichment-worker.txt into its
   # own separate runner -- the main `pytest` job's environment above is
-  # completely unaffected -- and runs the provider's own tests plus the rest
-  # of the company_enrichment regression suite that must stay green
-  # alongside it, as a required (blocking) check.
+  # completely unaffected -- and runs the provider's own tests, the worker
+  # HTTP contract's own tests, and the rest of the company_enrichment
+  # regression suite that must stay green alongside them, as a required
+  # (blocking) check.
   #
   # No `playwright install <browser>` step here: every test in this suite
   # mocks _fetch_rendered_page / _redirect_walk / _check_robots /
@@ -544,6 +551,7 @@ jobs:
             tests/unit/test_company_enrichment_orchestrator.py \
             tests/unit/test_company_enrichment_provider.py \
             tests/unit/test_internal_enrichment_route.py \
+            tests/unit/test_enrichment_worker.py \
             -v \
             --tb=short \
             --junitxml=reports/enrichment-worker-junit.xml \
