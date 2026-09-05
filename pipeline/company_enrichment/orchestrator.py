@@ -8,11 +8,19 @@ NOT on Base.metadata" convention db/company_enrichment_tables.py's own
 docstring documents).
 
 Scope of THIS phase, deliberately narrow:
-  - Providers: OrgBookAdapter only (pipeline.company_enrichment.
-    orgbook_adapter) -- no website provider, no Google provider, no
-    local-LLM structuring step. Callers may still pass a different
-    `providers` tuple (used by this phase's own timeout-isolation test),
-    but the default (_default_providers()) is OrgBook-only.
+  - Providers: OrgBookAdapter always; WebsiteContactRemoteProvider
+    (pipeline.company_enrichment.remote_provider) is ALSO included by
+    _default_providers() below, but ONLY when ENRICHMENT_WORKER_URL is
+    set in the environment (Phase 3F: "wire it in architecturally,
+    without turning real traffic on"). Production has never set that
+    variable as of this change, so _default_providers() still returns
+    OrgBook-only there -- this is a structural wiring change, not a
+    behavior change, until an operator separately configures
+    ENRICHMENT_WORKER_URL/ENRICHMENT_WORKER_API_KEY on a target
+    environment. No Google provider, no local-LLM structuring step, in
+    either case. Callers may still pass a different `providers` tuple
+    (used by this phase's own timeout-isolation test) to override this
+    entirely.
   - No budget/cost-cap check (RFC S7 step 4) -- OrgBook is free; a paid
     provider isn't wired yet, so there is nothing to budget against in
     this phase. ENRICHMENT_ENABLED itself is checked one layer up, by the
@@ -46,12 +54,14 @@ from db.company_enrichment_tables import (
     company_enrichment_fields,
     company_enrichment_jobs,
 )
+from config.env import get_env
 from pipeline.company_enrichment.orgbook_adapter import OrgBookAdapter
 from pipeline.company_enrichment.provider import (
     EnrichmentProvider,
     EnrichmentRequest,
     ProviderResult,
 )
+from pipeline.company_enrichment.remote_provider import WebsiteContactRemoteProvider
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +118,26 @@ def _utc_now() -> datetime:
 
 
 def _default_providers() -> tuple[EnrichmentProvider, ...]:
-    return (OrgBookAdapter(),)
+    """OrgBookAdapter always runs -- it is free, local-DB-only, has no
+    configuration to be missing. WebsiteContactRemoteProvider (Phase 3F
+    wiring) is included ONLY when ENRICHMENT_WORKER_URL is set in the
+    environment -- "use the remote worker only when explicitly
+    configured," not merely because ENRICHMENT_ENABLED=true. This is a
+    SEPARATE, additional gate from ENRICHMENT_ENABLED (api/internal.py's
+    own route-level kill switch, unchanged, still checked one layer up
+    before this function is ever reached) -- two independent, deliberate
+    switches an operator must both flip before real traffic reaches the
+    worker: the route flag AND this configuration presence check.
+
+    Checking ENRICHMENT_WORKER_API_KEY here too is deliberately NOT done
+    -- WebsiteContactRemoteProvider.lookup() itself already fails closed
+    with a clean `config_error:...` ProviderResult (never a write, never
+    a raise) if the key is missing while the URL is present; duplicating
+    that check here would just be redundant, not safer."""
+    providers: list[EnrichmentProvider] = [OrgBookAdapter()]
+    if get_env("ENRICHMENT_WORKER_URL"):
+        providers.append(WebsiteContactRemoteProvider())
+    return tuple(providers)
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +646,23 @@ def run_cascade_for_job(
     """
     try:
         active_providers = providers if providers is not None else _default_providers()
+        # KNOWN LIMITATION (Phase 3F, not fixed here -- explicitly out of
+        # scope for a provider-registry-only change): `website` is never
+        # populated -- Company.website/Company.google_website is never
+        # resolved and passed here. OrgBookAdapter never needed it, so
+        # this was never a gap until WebsiteContactRemoteProvider's
+        # conditional wiring below could make it a real (still-inert-by-
+        # default, since ENRICHMENT_WORKER_URL is unset in production)
+        # provider in this cascade. WebsiteContactRemoteProvider.lookup()
+        # forwards `request.website` to the worker exactly as given
+        # (pipeline/company_enrichment/remote_provider.py) -- with it
+        # always None, the worker's own WebsiteContactProvider has no
+        # domain candidate to resolve and will simply return
+        # matched=False every time, never a wrong or unsafe result, just
+        # a currently-useless one. A follow-up change must resolve
+        # website here (or thread it through from the caller) before the
+        # remote provider can ever find anything, once wiring at this
+        # layer is separately judged ready to matter.
         request = EnrichmentRequest(company_id=company_id, company_name=company_name)
 
         providers_attempted: list[str] = []
