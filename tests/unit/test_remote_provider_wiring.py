@@ -17,6 +17,7 @@ Two layers of coverage:
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -330,3 +331,176 @@ def test_worker_5xx_error_is_isolated_job_still_reaches_terminal_status(enrichme
     assert result["status"] == "failed"
     assert result["providers_attempted"] == ["website_searxng:error"]
     assert _field_rows(engine, company_id) == []
+
+
+# ---------------------------------------------------------------------------
+# 4. Phase 3G: Company.website / Company.google_website resolution
+# ---------------------------------------------------------------------------
+
+
+def _set_company_website(
+    engine, company_id: int, *, website: str = "", google_website: str = ""
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE companies SET website = :website, "
+                "google_website = :google_website WHERE id = :id"
+            ),
+            {"website": website, "google_website": google_website, "id": company_id},
+        )
+
+
+def test_verified_website_is_forwarded_to_remote_provider(enrichment_db):
+    """An already-stored Company.website value must be forwarded to the
+    worker exactly as stored -- never re-derived, never guessed."""
+    engine, company_id = enrichment_db
+    _set_company_website(engine, company_id, website="https://example-verified.com")
+
+    with Session(engine) as session:
+        run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
+
+    captured_body: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=b'{"provider":"website_searxng","matched":false,"facts":[],"error":null}',
+        )
+
+    with patch.dict(
+        os.environ,
+        {WORKER_URL_ENV_VAR: VALID_INTERNAL_URL, WORKER_API_KEY_ENV_VAR: TEST_API_KEY},
+        clear=False,
+    ):
+        with _mock_transport(handler):
+            with Session(engine) as session:
+                run_cascade_for_job(
+                    session,
+                    run_id,
+                    company_id,
+                    "Remote Provider Wiring Test Co Ltd",
+                    providers=(WebsiteContactRemoteProvider(),),
+                )
+
+    assert captured_body.get("website") == "https://example-verified.com"
+
+
+def test_google_website_used_when_website_column_is_empty(enrichment_db):
+    """Precedence mirrors WebsiteContactProvider._resolve_domain()'s own
+    candidate order: Company.website first, Company.google_website as
+    the fallback when website is empty."""
+    engine, company_id = enrichment_db
+    _set_company_website(
+        engine, company_id, website="", google_website="https://example-google.com"
+    )
+
+    with Session(engine) as session:
+        run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
+
+    captured_body: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=b'{"provider":"website_searxng","matched":false,"facts":[],"error":null}',
+        )
+
+    with patch.dict(
+        os.environ,
+        {WORKER_URL_ENV_VAR: VALID_INTERNAL_URL, WORKER_API_KEY_ENV_VAR: TEST_API_KEY},
+        clear=False,
+    ):
+        with _mock_transport(handler):
+            with Session(engine) as session:
+                run_cascade_for_job(
+                    session,
+                    run_id,
+                    company_id,
+                    "Remote Provider Wiring Test Co Ltd",
+                    providers=(WebsiteContactRemoteProvider(),),
+                )
+
+    assert captured_body.get("website") == "https://example-google.com"
+
+
+def test_missing_website_remains_none_not_empty_string(enrichment_db):
+    """Company.website and Company.google_website both default to "" at
+    the schema level (neither is nullable) -- the resolved
+    EnrichmentRequest.website must still come through as None, never "",
+    when nothing is genuinely stored."""
+    engine, company_id = enrichment_db
+    # enrichment_db's own Company row already has website="" /
+    # google_website="" (column defaults) -- nothing to set.
+
+    with Session(engine) as session:
+        run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
+
+    captured_body: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=b'{"provider":"website_searxng","matched":false,"facts":[],"error":null}',
+        )
+
+    with patch.dict(
+        os.environ,
+        {WORKER_URL_ENV_VAR: VALID_INTERNAL_URL, WORKER_API_KEY_ENV_VAR: TEST_API_KEY},
+        clear=False,
+    ):
+        with _mock_transport(handler):
+            with Session(engine) as session:
+                run_cascade_for_job(
+                    session,
+                    run_id,
+                    company_id,
+                    "Remote Provider Wiring Test Co Ltd",
+                    providers=(WebsiteContactRemoteProvider(),),
+                )
+
+    assert "website" in captured_body
+    assert captured_body.get("website") is None
+
+
+def test_orgbook_adapter_still_works_alongside_wired_remote_provider(enrichment_db):
+    """Full _default_providers() tuple (real OrgBookAdapter + the now-
+    wired WebsiteContactRemoteProvider), proving: (1) OrgBookAdapter
+    still runs cleanly -- no reference data seeded, so a clean
+    matched=False is the correct, non-error outcome, exactly as it
+    already was before this change; (2) provider ordering is preserved
+    (orgbook first, website_searxng second, matching _default_providers()'s
+    own tuple order); (3) the website-resolution addition to
+    run_cascade_for_job() does not disturb either provider's own call."""
+    engine, company_id = enrichment_db
+    _set_company_website(engine, company_id, website="https://example-both.com")
+
+    with Session(engine) as session:
+        run_id, _ = start_or_join_job(session, company_id, trigger="profile_view")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'{"provider":"website_searxng","matched":false,"facts":[],"error":null}',
+        )
+
+    with patch.dict(
+        os.environ,
+        {WORKER_URL_ENV_VAR: VALID_INTERNAL_URL, WORKER_API_KEY_ENV_VAR: TEST_API_KEY},
+        clear=False,
+    ):
+        with _mock_transport(handler):
+            with Session(engine) as session:
+                result = run_cascade_for_job(
+                    session,
+                    run_id,
+                    company_id,
+                    "Remote Provider Wiring Test Co Ltd",
+                    providers=_default_providers(),
+                )
+
+    assert result["providers_attempted"] == ["orgbook:ok", "website_searxng:ok"]
+    assert result["status"] == "success"

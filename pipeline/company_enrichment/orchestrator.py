@@ -50,11 +50,12 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from config.env import get_env
 from db.company_enrichment_tables import (
     company_enrichment_fields,
     company_enrichment_jobs,
 )
-from config.env import get_env
+from db.models import Company
 from pipeline.company_enrichment.orgbook_adapter import OrgBookAdapter
 from pipeline.company_enrichment.provider import (
     EnrichmentProvider,
@@ -646,24 +647,45 @@ def run_cascade_for_job(
     """
     try:
         active_providers = providers if providers is not None else _default_providers()
-        # KNOWN LIMITATION (Phase 3F, not fixed here -- explicitly out of
-        # scope for a provider-registry-only change): `website` is never
-        # populated -- Company.website/Company.google_website is never
-        # resolved and passed here. OrgBookAdapter never needed it, so
-        # this was never a gap until WebsiteContactRemoteProvider's
-        # conditional wiring below could make it a real (still-inert-by-
-        # default, since ENRICHMENT_WORKER_URL is unset in production)
-        # provider in this cascade. WebsiteContactRemoteProvider.lookup()
-        # forwards `request.website` to the worker exactly as given
-        # (pipeline/company_enrichment/remote_provider.py) -- with it
-        # always None, the worker's own WebsiteContactProvider has no
-        # domain candidate to resolve and will simply return
-        # matched=False every time, never a wrong or unsafe result, just
-        # a currently-useless one. A follow-up change must resolve
-        # website here (or thread it through from the caller) before the
-        # remote provider can ever find anything, once wiring at this
-        # layer is separately judged ready to matter.
-        request = EnrichmentRequest(company_id=company_id, company_name=company_name)
+
+        # Phase 3G follow-up to Phase 3F's own documented limitation:
+        # resolve an ALREADY-STORED website value and forward it, so
+        # WebsiteContactRemoteProvider (when wired in, S4.8) has
+        # something to send the worker instead of always None. Uses this
+        # function's own fresh `session` (already required for the
+        # writer below) -- a second, cheap PK lookup beyond whatever the
+        # caller (api/internal.py) already did to obtain `company_name`,
+        # not a new query pattern.
+        #
+        # Precedence -- Company.website, then Company.google_website --
+        # deliberately mirrors WebsiteContactProvider._resolve_domain()'s
+        # own existing candidate order (pipeline/company_enrichment/
+        # website_contact_provider.py) for consistency, but this
+        # function does NOT import that module or reuse its
+        # _normalize_website_candidate() helper: that module pulls in
+        # crawl4ai/playwright/extruct/trafilatura at import time, which
+        # this main-API-side orchestrator must never do (S4.8's own "no
+        # browser dependencies in the main API" boundary -- unchanged by
+        # this diff). No normalization/sentinel-filtering happens here
+        # either -- "N/A", a stray placeholder, or any other malformed
+        # value already stored on Company is forwarded as-is, exactly
+        # like a genuine domain would be, and is safely rejected later:
+        # the worker's own WebsiteContactProvider._resolve_domain()
+        # re-applies _normalize_website_candidate() to `request.website`
+        # as its OWN first candidate before ever making a network call,
+        # so a bad stored value degrades to a clean no-match downstream,
+        # never a wrong request sent, never a guessed/constructed domain
+        # invented here. An empty string (both fields' own column
+        # default -- neither is nullable) or a genuinely missing Company
+        # row both fall through to `website=None`, never "".
+        company = session.get(Company, company_id)
+        website: str | None = None
+        if company is not None:
+            website = company.website or company.google_website or None
+
+        request = EnrichmentRequest(
+            company_id=company_id, company_name=company_name, website=website
+        )
 
         providers_attempted: list[str] = []
         facts_by_provider: dict[str, list[Any]] = {}
