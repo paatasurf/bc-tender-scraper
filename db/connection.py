@@ -235,6 +235,15 @@ def db_request_retry_settings() -> tuple[int, float, float]:
     )
 
 
+def db_health_retry_settings() -> tuple[int, float, float]:
+    """Health checks must stay fast enough for external monitors and proxies."""
+    return (
+        _parse_positive_int("DB_HEALTH_RETRIES", 1),
+        _parse_positive_float("DB_HEALTH_RETRY_DELAY", 0.5),
+        _parse_positive_float("DB_HEALTH_RETRY_MAX_DELAY", 1.0),
+    )
+
+
 def _backoff_delay(attempt: int, base_delay: float, max_delay: float) -> float:
     return min(max_delay, base_delay * (2 ** (attempt - 1)))
 
@@ -339,12 +348,13 @@ def get_session() -> Session:
 
 def check_db_connection() -> bool:
     try:
+        retries, base_delay, max_delay = db_health_retry_settings()
         run_with_db_retry(
-            lambda: _verify_connection(get_engine()),
+            lambda: _verify_connection_once(get_engine()),
             context="check_db_connection",
-            retries=_parse_positive_int("DB_HEALTH_RETRIES", 2),
-            base_delay=_parse_positive_float("DB_HEALTH_RETRY_DELAY", 1.0),
-            max_delay=_parse_positive_float("DB_HEALTH_RETRY_MAX_DELAY", 3.0),
+            retries=retries,
+            base_delay=base_delay,
+            max_delay=max_delay,
         )
         return True
     except Exception as exc:
@@ -352,12 +362,16 @@ def check_db_connection() -> bool:
         return False
 
 
+def _verify_connection_once(engine: Engine) -> None:
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+
 def _verify_connection(engine: Engine, *, log_failures: bool = True) -> None:
     retries, base_delay, max_delay = db_init_retry_settings()
 
     def _ping() -> None:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        _verify_connection_once(engine)
 
     run_with_db_retry(
         _ping,

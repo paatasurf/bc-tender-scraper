@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -21,6 +22,9 @@ def _reset_db_init_state(monkeypatch: pytest.MonkeyPatch) -> None:
         connection._db_init_completed_at = None
         connection._last_init_db_error = None
     monkeypatch.delenv("DB_CONNECT_TIMEOUT", raising=False)
+    monkeypatch.delenv("DB_HEALTH_RETRIES", raising=False)
+    monkeypatch.delenv("DB_HEALTH_RETRY_DELAY", raising=False)
+    monkeypatch.delenv("DB_HEALTH_RETRY_MAX_DELAY", raising=False)
 
 
 def test_engine_connect_args_includes_connect_timeout_for_railway() -> None:
@@ -48,6 +52,41 @@ def test_engine_connect_args_respects_db_connect_timeout_env(
 
 def test_transient_db_error_includes_timeout_expired() -> None:
     assert "timeout expired" in connection.TRANSIENT_DB_ERROR_MARKERS
+
+
+def test_db_health_retry_settings_are_short_by_default() -> None:
+    assert connection.db_health_retry_settings() == (1, 0.5, 1.0)
+
+
+def test_check_db_connection_uses_fast_single_ping(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+    engine = object()
+    ping = MagicMock()
+
+    def fake_run_with_db_retry(operation, **kwargs):
+        calls.append(kwargs)
+        operation()
+
+    monkeypatch.setattr(connection, "get_engine", lambda: engine)
+    monkeypatch.setattr(connection, "run_with_db_retry", fake_run_with_db_retry)
+    monkeypatch.setattr(connection, "_verify_connection_once", ping)
+
+    assert connection.check_db_connection() is True
+    ping.assert_called_once_with(engine)
+    assert len(calls) == 1
+    assert calls[0]["context"] == "check_db_connection"
+    assert calls[0]["retries"] == 1
+    assert calls[0]["base_delay"] == 0.5
+    assert calls[0]["max_delay"] == 1.0
+
+
+def test_check_db_connection_returns_false_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_run_with_db_retry(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(connection, "run_with_db_retry", fail_run_with_db_retry)
+
+    assert connection.check_db_connection() is False
 
 
 def test_background_init_transitions_to_complete() -> None:
