@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import MagicMock, patch
 
 from pipeline.runs import (
+    _execute_tracked_worker,
     _resolve_status,
     execute_tracked_step,
     pipeline_run_to_dict,
@@ -164,6 +166,49 @@ def test_execute_tracked_step_marks_failed_runs():
 
     assert result["status"] == "failed"
     assert result["error"] == "boom"
+
+
+def test_execute_tracked_worker_appends_elapsed_seconds_to_failure_error():
+    """Diagnostic addition (read-only audit of the unconfirmed "cursor
+    already closed" company-intelligence failures, pipeline_runs id
+    770/1020 -- both took ~29m50s, close to db/connection.py's
+    pool_recycle=1800s): the persisted error text must carry the elapsed
+    wall-clock time of the failed worker call, appended after the original
+    exception text (which must still be present verbatim), so the next
+    occurrence is queryable directly from pipeline_runs.error without
+    correlating log timestamps. Purely additive -- no retry, no swallowed
+    exception, no change to status resolution."""
+
+    def _boom() -> dict:
+        raise RuntimeError("boom")
+
+    status, counts, error = _execute_tracked_worker(
+        record_id=1, step="company-intelligence", run_id="run-x", worker=_boom
+    )
+
+    assert status == "failed"
+    assert counts == {}
+    assert error is not None
+    assert error.startswith("boom (after ")
+    match = re.fullmatch(r"boom \(after (\d+\.\d)s\)", error)
+    assert match is not None, error
+    assert float(match.group(1)) >= 0.0
+
+
+def test_execute_tracked_worker_success_path_is_unaffected_by_elapsed_timing():
+    """Regression guard: the success path's counts/status contract is
+    unchanged by the elapsed-time instrumentation -- only the failure
+    error text gains the new suffix."""
+    status, counts, error = _execute_tracked_worker(
+        record_id=1,
+        step="ai-scoring",
+        run_id="run-y",
+        worker=lambda: {"total_tenders_scored": 3},
+    )
+
+    assert status == "success"
+    assert counts == {"total_tenders_scored": 3}
+    assert error is None
 
 
 def test_run_tracked_step_uses_existing_record_id():
