@@ -41,6 +41,8 @@ TRANSIENT_DB_ERROR_MARKERS = (
     "server closed the connection unexpectedly",
     "connection refused",
     "connection reset",
+    "connection timeout",
+    "connection timed out",
     "too many connections",
     "timeout expired",
     "could not connect to server",
@@ -318,11 +320,18 @@ def session_scope() -> Iterator[Session]:
 def get_session() -> Session:
     """Return a DB session, retrying transient errors such as recovery mode."""
     retries, base_delay, max_delay = db_request_retry_settings()
-    session = get_session_factory()()
+    session: Session | None = None
 
     def _connect() -> Session:
-        _ping_session(session)
-        return session
+        nonlocal session
+        candidate = get_session_factory()()
+        try:
+            _ping_session(candidate)
+        except Exception:
+            candidate.close()
+            raise
+        session = candidate
+        return candidate
 
     try:
         return run_with_db_retry(
@@ -333,7 +342,8 @@ def get_session() -> Session:
             max_delay=max_delay,
         )
     except Exception:
-        session.close()
+        if session is not None:
+            session.close()
         raise
 
 

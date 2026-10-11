@@ -7,6 +7,7 @@ import time
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from db import connection
 
@@ -48,6 +49,32 @@ def test_engine_connect_args_respects_db_connect_timeout_env(
 
 def test_transient_db_error_includes_timeout_expired() -> None:
     assert "timeout expired" in connection.TRANSIENT_DB_ERROR_MARKERS
+
+
+def test_transient_db_error_includes_connection_timeout_variants() -> None:
+    assert "connection timeout" in connection.TRANSIENT_DB_ERROR_MARKERS
+    assert "connection timed out" in connection.TRANSIENT_DB_ERROR_MARKERS
+
+
+def test_get_session_retries_with_fresh_session_after_connection_timeout() -> None:
+    from unittest.mock import MagicMock
+
+    first_session = MagicMock()
+    second_session = MagicMock()
+    factory = MagicMock(side_effect=[first_session, second_session])
+    timeout = OperationalError("SELECT 1", {}, Exception("connection timeout"))
+
+    with patch.object(connection, "get_session_factory", return_value=factory):
+        with patch.object(connection, "time") as time_module:
+            time_module.sleep.return_value = None
+            time_module.perf_counter.return_value = 0.0
+            with patch.object(connection, "_ping_session", side_effect=[timeout, None]):
+                session = connection.get_session()
+
+    assert session is second_session
+    assert factory.call_count == 2
+    first_session.close.assert_called_once()
+    second_session.close.assert_not_called()
 
 
 def test_background_init_transitions_to_complete() -> None:
