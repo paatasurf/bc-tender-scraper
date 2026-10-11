@@ -11,6 +11,28 @@ import pytest
 from db import connection
 
 
+class _CaptureConnection:
+    def __init__(self, statements: list[str]) -> None:
+        self._statements = statements
+
+    def __enter__(self) -> "_CaptureConnection":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, statement: object) -> None:
+        self._statements.append(str(statement))
+
+
+class _CaptureEngine:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def begin(self) -> _CaptureConnection:
+        return _CaptureConnection(self.statements)
+
+
 @pytest.fixture(autouse=True)
 def _reset_db_init_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset module-level init state between tests."""
@@ -108,6 +130,30 @@ def test_start_init_db_background_is_single_flight() -> None:
             time.sleep(0.05)
 
     assert connection.get_db_init_status()["status"] == "complete"
+
+
+def test_tender_matches_table_init_skips_obsolete_unique_index() -> None:
+    engine = _CaptureEngine()
+
+    connection._ensure_tender_matches_table(engine)
+
+    statements = "\n".join(engine.statements)
+    assert "ix_tender_matches_company_id" in statements
+    assert "ix_tender_matches_tender_id" in statements
+    assert "ix_tender_matches_company_tender" not in statements
+
+
+def test_tender_matches_company_kind_migration_dedupes_before_unique_index() -> None:
+    engine = _CaptureEngine()
+
+    connection._migrate_tender_matches_company_kind(engine)
+
+    statements = "\n".join(engine.statements)
+    dedupe_pos = statements.index("ROW_NUMBER() OVER")
+    unique_pos = statements.index("ix_tender_matches_company_kind_tender")
+    assert "DROP INDEX IF EXISTS ix_tender_matches_company_tender" in statements
+    assert "PARTITION BY company_kind, company_id, tender_source, tender_id" in statements
+    assert dedupe_pos < unique_pos
 
 
 def test_session_scope_closes_on_success_and_error() -> None:
